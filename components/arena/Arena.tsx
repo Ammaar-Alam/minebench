@@ -45,7 +45,6 @@ import { trackEvent } from "@/lib/analytics";
 import { hasSupabaseAuthCookie } from "@/lib/auth/cookies";
 import {
   getArenaBlockCountBucket,
-  getArenaLatencyBucket,
   roundMetricMs,
 } from "@/lib/observability/arenaMetrics";
 import {
@@ -142,16 +141,6 @@ async function fetchMatchupOnce(promptId?: string, signal?: AbortSignal): Promis
     const laneBBlocks = getArenaBlockCountBucket(voxelBuildBlockCount(packedMatchup.b.build));
     const mode: "random" | "forced" = promptId ? "forced" : "random";
     setMatchupRequestMode(packedMatchup.id, mode);
-    trackEvent("arena_matchup_received", {
-      path: `${mode}:adaptive`,
-      samplingLane: matchup.samplingLane ?? "unknown",
-      laneABlocks,
-      laneBBlocks,
-      headersMs,
-      bodyMs,
-      totalMs: roundMetricMs(totalMs),
-      latency: getArenaLatencyBucket(totalMs),
-    });
     enqueueClientMetric({
       kind: "matchup",
       mode,
@@ -190,7 +179,6 @@ async function fetchMatchup(
         lastError = new Error("Matchup request timed out");
         if (attempt >= maxAttempts) {
           trackEvent("arena_matchup_timeout", {
-            timeoutMs: MATCHUP_REQUEST_TIMEOUT_MS,
             attempts: maxAttempts,
             promptMode: promptId ? "forced" : "random",
           });
@@ -297,16 +285,6 @@ async function readMeasuredBuildVariantPayload(
   return result;
 }
 
-function normalizeBuildDeliveryClass(response: Response): ArenaBuildDeliveryClass | "unknown" {
-  const value = response.headers.get("x-build-delivery-class");
-  return value === "inline" ||
-    value === "snapshot" ||
-    value === "stream-live" ||
-    value === "stream-artifact"
-    ? value
-    : "unknown";
-}
-
 function reportBuildDeliveryMetrics(opts: {
   metrics: BuildDeliveryMetrics;
   ref: ArenaBuildRef;
@@ -319,10 +297,8 @@ function reportBuildDeliveryMetrics(opts: {
 }) {
   const { metrics } = opts;
   const source = normalizeDeliverySource(opts.response);
-  const deliveryClass = normalizeBuildDeliveryClass(opts.response);
   const blockCount = voxelBuildBlockCount(opts.payload.voxelBuild);
   const blockCountBucket = getArenaBlockCountBucket(blockCount);
-  const path = `${metrics.purpose}:${opts.ref.variant}:${metrics.transport}`;
   const totalMs =
     metrics.trace.measure("total", metrics.startStage, "payload_ready") ?? 0;
   const optimized =
@@ -346,27 +322,6 @@ function reportBuildDeliveryMetrics(opts: {
     metrics.trace.measure("decode", "inflate_complete", "decode_complete"),
   );
 
-  // Web Analytics Plus accepts at most eight properties per custom event
-  trackEvent("arena_build_delivery", {
-    path,
-    requestedFormat: opts.requestedFormat,
-    servedFormat: opts.servedFormat,
-    source,
-    deliveryClass,
-    optimized,
-    blockCountBucket,
-    gzip: opts.compressed,
-  });
-  trackEvent("arena_build_delivery_timing", {
-    path: `${path}:${opts.servedFormat}`,
-    blockCountBucket,
-    headersMs,
-    bodyMs,
-    inflateMs,
-    decodeMs,
-    totalMs: roundMetricMs(totalMs),
-    bodyBytes: opts.bodyBytes,
-  });
   enqueueClientMetric({
     kind: "delivery",
     surface: "arena",
@@ -392,27 +347,6 @@ function reportBuildRenderMetrics(
   variant: ArenaBuildVariant,
   metrics: VoxelViewerBuildMetrics,
 ) {
-  const path = `${variant}:${metrics.strategy}:${metrics.cacheStatus}`;
-  const blockCountBucket = getArenaBlockCountBucket(metrics.inputBlockCount);
-  trackEvent("arena_build_mesh_timing", {
-    path,
-    blockCountBucket,
-    queueMs: roundMetricMs(metrics.queueMs),
-    atlasMs: roundMetricMs(metrics.atlasMs),
-    payloadMs: roundMetricMs(metrics.payloadMs),
-    groupMs: roundMetricMs(metrics.groupMs),
-    meshMs: roundMetricMs(metrics.meshMs),
-    totalMs: roundMetricMs(metrics.totalMs),
-  });
-  trackEvent("arena_build_render_timing", {
-    path,
-    blockCountBucket,
-    renderedBlockCountBucket: getArenaBlockCountBucket(metrics.renderedBlockCount),
-    firstRenderMs: roundMetricMs(metrics.firstRenderMs),
-    revealMs: roundMetricMs(metrics.revealMs),
-    totalMs: roundMetricMs(metrics.totalMs),
-    animated: metrics.animated,
-  });
   enqueueVoxelMetric("arena", variant, metrics);
 }
 
@@ -2043,8 +1977,6 @@ export function Arena() {
         trackEvent("arena_full_hydration_slow", {
           ms: Math.round(hydrationMs),
           deliveryClass: lane.buildLoadHints?.deliveryClass ?? "unknown",
-          initialVariant: lane.buildLoadHints?.initialVariant ?? "unknown",
-          side,
         });
       }
     } catch (err: unknown) {
@@ -2865,11 +2797,6 @@ export function Arena() {
         laneBBlocks: voxelBuildBlockCount(matchup.b.build),
         durationMs: elapsedMs,
       });
-      trackEvent("arena_matchup_stage", {
-        stage: "preview_ready",
-        mode,
-        durationMs: elapsedMs,
-      });
     }
 
     if (!matchupBuildLoading && !stages.voteReadyReported) {
@@ -2879,11 +2806,6 @@ export function Arena() {
         mode,
         laneABlocks: voxelBuildBlockCount(matchup.a.build),
         laneBBlocks: voxelBuildBlockCount(matchup.b.build),
-        durationMs: elapsedMs,
-      });
-      trackEvent("arena_matchup_stage", {
-        stage: "vote_ready",
-        mode,
         durationMs: elapsedMs,
       });
     }
