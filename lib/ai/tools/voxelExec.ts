@@ -137,11 +137,16 @@ function makeRng(seed: number | undefined): () => number {
 }
 
 export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
+  const rawTimeout = Number(process.env.MINEBENCH_TOOL_TIMEOUT_MS);
   const timeoutMs = Math.max(
     250,
     Math.min(
       60_000,
-      Math.floor(Number(process.env.MINEBENCH_TOOL_TIMEOUT_MS ?? DEFAULT_VOXEL_EXEC_TIMEOUT_MS)),
+      Math.floor(
+        Number.isFinite(rawTimeout) && rawTimeout > 0
+          ? rawTimeout
+          : DEFAULT_VOXEL_EXEC_TIMEOUT_MS,
+      ),
     ),
   );
   const maxBoxes = readOptionalLimitEnv("MINEBENCH_TOOL_MAX_BOXES");
