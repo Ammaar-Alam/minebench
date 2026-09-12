@@ -189,6 +189,20 @@ async function main() {
     else process.env.ARENA_MATCHUP_SIGNING_SECRET = originalSigningSecret;
     if (originalDrainSetting === undefined) delete process.env.ARENA_VOTE_JOB_DRAIN_AFTER_RESPONSE;
     else process.env.ARENA_VOTE_JOB_DRAIN_AFTER_RESPONSE = originalDrainSetting;
+    // Remove all records seeded by this test so that subsequent integration tests
+    // (e.g. stealth/database-boundaries) start with a clean schema-wide vote count.
+    const matchups = await db.matchup.findMany({
+      where: { promptId: prompt.id },
+      select: { id: true },
+    });
+    const matchupIds = matchups.map((m) => m.id);
+    if (matchupIds.length > 0) {
+      await db.vote.deleteMany({ where: { matchupId: { in: matchupIds } } });
+      await db.matchup.deleteMany({ where: { id: { in: matchupIds } } });
+    }
+    await db.build.deleteMany({ where: { promptId: prompt.id } });
+    await db.model.deleteMany({ where: { id: { in: [modelA.id, modelB.id] } } });
+    await db.prompt.delete({ where: { id: prompt.id } });
   }
 }
 
