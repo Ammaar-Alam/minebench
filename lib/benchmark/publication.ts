@@ -541,8 +541,17 @@ export async function assertPublicationTargetsAgree(
   // allowed, because the uploader writes to deterministic paths and a wrong
   // target overwrites another environment's builds before anything else fails.
   const storageUrl = (process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL)?.trim();
-  const storageServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-  if (storageUrl && storageServiceRoleKey) {
+  // The precompute upload steps authenticate via getSupabaseSecretKey, which
+  // prefers SUPABASE_SECRET_KEY and falls back to SUPABASE_SERVICE_ROLE_KEY.
+  // Gate the storage-target comparison on that same resolution so it runs
+  // whenever the precompute writes would be able to authenticate, regardless
+  // of which key name the operator configured.
+  const storageSecretKey = (
+    process.env.SUPABASE_SECRET_KEY ??
+    process.env.SUPABASE_SERVICE_ROLE_KEY ??
+    ""
+  ).trim();
+  if (storageUrl && storageSecretKey) {
     const storageRef = supabaseProjectRefFromApiUrl(storageUrl);
     if (!storageRef) {
       throw new Error(
