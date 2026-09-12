@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { Prisma } from "@prisma/client";
+import { isAuthError, type AuthError } from "@supabase/supabase-js";
 import type { PublicAccount } from "@/lib/auth/account";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import { prisma } from "@/lib/prisma";
@@ -44,9 +45,23 @@ export function serializeAccount(account: PublicAccount) {
   };
 }
 
-async function deleteSupabaseAuthUser(userId: string): Promise<void> {
-  const { error } = await createSupabaseAdminClient().auth.admin.deleteUser(userId);
-  if (error) throw error;
+export type AuthAdminClient = {
+  auth: {
+    admin: {
+      deleteUser: (userId: string) => Promise<{ data: { user: unknown }; error: AuthError | null }>;
+    };
+  };
+};
+
+async function deleteSupabaseAuthUser(
+  userId: string,
+  createAdminClient: () => AuthAdminClient = createSupabaseAdminClient,
+): Promise<void> {
+  const { error } = await createAdminClient().auth.admin.deleteUser(userId);
+  if (error) {
+    if (isAuthError(error) && error.code === "user_not_found") return;
+    throw error;
+  }
 }
 
 async function markAuthDeleted(userId: string, now: Date): Promise<void> {
@@ -86,6 +101,7 @@ export async function deleteMineBenchAccount(
   options: {
     now?: Date;
     deleteAuthUser?: (userId: string) => Promise<void>;
+    createAdminClient?: () => AuthAdminClient;
   } = {},
 ) {
   const now = options.now ?? new Date();
@@ -287,8 +303,9 @@ export async function deleteMineBenchAccount(
     });
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }));
 
+  const createAdminClient = options.createAdminClient ?? createSupabaseAdminClient;
   try {
-    await (options.deleteAuthUser ?? deleteSupabaseAuthUser)(userId);
+    await (options.deleteAuthUser ?? ((id: string) => deleteSupabaseAuthUser(id, createAdminClient)))(userId);
     await markAuthDeleted(userId, now);
   } catch (error) {
     console.error("Supabase Auth account deletion pending", redactSensitiveText(error));
@@ -301,10 +318,14 @@ export async function retryPendingAuthDeletions(
     now?: Date;
     limit?: number;
     deleteAuthUser?: (userId: string) => Promise<void>;
+    createAdminClient?: () => AuthAdminClient;
   } = {},
 ) {
   const now = options.now ?? new Date();
   const limit = Math.max(1, Math.min(options.limit ?? DEFAULT_AUTH_DELETION_BATCH_SIZE, 500));
+  const createAdminClient = options.createAdminClient ?? createSupabaseAdminClient;
+  const deleteAuthUser =
+    options.deleteAuthUser ?? ((id: string) => deleteSupabaseAuthUser(id, createAdminClient));
   const pending = await prisma.user.findMany({
     where: { deletedAt: { not: null }, authDeletedAt: null },
     orderBy: [{ deletedAt: "asc" }, { id: "asc" }],
@@ -315,7 +336,7 @@ export async function retryPendingAuthDeletions(
   let failures = 0;
   for (const account of pending) {
     try {
-      await (options.deleteAuthUser ?? deleteSupabaseAuthUser)(account.id);
+      await deleteAuthUser(account.id);
       await markAuthDeleted(account.id, now);
       deleted += 1;
     } catch (error) {
