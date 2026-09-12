@@ -10,10 +10,12 @@ const state: Record<string, unknown> = {
 const activeSession = { current: "session-a" as string | null };
 const votesRequest = { current: 0 };
 const votesRef = { current: [{ id: "retained" }] as unknown[] };
+const freshPrefixCount = { current: 0 };
+const lastFailedNewVotes = { current: false };
 let calls = 0;
 let respond: (value: unknown) => void = () => { throw new Error("No request pending"); };
 const context: Record<string, unknown> = {
-  Set, activeSession, votesRequest, votesRef, selectedSessionId: "session-a",
+  Set, activeSession, votesRequest, votesRef, freshPrefixCount, lastFailedNewVotes, selectedSessionId: "session-a",
   loadArenaVotePage: () => { calls += 1; return new Promise(resolve => { respond = resolve; }); },
 };
 for (const key of ["Votes", "SelectedVoteIds", "SelectedSessionId", "PageVoteIds", "NextCursor", "Notice", "VotesLoading", "VotesError", "LoadedSessionId"]) {
