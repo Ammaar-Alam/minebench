@@ -108,9 +108,26 @@ function makeComposedSignal(parent: AbortSignal | undefined, timeoutMs: number):
 // a server that sends 200 OK then stalls the body would never trigger
 // timeoutMs, and callers parsing with r.json() outside fetchWithRetry
 // would hang indefinitely.
-function guardResponseBody(res: Response, onDone: () => void): Response {
+//
+// Because fetchWithRetry returns (and used to record success) the instant
+// headers arrive, the timeout firing during the caller's body read happens
+// *after* this function has returned — outside its try/catch. So this
+// wrapper also owns classification and health for that phase: it defers
+// recordApiSuccess until the body closes successfully, records a failure
+// and surfaces FetchError("timeout") if our own timer aborts a body stall
+// (mirroring the headers-timeout path), and propagates any other abort
+// raw so parent-signal cancel semantics stay intact for callers.
+function guardResponseBody(
+  res: Response,
+  composed: { cleanup: () => void; didTimeout: () => boolean },
+  parentSignal: AbortSignal | undefined,
+  endpoint: string,
+): Response {
   if (!res.body) {
-    onDone();
+    // No body to consume — headers alone complete the response, so this is
+    // a legitimate success. Record it now and release the per-attempt timer.
+    recordApiSuccess(endpoint);
+    composed.cleanup();
     return res;
   }
   const source = res.body;
@@ -124,14 +141,31 @@ function guardResponseBody(res: Response, onDone: () => void): Response {
           controller.enqueue(value);
         }
         controller.close();
+        // Defer the success record until the body is fully consumed. A "200
+        // OK" whose body then stalls never reaches here, so it can't record a
+        // success that would erase prior real failures for this endpoint.
+        recordApiSuccess(endpoint);
       } catch (err) {
-        controller.error(err);
+        if (composed.didTimeout() && parentSignal?.aborted !== true) {
+          // Our own per-attempt timer aborted a body stall — the same fault
+          // as a headers timeout. Record a failure (so a body-stall outage
+          // accrues like a headers stall) and surface FetchError("timeout")
+          // so callers see the same error kind they'd get on the headers
+          // path, not a raw DOMException indistinguishable from a parent
+          // cancel.
+          recordApiFailure(endpoint);
+          controller.error(new FetchError("timeout", "Request timed out.", null, true));
+        } else {
+          // Parent-signal cancel (or any other abort) — propagate the raw
+          // error so callers' cancel semantics are preserved.
+          controller.error(err);
+        }
       } finally {
-        onDone();
+        composed.cleanup();
       }
     },
     cancel(reason) {
-      onDone();
+      composed.cleanup();
       return source.cancel(reason);
     },
   });
@@ -222,12 +256,14 @@ export async function fetchWithRetry(input: RequestInfo | URL, options: FetchWit
         const res = await fetch(input, { ...init, signal: composed.signal });
         if (slowTimer) clearTimeout(slowTimer);
         if (res.ok) {
-          recordApiSuccess(endpoint);
-          // Don't cleanup yet — keep the timeout + parent-abort listener
-          // armed through body consumption. guardResponseBody hooks cleanup
-          // to the stream's close/cancel/error so a body that stalls after
-          // headers still trips timeoutMs (and cancellation still propagates).
-          return guardResponseBody(res, composed.cleanup);
+          // Don't record success or cleanup yet — keep the timeout + parent-abort
+          // listener armed through body consumption. guardResponseBody defers
+          // recordApiSuccess until the body closes successfully, records a
+          // failure (and surfaces FetchError("timeout")) if our own timeout
+          // aborts a body stall, and releases the composed signal on
+          // close/cancel/error. This owns the body-consumption phase the old
+          // success branch used to disown.
+          return guardResponseBody(res, composed, parentSignal, endpoint);
         }
         const message = await readErrorText(res);
         composed.cleanup();
