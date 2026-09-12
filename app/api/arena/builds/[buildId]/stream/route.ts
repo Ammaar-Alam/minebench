@@ -339,12 +339,6 @@ export async function GET(
       trackServerEventInBackground("arena_artifact_miss", {
         variant,
         deliveryClass: variant === "preview" ? shellHints.initialDeliveryClass : shellHints.deliveryClass,
-        estimatedBytes:
-          estimateArenaBuildVariantBytes(
-            shellHints,
-            variant,
-            variant === "preview" ? shellHints.previewBlockCount : shellHints.fullBlockCount,
-          ) ?? 0,
       });
     }
   } catch (err) {
@@ -352,12 +346,6 @@ export async function GET(
       trackServerEventInBackground("arena_artifact_fetch_error", {
         variant,
         deliveryClass: variant === "preview" ? shellHints.initialDeliveryClass : shellHints.deliveryClass,
-        estimatedBytes:
-          estimateArenaBuildVariantBytes(
-            shellHints,
-            variant,
-            variant === "preview" ? shellHints.previewBlockCount : shellHints.fullBlockCount,
-          ) ?? 0,
       });
       timing.add("artifact_error", ARTIFACT_FETCH_TIMEOUT_MS);
     }
