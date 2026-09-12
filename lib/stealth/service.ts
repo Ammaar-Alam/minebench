@@ -838,6 +838,18 @@ async function findOrInviteOrganizationUserByEmail(
 
   const authUserId = await findOrInviteSupabaseAuthUserByEmail(email);
   if (!authUserId) return null;
+
+  // Check whether this auth UUID belongs to a pending tombstone (soft-deleted but
+  // auth deletion not yet confirmed). Upserting with the original email would
+  // restore the address on a deleted record, causing syncAuthUser to reject
+  // sign-ins while the retry job later re-deletes the identity. Treat the
+  // tombstone as absent so the invitation is issued without touching the stale row.
+  const existing = await prisma.user.findUnique({
+    where: { id: authUserId },
+    select: { id: true, deletedAt: true },
+  });
+  if (existing?.deletedAt != null) return null;
+
   user = await prisma.user.upsert({
     where: { id: authUserId },
     create: { id: authUserId, email },
@@ -1131,10 +1143,21 @@ export async function removeOrganizationMember(
         await tx.organizationInvitation.deleteMany({
           where: { email },
         });
+        await tx.galleryCandidate.updateMany({
+          where: { uploaderId: user.id },
+          data: { postAnonymously: true },
+        });
+        await tx.galleryExample.updateMany({
+          where: { contributorId: user.id },
+          data: { postAnonymously: true },
+        });
         await tx.user.update({
           where: { id: user.id },
           data: {
             email: `${randomUUID()}@deleted.minebench.invalid`,
+            displayName: null,
+            publicNickname: null,
+            publicNicknameNormalized: null,
             deletedAt: now,
             authDeletedAt: null,
           },
