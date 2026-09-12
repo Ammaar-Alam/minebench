@@ -156,12 +156,13 @@ async function main() {
 
     // Regression (post-purge): once the session's PublicSessionActivity is purged (30-day retention),
     // the "user:<id>" branch cannot enumerate it at all, so only the routing-independent reversal
-    // (keyed on the surviving GalleryVoteBlock sessionHash) can release the original sessionHash block.
-    // Post-purge ipHmac recovery is not guaranteed — the sessionHash row carries no ipHmac and the PSA
-    // is gone — so only the sessionHash block is asserted here.
+    // (keyed on the surviving GalleryVoteBlock sessionHash) can release the original blocks.
+    // The block is created as a combined { sessionHash, ipHmac } row so the companion IP survives
+    // the purge and can be reversed together with the sessionHash block.
     await db.publicSessionActivity.create({ data: { sessionId: purgedSession, ipHmac: purgedIp, lastSeenAt: capturedAt } });
     await setArenaVoteSessionBlocked(adminId, purgedSession, true);
     assert.equal(await db.galleryVoteBlock.count({ where: { sessionHash: hashVoteSession(purgedSession), reversedAt: null } }), 1, "purged sessionHash block created while anonymous");
+    assert.equal(await db.galleryVoteBlock.count({ where: { ipHmac: purgedIp, reversedAt: null } }), 1, "purged ipHmac stored on same block row as sessionHash");
     // Attribute via a vote + PSA (mirrors claimAnonymousPublicVotes), then purge the PSA.
     await db.vote.create({ data: { sessionId: purgedSession, matchupId: matchup.id, choice: "A", createdAt: capturedAt } });
     await db.vote.updateMany({ where: { sessionId: purgedSession }, data: { userId: memberId } });
@@ -169,6 +170,7 @@ async function main() {
     await db.publicSessionActivity.delete({ where: { sessionId: purgedSession } });
     await setArenaVoteSessionBlocked(adminId, purgedSession, false);
     assert.equal(await db.galleryVoteBlock.count({ where: { sessionHash: hashVoteSession(purgedSession), reversedAt: null } }), 0, "purged sessionHash block reversed via routing-independent lookup");
+    assert.equal(await db.galleryVoteBlock.count({ where: { ipHmac: purgedIp, reversedAt: null } }), 0, "purged ipHmac block reversed via routing-independent lookup");
 
     console.log("vote review database checks passed");
   } finally {

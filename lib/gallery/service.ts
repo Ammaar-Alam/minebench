@@ -1957,10 +1957,21 @@ export async function setGalleryPersonVoteBlocked(
         entry.sessionHash ? `session:${entry.sessionHash}` : null,
         entry.ipHmac ? `ip:${entry.ipHmac}` : null,
       ].filter((value): value is string => Boolean(value))));
+      // For a session: person (no userId, single session), store the companion ipHmac on the
+      // same row as the sessionHash so it survives PublicSessionActivity purge and can be
+      // recovered by reverseArenaSessionVoteBlocks when reversing post-purge.
+      const sessionIpHmac = !person.userId && sessionHashes.length === 1 ? (person.ipHmacs[0] ?? null) : null;
+      // ipHmacs that should become standalone rows: all except the companion being merged into a session row.
+      const standaloneIpHmacs = sessionIpHmac
+        ? person.ipHmacs.filter((value) => value !== sessionIpHmac || activeKeys.has(`session:${sessionHashes[0]}`))
+        : person.ipHmacs;
       const rows = [
         person.userId && !activeKeys.has(`user:${person.userId}`) ? { userId: person.userId } : null,
-        ...sessionHashes.map((value) => activeKeys.has(`session:${value}`) ? null : { sessionHash: value }),
-        ...person.ipHmacs.map((value) => activeKeys.has(`ip:${value}`) ? null : { ipHmac: value }),
+        ...sessionHashes.map((value) => activeKeys.has(`session:${value}`) ? null : {
+          sessionHash: value,
+          ...(sessionIpHmac && !activeKeys.has(`ip:${sessionIpHmac}`) ? { ipHmac: sessionIpHmac } : {}),
+        }),
+        ...standaloneIpHmacs.map((value) => activeKeys.has(`ip:${value}`) ? null : { ipHmac: value }),
       ].filter((value): value is NonNullable<typeof value> => Boolean(value));
       if (rows.length === 0) return { blocked, changed: false };
       await tx.galleryVoteBlock.createMany({
