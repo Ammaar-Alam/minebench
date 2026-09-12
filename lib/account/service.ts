@@ -53,7 +53,7 @@ export type AuthAdminClient = {
   };
 };
 
-async function deleteSupabaseAuthUser(
+export async function deleteSupabaseAuthUser(
   userId: string,
   createAdminClient: () => AuthAdminClient = createSupabaseAdminClient,
 ): Promise<void> {
@@ -64,7 +64,7 @@ async function deleteSupabaseAuthUser(
   }
 }
 
-async function markAuthDeleted(userId: string, now: Date): Promise<void> {
+export async function markAuthDeleted(userId: string, now: Date): Promise<void> {
   await prisma.user.updateMany({
     where: { id: userId, deletedAt: { not: null }, authDeletedAt: null },
     data: { authDeletedAt: now },
