@@ -77,6 +77,7 @@ function findArrayStart(text: string, field: string): number {
   const token = `"${field}"`;
   let inString = false;
   let escaped = false;
+  let depth = 0;
 
   for (let i = 0; i <= text.length - token.length; i += 1) {
     const ch = text[i];
@@ -94,26 +95,40 @@ function findArrayStart(text: string, field: string): number {
       continue;
     }
 
-    if (ch !== '"') continue;
+    if (ch === "{") {
+      depth += 1;
+      continue;
+    }
 
-    if (text.startsWith(token, i)) {
-      let j = i + token.length;
-      while (j < text.length && /\s/.test(text[j] ?? "")) j += 1;
-      if (text[j] !== ":") {
+    if (ch === "}") {
+      if (depth > 0) depth -= 1;
+      continue;
+    }
+
+    // Only treat " as a JSON string delimiter once we are inside an object. A
+    // " at top level (depth 0) is prose, not a JSON string; an unbalanced prose
+    // quote must not desync the scanner so the opening " of the real token is
+    // consumed as a string closer instead of being matched as the token.
+    if (depth > 0 && ch === '"') {
+      if (text.startsWith(token, i)) {
+        let j = i + token.length;
+        while (j < text.length && /\s/.test(text[j] ?? "")) j += 1;
+        if (text[j] !== ":") {
+          inString = true;
+          escaped = false;
+          continue;
+        }
+        j += 1;
+        while (j < text.length && /\s/.test(text[j] ?? "")) j += 1;
+        if (text[j] === "[") return j;
         inString = true;
         escaped = false;
         continue;
       }
-      j += 1;
-      while (j < text.length && /\s/.test(text[j] ?? "")) j += 1;
-      if (text[j] === "[") return j;
+
       inString = true;
       escaped = false;
-      continue;
     }
-
-    inString = true;
-    escaped = false;
   }
 
   return -1;
@@ -197,7 +212,10 @@ function parseTopLevelJsonObjects(text: string, limit = 4): unknown[] {
       continue;
     }
 
-    if (ch === '"') {
+    // Only treat " as a JSON string delimiter once we are inside an object. A "
+    // at top level (depth 0) is prose, not a JSON string; an unbalanced prose
+    // quote must not desync the brace scanner into swallowing the real object.
+    if (depth > 0 && ch === '"') {
       inString = true;
       continue;
     }
