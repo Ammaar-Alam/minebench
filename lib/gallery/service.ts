@@ -1696,7 +1696,13 @@ export async function getGalleryAdminDashboard(
   };
 }
 
-async function resolveGalleryAdminPerson(personId: string) {
+async function resolveGalleryAdminPerson(personId: string, options?: { exhaustive?: boolean }) {
+  // The default `take: 50` bound is a display-oriented cap for the dashboard people list;
+  // mutating callers pass `exhaustive: true` so a block/unblock reaches every attributable
+  // sessionHash/ipHmac record instead of only the 50 newest sessions, otherwise a session
+  // blocked while anonymous and later attributed can fall out of the window and survive its
+  // own unblock.
+  const exhaustive = options?.exhaustive ?? false;
   if (personId.startsWith("user:")) {
     const userId = personId.slice(5);
     const user = await prisma.user.findUnique({
@@ -1713,7 +1719,7 @@ async function resolveGalleryAdminPerson(personId: string) {
         hostedGenerationLimit: true,
         publicSessionActivities: {
           orderBy: { lastSeenAt: "desc" },
-          take: 50,
+          take: exhaustive ? undefined : 50,
           select: {
             sessionId: true,
             lastSeenAt: true,
@@ -1922,7 +1928,7 @@ export async function setGalleryPersonVoteBlocked(
   blocked: boolean,
 ) {
   await requireMineBenchAdmin(adminId);
-  const person = await resolveGalleryAdminPerson(personId);
+  const person = await resolveGalleryAdminPerson(personId, { exhaustive: !blocked });
   const sessionHashes = person.sessionIds.map(hashVoteSession).filter((value): value is string => Boolean(value));
   const sessionHash = sessionHashes[0] ?? null;
   const ipHmac = person.ipHmacs[0] ?? null;
