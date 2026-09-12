@@ -216,10 +216,14 @@ export async function setArenaVoteSessionBlocked(
   adminId: string,
   sessionId: string,
   blocked: boolean,
+  reviewedSince?: string,
 ): Promise<{ blocked: boolean; personId: string | null; label: string }> {
   await requireMineBenchAdmin(adminId);
   checkSession(sessionId);
-  const since = new Date(Date.now() - VOTE_REVIEW_WINDOW_MS);
+  const parsedSince = reviewedSince ? new Date(reviewedSince) : null;
+  const since = parsedSince && Number.isFinite(parsedSince.getTime())
+    ? parsedSince
+    : new Date(Date.now() - VOTE_REVIEW_WINDOW_MS);
   const vote = await prisma.vote.findFirst({
     where: { sessionId, userId: { not: null }, createdAt: { gte: since }, matchup: { stealthVariantId: null } },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
