@@ -66,18 +66,16 @@ export async function GET(
   const result = await prisma.stealthGenerationResult.findFirst({
     where: {
       id: resultId,
-      ...(!identity.user.isMineBenchAdmin
-        ? {
-            run: {
-              variant: {
-                experiment: {
-                  organizationId: organization?.id,
-                  ...readableStealthEvaluationWhere(),
-                },
-              },
-            },
-          }
-        : {}),
+      run: {
+        variant: {
+          experiment: {
+            ...(!identity.user.isMineBenchAdmin
+              ? { organizationId: organization?.id }
+              : {}),
+            ...readableStealthEvaluationWhere(),
+          },
+        },
+      },
     },
     select: {
       id: true,

@@ -180,6 +180,30 @@ for (const path of [
   assert.match(read(path), /readableStealthEvaluationWhere/);
 }
 
+const labBuildsRoute = read("app/api/lab/organizations/[orgSlug]/builds/[resultId]/route.ts");
+const labBuildsWhere = labBuildsRoute.slice(
+  labBuildsRoute.indexOf("stealthGenerationResult.findFirst("),
+  labBuildsRoute.indexOf("select: {", labBuildsRoute.indexOf("stealthGenerationResult.findFirst(")),
+);
+assert.match(
+  labBuildsWhere,
+  /!identity\.user\.isMineBenchAdmin\s*\?\s*\{\s*organizationId:\s*organization\?\.id\s*\}\s*:\s*\{\}/,
+  "lab builds route admin conditional must gate only organizationId",
+);
+{
+  const adminIdx = labBuildsWhere.indexOf("!identity.user.isMineBenchAdmin");
+  const retentionIdx = labBuildsWhere.indexOf("readableStealthEvaluationWhere");
+  assert.ok(
+    adminIdx >= 0 && retentionIdx > adminIdx,
+    "lab builds route must reference readableStealthEvaluationWhere in the findFirst where clause",
+  );
+  assert.match(
+    labBuildsWhere.slice(adminIdx, retentionIdx),
+    /:\s*\{\}/,
+    "lab builds route retention fence must be applied outside the admin conditional (after the `: {}` falsy branch)",
+  );
+}
+
 const report = read("lib/stealth/report.ts");
 assert.match(report, /createdAt: string/);
 assert.match(report, /ORDER BY vote\."createdAt" ASC, vote\.id ASC/);
