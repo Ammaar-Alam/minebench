@@ -320,17 +320,22 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
       const hasGap = !(newestLoadedId != null && result.data.votes.some((vote) => vote.id === newestLoadedId));
       // Compute the count of truly new votes before setVotes updates votesRef so the
       // existing-id set still reflects the pre-update state.
-      const newFreshCount = hasGap
-        ? result.data.votes.filter((vote) => !new Set(votesRef.current.map((v) => v.id)).has(vote.id)).length
-        : 0;
+      const existingIds = new Set(votesRef.current.map((v) => v.id));
+      const newFreshCount = result.data.votes.filter((vote) => !existingIds.has(vote.id)).length;
       setVotes((current) => {
         const existing = new Set(current.map((vote) => vote.id));
         const fresh = result.data.votes.filter((vote) => !existing.has(vote.id));
         return [...fresh, ...current];
       });
-      // When there is a gap, track how many fresh votes sit before the retained older history so
-      // that subsequent gap-fill pages (from "Load more") are inserted at the correct position.
-      freshPrefixCount.current = newFreshCount;
+      // When there is a gap, establish a new prefix count for gap-fill insertion.
+      // When there is no gap but the refresh still prepends new votes (e.g. a second
+      // overlapping refresh while an earlier gap is still unfilled), add the new votes
+      // to the existing prefix so the insertion point for gap-fill pages stays correct.
+      if (hasGap) {
+        freshPrefixCount.current = newFreshCount;
+      } else {
+        freshPrefixCount.current += newFreshCount;
+      }
       setLoadedSessionId(sessionId);
       setPageVoteIds(freshIds);
       // Keep the existing cursor when the fresh page overlaps the loaded history so "Load
