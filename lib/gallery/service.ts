@@ -1956,7 +1956,7 @@ export async function setGalleryPersonVoteBlocked(
         ...sessionHashes.map((value) => activeKeys.has(`session:${value}`) ? null : { sessionHash: value }),
         ...person.ipHmacs.map((value) => activeKeys.has(`ip:${value}`) ? null : { ipHmac: value }),
       ].filter((value): value is NonNullable<typeof value> => Boolean(value));
-      if (rows.length === 0) return { blocked, changed: false };
+      if (rows.length === 0) return { blocked, changed: false, label: person.label };
       await tx.galleryVoteBlock.createMany({
         data: rows.map((identity) => ({ ...identity, createdById: adminId })),
       });
@@ -1966,7 +1966,7 @@ export async function setGalleryPersonVoteBlocked(
         where: { reversedAt: null, OR: identities },
         data: { reversedAt: now, reversedById: adminId },
       });
-      if (reversed.count === 0) return { blocked, changed: false };
+      if (reversed.count === 0) return { blocked, changed: false, label: person.label };
       changed = true;
     }
     await tx.galleryModerationRecord.create({
@@ -1982,6 +1982,6 @@ export async function setGalleryPersonVoteBlocked(
         purgeAt: new Date(now.getTime() + RETENTION_MS),
       },
     });
-    return { blocked, changed };
+    return { blocked, changed, label: person.label };
   });
 }

@@ -141,9 +141,9 @@ export async function blockArenaReviewSession(sessionId: string, blocked: boolea
   const parsed = z.object({ sessionId: sessionSchema, blocked: z.boolean() }).safeParse({ sessionId, blocked });
   if (!parsed.success) return { ok: false as const, error: "Invalid vote restriction." };
   try {
-    await setArenaVoteSessionBlocked(await adminId(), parsed.data.sessionId, parsed.data.blocked);
+    const { label } = await setArenaVoteSessionBlocked(await adminId(), parsed.data.sessionId, parsed.data.blocked);
     refreshGalleryAdmin();
-    return { ok: true as const };
+    return { ok: true as const, label };
   } catch (error) {
     return { ok: false as const, error: actionError(error) };
   }

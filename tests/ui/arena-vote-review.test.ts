@@ -70,6 +70,10 @@ async function main() {
     context.selectedSession = { lastVoteId, lastVoteAt: createdAt };
     assert.equal(evaluate("hasNewVotes"), expected, "equal timestamps must use the vote ID tie-breaker");
   }
+  assert.ok(
+    source.text.includes("result.label"),
+    "the restriction notice must name the person the backend actually blocked, not the dialog label",
+  );
   console.log("vote review selection and request checks passed");
 }
 
