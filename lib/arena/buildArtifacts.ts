@@ -615,6 +615,8 @@ export async function prepareArenaBuild(
     const parsed = await parseAndValidateBuild(source, opts);
     const prepared = createPrepared(source, parsed.build, parsed.payloadEstimatedBytes, storedChecksum);
     prepared.hints.initialVariant = "full";
+    prepared.hints.initialEstimatedBytes = prepared.hints.fullEstimatedBytes;
+    prepared.hints.initialDeliveryClass = prepared.hints.deliveryClass;
     return prepared;
   }
 
