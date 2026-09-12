@@ -17,7 +17,7 @@ export default async function EvaluationResultsPage({
     codename: variant.codename,
     rating: variant.conservativeRating,
     ratingDeviation: variant.ratingDeviation,
-    confidence: variant.confidence,
+    confidence: variant.confidence / 100,
     stability: variant.stability,
     estimatedFieldRank: variant.estimatedFieldRank,
     estimatedFieldSize: variant.estimatedFieldSize,
