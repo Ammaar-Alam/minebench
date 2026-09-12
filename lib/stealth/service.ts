@@ -7,11 +7,16 @@ import {
   type StealthGenerationResultStatus,
   type StealthVariantStatus,
 } from "@prisma/client";
+import {
+  deleteSupabaseAuthUser,
+  markAuthDeleted,
+} from "@/lib/account/service";
 import { deleteArenaBuildArtifacts } from "@/lib/arena/artifactOwnership";
 import {
   BENCHMARK_PROMPT_COHORT_ID,
   BENCHMARK_PROMPT_MAP,
 } from "@/lib/benchmark/prompts";
+import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import { prisma } from "@/lib/prisma";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import {
@@ -1091,8 +1096,10 @@ export async function removeOrganizationMember(
   actor: StealthActor,
   organizationId: string,
   params: { email: string },
+  options: { now?: Date; deleteAuthUser?: (userId: string) => Promise<void> } = {},
 ): Promise<void> {
   const email = normalizeEmail(params.email);
+  const now = options.now ?? new Date();
   let authUserIdToDelete: string | null = null;
 
   await prisma.$transaction(async (tx) => {
@@ -1124,8 +1131,13 @@ export async function removeOrganizationMember(
         await tx.organizationInvitation.deleteMany({
           where: { email },
         });
-        await tx.user.delete({
+        await tx.user.update({
           where: { id: user.id },
+          data: {
+            email: `${randomUUID()}@deleted.minebench.invalid`,
+            deletedAt: now,
+            authDeletedAt: null,
+          },
         });
         authUserIdToDelete = user.id;
       }
@@ -1134,10 +1146,10 @@ export async function removeOrganizationMember(
 
   if (authUserIdToDelete) {
     try {
-      const supabase = createSupabaseAdminClient();
-      await supabase.auth.admin.deleteUser(authUserIdToDelete);
-    } catch {
-      // Best-effort auth cleanup
+      await (options.deleteAuthUser ?? deleteSupabaseAuthUser)(authUserIdToDelete);
+      await markAuthDeleted(authUserIdToDelete, now);
+    } catch (error) {
+      console.error("Supabase Auth account deletion pending", redactSensitiveText(error));
     }
   }
 }
