@@ -65,7 +65,6 @@ assert.deepEqual(
     ["text.format"],
   ),
   {
-    max_output_tokens: 32_768,
     reasoning: { effort: "low" },
     text: { format: { type: "json_schema" }, verbosity: "low" },
   },
@@ -79,10 +78,15 @@ for (const adapterAlias of ["max_tokens", "max_completion_tokens", "max_output_t
     );
     assert.equal(
       Object.hasOwn(merged, adapterAlias),
-      false,
-      `adapter alias ${adapterAlias} should be stripped when user sets ${userAlias}`,
+      true,
+      `adapter alias ${adapterAlias} must survive when user sets a different alias ${userAlias}`,
     );
-    assert.equal(merged[userAlias], 1024);
+    assert.equal(merged[adapterAlias], 4096);
+    assert.equal(
+      Object.hasOwn(merged, userAlias),
+      false,
+      `user-supplied alias ${userAlias} must be stripped so the provider-rejected alias does not leak`,
+    );
     assert.equal(
       Object.keys(merged).filter(
         (k) =>
@@ -96,7 +100,7 @@ for (const adapterAlias of ["max_tokens", "max_completion_tokens", "max_output_t
 }
 assert.deepEqual(
   mergeCustomRequestBody({ model: "m", max_tokens: 4096 }, { max_tokens: 1024 }),
-  { model: "m", max_tokens: 1024 },
+  { model: "m", max_tokens: 4096 },
 );
 assert.deepEqual(
   mergeCustomRequestBody(
@@ -104,6 +108,13 @@ assert.deepEqual(
     { temperature: 0.7 },
   ),
   { model: "m", max_tokens: 4096, temperature: 0.7 },
+);
+assert.deepEqual(
+  mergeCustomRequestBody(
+    { model: "m", max_tokens: 4096 },
+    { max_completion_tokens: 2048, temperature: 0.9 },
+  ),
+  { model: "m", max_tokens: 4096, temperature: 0.9 },
 );
 assert.deepEqual(
   mergeCustomRequestBody({ model: "m", max_tokens: 4096 }, undefined),
@@ -115,7 +126,7 @@ assert.deepEqual(
     { max_tokens: 1024 },
     ["tools"],
   ),
-  { max_tokens: 1024, tools: [{ type: "function" }] },
+  { max_completion_tokens: 4096, tools: [{ type: "function" }] },
 );
 assert.throws(
   () => normalizeProviderRequestOverrides({

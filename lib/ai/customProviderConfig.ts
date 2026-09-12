@@ -524,14 +524,14 @@ export function mergeCustomRequestBody(
   protectedPaths: readonly string[] = [],
 ): Record<string, unknown> {
   const custom = normalizeProviderRequestOverrides({ body: customBody }).body ?? {};
-  const sanitizedBase = TOKEN_FIELD_ALIASES.some((name) => Object.hasOwn(custom, name))
+  const sanitizedCustom = TOKEN_FIELD_ALIASES.some((name) => Object.hasOwn(custom, name))
     ? Object.fromEntries(
-        Object.entries(base).filter(
+        Object.entries(custom).filter(
           ([name]) => !(TOKEN_FIELD_ALIASES as readonly string[]).includes(name),
         ),
       )
-    : base;
-  const merged = mergeJsonObjects(sanitizedBase, custom);
+    : custom;
+  const merged = mergeJsonObjects(base, sanitizedCustom);
   for (const path of protectedPaths) {
     const managed = ownValueAtPath(base, path);
     if (managed.found) setValueAtPath(merged, path, managed.value);
