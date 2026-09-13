@@ -420,6 +420,32 @@ async function main() {
     await drainNotifications(retrySend);
     assert.equal(retryCalls.length, 3);
     assert.equal(retryCalls[2].token, retryDeviceB.token);
+    assert.deepEqual(retryCalls.map((call) => call.payload.aps.badge), [1, 1, 1], "retries count an update only once");
+
+    for (const label of ["badge-second", "badge-third"]) {
+      const build = await createBuild(retryOwnerId, label);
+      await db.$transaction((tx) => enqueueGenerationNotification(tx, build.id));
+    }
+    const badgeSend = fakeSend();
+    await drainNotifications(badgeSend.send);
+    for (const device of [retryDeviceA, retryDeviceB]) {
+      assert.deepEqual(badgeSend.calls.filter((call) => call.token === device.token).map((call) => call.payload.aps.badge), [2, 3]);
+      assert.equal((await db.pushDevice.findUniqueOrThrow({ where: { id: device.id } })).updatedAt.getTime(), device.updatedAt.getTime(), "badges preserve the token registration timestamp");
+    }
+    await registerPushDevice(retryOwnerId, { token: retryDeviceA.token, environment: retryDeviceA.environment });
+    assert.equal((await db.pushDevice.findUniqueOrThrow({ where: { id: retryDeviceA.id } })).badgeCount, 0);
+    assert.equal((await db.pushDevice.findUniqueOrThrow({ where: { id: retryDeviceB.id } })).badgeCount, 3, "opening one device leaves the other badge alone");
+    await db.notificationDelivery.update({ where: { id: retryDeliveryA.id }, data: { finishedAt: null, runAfter: past } });
+    const afterOpenSend = fakeSend();
+    await drainNotifications(afterOpenSend.send);
+    assert.equal(afterOpenSend.calls[0].payload.aps.badge, 0, "retrying a seen update must not restore its badge");
+    const nextBuild = await createBuild(retryOwnerId, "badge-after-open");
+    await db.$transaction((tx) => enqueueGenerationNotification(tx, nextBuild.id));
+    const nextSend = fakeSend();
+    await drainNotifications(nextSend.send);
+    assert.equal(nextSend.calls.find((call) => call.token === retryDeviceA.token)?.payload.aps.badge, 1);
+    await registerPushDevice(otherUserId, { token: retryDeviceB.token, environment: retryDeviceB.environment });
+    assert.equal((await db.pushDevice.findUniqueOrThrow({ where: { id: retryDeviceB.id } })).badgeCount, 0, "rebinding a device clears the previous account badge");
 
     await clearQueue();
     const bookkeepingOwnerId = await createUser("notification-bookkeeping-owner");

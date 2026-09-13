@@ -24,7 +24,7 @@ export async function claimNotificationDeliveries(): Promise<NotificationDeliver
       FOR UPDATE SKIP LOCKED LIMIT 10
     )
     UPDATE "NotificationDelivery" d
-    SET "leaseToken" = ${randomUUID()}, "leaseExpiresAt" = now() + interval '90 seconds',
+    SET "leaseToken" = ${randomUUID()}, "leaseExpiresAt" = now() + interval '3 minutes',
       attempts = attempts + 1
     FROM pending WHERE d.id = pending.id RETURNING d.*
   `;
@@ -100,6 +100,24 @@ async function deliverNotification(delivery: NotificationDelivery, send: typeof 
         ...renderNotificationEmail(payload),
       });
     } else if (device && payload && pushNotificationsEnabled() && await prisma.notificationDelivery.count({ where: claim })) {
+      const badge = await prisma.$transaction(async (tx) => {
+        // lock devices before deliveries to match registration and account deletion
+        const [current] = await tx.$queryRaw<Array<{ badgeCount: number }>>`
+          SELECT "badgeCount" FROM "PushDevice"
+          WHERE id = ${device.id} AND "userId" = ${delivery.userId}::uuid FOR UPDATE
+        `;
+        if (!current) return null;
+        const counted = await tx.notificationDelivery.updateMany({
+          where: { ...claim, badgeCounted: false }, data: { badgeCounted: true },
+        });
+        if (counted.count) {
+          // badge updates must not change the APNs registration timestamp
+          await tx.$executeRaw`UPDATE "PushDevice" SET "badgeCount" = "badgeCount" + 1 WHERE id = ${device.id}`;
+        }
+        return current.badgeCount + counted.count;
+      });
+      if (badge === null) return;
+      payload.aps.badge = badge;
       const result = await send({
         token: device.token, environment: device.environment, payload,
         collapseId: createHash("sha256").update(delivery.eventKey).digest("hex"),
@@ -150,7 +168,14 @@ export async function drainNotifications(send = sendApnsNotification, sendEmail 
     `;
     lastPrunedAt = removed === 1000 ? 0 : Date.now();
   }
-  const results = await Promise.allSettled((await claimNotificationDeliveries()).map((delivery) => deliverNotification(delivery, send, sendEmail)));
+  // preserve badge order per device while unrelated devices and email send concurrently
+  const pendingByDevice = new Map<string, Promise<void>>();
+  const results = await Promise.allSettled((await claimNotificationDeliveries()).map((delivery) => {
+    const previous = delivery.deviceId ? pendingByDevice.get(delivery.deviceId) : undefined;
+    const pending = (previous ?? Promise.resolve()).catch(() => {}).then(() => deliverNotification(delivery, send, sendEmail));
+    if (delivery.deviceId) pendingByDevice.set(delivery.deviceId, pending);
+    return pending;
+  }));
   if (results.some((result) => result.status === "rejected")) console.warn("Notification delivery bookkeeping failed");
 }
 

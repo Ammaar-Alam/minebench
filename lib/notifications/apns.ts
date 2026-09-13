@@ -11,6 +11,7 @@ export type PushPayload = {
   aps: {
     alert: { title: string; body: string };
     sound: "default";
+    badge?: number;
     "thread-id": string;
   };
   kind: "generation_succeeded" | "generation_failed" | "gallery_upvotes" | "gallery_contribution";
