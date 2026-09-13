@@ -269,9 +269,11 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
         if (!append) return result.data.votes;
         const existing = new Set(current.map((vote) => vote.id));
         const incoming = result.data.votes.filter((vote) => !existing.has(vote.id));
-        // Insert gap-fill pages between the fresh prefix and the retained older history so that
-        // the list remains in descending order.
-        const insertAt = freshPrefixCount.current;
+        // When a gap exists (freshPrefixCount > 0), insert gap-fill pages between the fresh
+        // prefix and the retained older history so that the list remains in descending order.
+        // When there is no gap (freshPrefixCount === 0), this is an ordinary "Load more" and
+        // the page must be appended at the end.
+        const insertAt = freshPrefixCount.current > 0 ? freshPrefixCount.current : current.length;
         return [
           ...current.slice(0, insertAt),
           ...incoming,
@@ -280,7 +282,7 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
       });
       if (!append) {
         freshPrefixCount.current = 0;
-      } else {
+      } else if (freshPrefixCount.current > 0) {
         // Advance the insertion boundary by the full incoming page size, not just the
         // new-vote count. When a gap-fill page overlaps votes already in the retained
         // history (duplicate IDs at the tail of the page), those retained votes are now
