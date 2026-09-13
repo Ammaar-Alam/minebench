@@ -396,7 +396,7 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
     setPendingAction("block");
     setNotice(null);
     try {
-      const result = await blockArenaReviewSession(selectedSession.sessionId, blocked, data?.since);
+      const result = await blockArenaReviewSession(selectedSession.sessionId, blocked, data?.since, data?.until);
       if (!result.ok) {
         setNotice(result.error);
         return;

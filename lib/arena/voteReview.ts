@@ -217,6 +217,7 @@ export async function setArenaVoteSessionBlocked(
   sessionId: string,
   blocked: boolean,
   reviewedSince?: string,
+  reviewedUntil?: string,
 ): Promise<{ blocked: boolean; personId: string | null; label: string }> {
   await requireMineBenchAdmin(adminId);
   checkSession(sessionId);
@@ -224,8 +225,10 @@ export async function setArenaVoteSessionBlocked(
   const since = parsedSince && Number.isFinite(parsedSince.getTime())
     ? parsedSince
     : new Date(Date.now() - VOTE_REVIEW_WINDOW_MS);
+  const parsedUntil = reviewedUntil ? new Date(reviewedUntil) : null;
+  const until = parsedUntil && Number.isFinite(parsedUntil.getTime()) ? parsedUntil : new Date();
   const vote = await prisma.vote.findFirst({
-    where: { sessionId, userId: { not: null }, createdAt: { gte: since }, matchup: { stealthVariantId: null } },
+    where: { sessionId, userId: { not: null }, createdAt: { gte: since, lte: until }, matchup: { stealthVariantId: null } },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     select: { userId: true },
   });
