@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { NotificationDelivery } from "@prisma/client";
+import { Prisma, type NotificationDelivery } from "@prisma/client";
 import { sendMineBenchEmail } from "@/lib/contactEmail";
 import { publicCandidateWhere, publicExampleWhere } from "@/lib/gallery/service";
 import { closeApnsConnections, sendApnsNotification, type PushPayload } from "@/lib/notifications/apns";
@@ -11,15 +11,41 @@ const MAX_ATTEMPTS = 6;
 let lastPrunedAt = 0;
 
 export async function claimNotificationDeliveries(): Promise<NotificationDelivery[]> {
-  return prisma.$queryRaw<NotificationDelivery[]>`
-    WITH pending AS (
+  const ready = Prisma.sql`
+    d."finishedAt" IS NULL AND d."runAfter" <= now()
+    AND (d."leaseExpiresAt" IS NULL OR d."leaseExpiresAt" < now())
+    AND d.attempts < ${MAX_ATTEMPTS} AND d."createdAt" > now() - interval '24 hours'
+    AND NOT EXISTS (
+      SELECT 1 FROM "NotificationDelivery" active
+      WHERE active."deviceId" = d."deviceId" AND active."finishedAt" IS NULL
+        AND active."leaseExpiresAt" >= now()
+    )
+  `;
+  return prisma.$transaction(async (tx) => {
+    // serialize claims on the device row and recheck leases with a fresh statement snapshot
+    const devices = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT device.id FROM "PushDevice" device
+      JOIN LATERAL (
+        SELECT d."runAfter" FROM "NotificationDelivery" d
+        WHERE d."deviceId" = device.id AND ${ready}
+        ORDER BY d."runAfter", d.id LIMIT 1
+      ) next ON true
+      WHERE ${pushNotificationsEnabled()}
+      ORDER BY next."runAfter", device.id
+      FOR UPDATE OF device SKIP LOCKED LIMIT 10
+    `;
+    return tx.$queryRaw<NotificationDelivery[]>`
+    WITH heads AS (
+      SELECT DISTINCT ON (d."deviceId", CASE WHEN d."deviceId" IS NULL THEN d.id END) d.id
+      FROM "NotificationDelivery" d
+      WHERE ${ready}
+        AND ((d."deviceId" IS NULL AND ${emailNotificationsEnabled()})
+          OR d."deviceId" = ANY(${devices.map((device) => device.id)}::text[]))
+      ORDER BY d."deviceId", CASE WHEN d."deviceId" IS NULL THEN d.id END, d."runAfter", d.id
+    ),
+    pending AS (
       SELECT id FROM "NotificationDelivery"
-      WHERE "finishedAt" IS NULL AND "runAfter" <= now()
-        AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" < now())
-        AND attempts < ${MAX_ATTEMPTS}
-        AND "createdAt" > now() - interval '24 hours'
-        AND (("deviceId" IS NULL AND ${emailNotificationsEnabled()})
-          OR ("deviceId" IS NOT NULL AND ${pushNotificationsEnabled()}))
+      WHERE id IN (SELECT id FROM heads)
       ORDER BY "runAfter", id
       FOR UPDATE SKIP LOCKED LIMIT 10
     )
@@ -27,7 +53,8 @@ export async function claimNotificationDeliveries(): Promise<NotificationDeliver
     SET "leaseToken" = ${randomUUID()}, "leaseExpiresAt" = now() + interval '90 seconds',
       attempts = attempts + 1
     FROM pending WHERE d.id = pending.id RETURNING d.*
-  `;
+    `;
+  });
 }
 
 async function notificationPayload(delivery: NotificationDelivery): Promise<PushPayload | null> {
@@ -100,6 +127,24 @@ async function deliverNotification(delivery: NotificationDelivery, send: typeof 
         ...renderNotificationEmail(payload),
       });
     } else if (device && payload && pushNotificationsEnabled() && await prisma.notificationDelivery.count({ where: claim })) {
+      const badge = await prisma.$transaction(async (tx) => {
+        // lock devices before deliveries to match registration and account deletion
+        const [current] = await tx.$queryRaw<Array<{ badgeCount: number }>>`
+          SELECT "badgeCount" FROM "PushDevice"
+          WHERE id = ${device.id} AND "userId" = ${delivery.userId}::uuid FOR UPDATE
+        `;
+        if (!current) return null;
+        const counted = await tx.notificationDelivery.updateMany({
+          where: { ...claim, badgeCounted: false }, data: { badgeCounted: true },
+        });
+        if (counted.count) {
+          // badge updates must not change the APNs registration timestamp
+          await tx.$executeRaw`UPDATE "PushDevice" SET "badgeCount" = "badgeCount" + 1 WHERE id = ${device.id}`;
+        }
+        return current.badgeCount + counted.count;
+      });
+      if (badge === null) return;
+      payload.aps.badge = badge;
       const result = await send({
         token: device.token, environment: device.environment, payload,
         collapseId: createHash("sha256").update(delivery.eventKey).digest("hex"),

@@ -24,18 +24,18 @@ let releaseBuild!: (row: unknown) => void;
 const build = new Promise((resolve) => { releaseBuild = resolve; });
 const transaction = {
   customBuildSecret: { deleteMany: async () => ({ count: 0 }) },
-  $queryRaw: async () => [],
+  $queryRaw: async (parts: TemplateStringsArray) => {
+    if (!parts.join("?").includes("WITH heads")) return [];
+    claims += 1;
+    if (claims === 1) throw new Error("temporary database outage");
+    return new Promise<never[]>((resolve) => { releaseClaim = resolve; });
+  },
   customBuildEvent: { aggregate: async () => ({ _max: { seq: 0 } }), create: async () => ({}) },
 };
 (globalThis as unknown as { prisma: unknown }).prisma = {
   $transaction: async (callback: (tx: unknown) => unknown) => callback(transaction),
   $queryRaw: async (parts: TemplateStringsArray) => {
     const sql = parts.join("?");
-    if (sql.includes('FROM "NotificationDelivery"')) {
-      claims += 1;
-      if (claims === 1) throw new Error("temporary database outage");
-      return new Promise<never[]>((resolve) => { releaseClaim = resolve; });
-    }
     if (!sql.includes('FROM "CustomBuildJob"') || jobClaimed) return [];
     jobClaimed = true;
     return [{ id: "export-job", customBuildId: "build", type: "export", payload: { format: "glb" } }];
