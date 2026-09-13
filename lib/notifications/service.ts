@@ -94,6 +94,9 @@ export async function registerPushDevice(userId: string, device: z.infer<typeof 
       update: { userId, updatedAt: new Date(), badgeCount: 0 },
     });
     await tx.notificationDelivery.deleteMany({ where: { deviceId: registered.id, userId: { not: userId } } });
+    await tx.notificationDelivery.updateMany({
+      where: { deviceId: registered.id, userId, badgeCounted: false }, data: { badgeCounted: true },
+    });
     if (await tx.pushDevice.count({ where: { userId } }) > 20) {
       throw new AccountServiceError("device_limit_reached", "Too many registered devices.");
     }

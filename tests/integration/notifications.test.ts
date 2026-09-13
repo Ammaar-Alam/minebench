@@ -367,10 +367,17 @@ async function main() {
     await Promise.all(Array.from({ length: 12 }, (_, index) => createDelivery(claimDevice.id, claimOwnerId, `claim-${index}`, {
       eventKey: `claim-${index}-${suffix}`,
     })));
+    const independentDevice = await createDevice(claimOwnerId, "claim-independent");
+    await createDelivery(independentDevice.id, claimOwnerId, "claim-independent", {});
     const [claimA, claimB] = await Promise.all([claimNotificationDeliveries(), claimNotificationDeliveries()]);
     assert.equal(new Set([...claimA, ...claimB].map((delivery) => delivery.id)).size, claimA.length + claimB.length);
-    assert.equal(claimA.length + claimB.length, 12);
+    assert.equal(claimA.length + claimB.length, 2);
+    assert.equal(new Set([...claimA, ...claimB].map((delivery) => delivery.deviceId)).size, 2, "concurrent claims take only one delivery per device");
     assert.ok([...claimA, ...claimB].every((delivery) => delivery.leaseToken && delivery.leaseExpiresAt));
+    assert.deepEqual(await claimNotificationDeliveries(), [], "leased devices cannot be claimed by another drain");
+    const first = [...claimA, ...claimB].find((delivery) => delivery.deviceId === claimDevice.id)!;
+    await db.notificationDelivery.update({ where: { id: first.id }, data: { finishedAt: new Date() } });
+    assert.equal((await claimNotificationDeliveries()).length, 1, "finishing a delivery releases the device queue");
 
     await clearQueue();
     const stale = await createDelivery(claimDevice.id, claimOwnerId, "stale", {
@@ -427,18 +434,43 @@ async function main() {
       await db.$transaction((tx) => enqueueGenerationNotification(tx, build.id));
     }
     const badgeSend = fakeSend();
+    let releaseBadgeSends!: () => void;
+    const badgeGate = new Promise<void>((resolve) => { releaseBadgeSends = resolve; });
+    let badgeSendsStarted!: () => void;
+    const badgeStarted = new Promise<void>((resolve) => { badgeSendsStarted = resolve; });
+    const pausedDrain = drainNotifications(async (input) => {
+      const result = await badgeSend.send(input);
+      if (badgeSend.calls.length === 2) badgeSendsStarted();
+      await badgeGate;
+      return result;
+    });
+    try {
+      await waitFor(badgeStarted, "first badge sends");
+      await drainNotifications(badgeSend.send);
+      assert.equal(badgeSend.calls.length, 2, "another drain must wait for in-flight sends on each device");
+    } finally {
+      releaseBadgeSends();
+      await pausedDrain;
+    }
     await drainNotifications(badgeSend.send);
     for (const device of [retryDeviceA, retryDeviceB]) {
       assert.deepEqual(badgeSend.calls.filter((call) => call.token === device.token).map((call) => call.payload.aps.badge), [2, 3]);
       assert.equal((await db.pushDevice.findUniqueOrThrow({ where: { id: device.id } })).updatedAt.getTime(), device.updatedAt.getTime(), "badges preserve the token registration timestamp");
     }
+    const queuedBeforeOpen = await createBuild(retryOwnerId, "badge-queued-before-open");
+    await db.$transaction((tx) => enqueueGenerationNotification(tx, queuedBeforeOpen.id));
     await registerPushDevice(retryOwnerId, { token: retryDeviceA.token, environment: retryDeviceA.environment });
+    assert.equal((await db.notificationDelivery.findFirstOrThrow({
+      where: { deviceId: retryDeviceA.id, subjectId: queuedBeforeOpen.publicId },
+    })).badgeCounted, true, "opening the app marks queued updates as seen");
     assert.equal((await db.pushDevice.findUniqueOrThrow({ where: { id: retryDeviceA.id } })).badgeCount, 0);
     assert.equal((await db.pushDevice.findUniqueOrThrow({ where: { id: retryDeviceB.id } })).badgeCount, 3, "opening one device leaves the other badge alone");
     await db.notificationDelivery.update({ where: { id: retryDeliveryA.id }, data: { finishedAt: null, runAfter: past } });
     const afterOpenSend = fakeSend();
     await drainNotifications(afterOpenSend.send);
-    assert.equal(afterOpenSend.calls[0].payload.aps.badge, 0, "retrying a seen update must not restore its badge");
+    assert.equal(afterOpenSend.calls.find((call) => call.token === retryDeviceA.token)?.payload.aps.badge, 0, "retrying a seen update must not restore its badge");
+    await drainNotifications(afterOpenSend.send);
+    assert.equal(afterOpenSend.calls.find((call) => call.token === retryDeviceA.token && call.payload.id === queuedBeforeOpen.publicId)?.payload.aps.badge, 0, "queued pre-open updates must not restore the badge");
     const nextBuild = await createBuild(retryOwnerId, "badge-after-open");
     await db.$transaction((tx) => enqueueGenerationNotification(tx, nextBuild.id));
     const nextSend = fakeSend();
@@ -576,7 +608,7 @@ async function main() {
       exampleId: removedExample.id,
     });
     const invalidSend = fakeSend();
-    await drainNotifications(invalidSend.send);
+    for (let index = 0; index < 3; index += 1) await drainNotifications(invalidSend.send);
     assert.equal(invalidSend.calls.length, 0);
     assert.equal(await db.notificationDelivery.count({ where: { finishedAt: null } }), 0);
 

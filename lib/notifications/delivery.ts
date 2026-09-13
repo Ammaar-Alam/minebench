@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { NotificationDelivery } from "@prisma/client";
+import { Prisma, type NotificationDelivery } from "@prisma/client";
 import { sendMineBenchEmail } from "@/lib/contactEmail";
 import { publicCandidateWhere, publicExampleWhere } from "@/lib/gallery/service";
 import { closeApnsConnections, sendApnsNotification, type PushPayload } from "@/lib/notifications/apns";
@@ -11,23 +11,50 @@ const MAX_ATTEMPTS = 6;
 let lastPrunedAt = 0;
 
 export async function claimNotificationDeliveries(): Promise<NotificationDelivery[]> {
-  return prisma.$queryRaw<NotificationDelivery[]>`
-    WITH pending AS (
+  const ready = Prisma.sql`
+    d."finishedAt" IS NULL AND d."runAfter" <= now()
+    AND (d."leaseExpiresAt" IS NULL OR d."leaseExpiresAt" < now())
+    AND d.attempts < ${MAX_ATTEMPTS} AND d."createdAt" > now() - interval '24 hours'
+    AND NOT EXISTS (
+      SELECT 1 FROM "NotificationDelivery" active
+      WHERE active."deviceId" = d."deviceId" AND active."finishedAt" IS NULL
+        AND active."leaseExpiresAt" >= now()
+    )
+  `;
+  return prisma.$transaction(async (tx) => {
+    // serialize claims on the device row and recheck leases with a fresh statement snapshot
+    const devices = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT device.id FROM "PushDevice" device
+      JOIN LATERAL (
+        SELECT d."runAfter" FROM "NotificationDelivery" d
+        WHERE d."deviceId" = device.id AND ${ready}
+        ORDER BY d."runAfter", d.id LIMIT 1
+      ) next ON true
+      WHERE ${pushNotificationsEnabled()}
+      ORDER BY next."runAfter", device.id
+      FOR UPDATE OF device SKIP LOCKED LIMIT 10
+    `;
+    return tx.$queryRaw<NotificationDelivery[]>`
+    WITH heads AS (
+      SELECT DISTINCT ON (d."deviceId", CASE WHEN d."deviceId" IS NULL THEN d.id END) d.id
+      FROM "NotificationDelivery" d
+      WHERE ${ready}
+        AND ((d."deviceId" IS NULL AND ${emailNotificationsEnabled()})
+          OR d."deviceId" = ANY(${devices.map((device) => device.id)}::text[]))
+      ORDER BY d."deviceId", CASE WHEN d."deviceId" IS NULL THEN d.id END, d."runAfter", d.id
+    ),
+    pending AS (
       SELECT id FROM "NotificationDelivery"
-      WHERE "finishedAt" IS NULL AND "runAfter" <= now()
-        AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" < now())
-        AND attempts < ${MAX_ATTEMPTS}
-        AND "createdAt" > now() - interval '24 hours'
-        AND (("deviceId" IS NULL AND ${emailNotificationsEnabled()})
-          OR ("deviceId" IS NOT NULL AND ${pushNotificationsEnabled()}))
+      WHERE id IN (SELECT id FROM heads)
       ORDER BY "runAfter", id
       FOR UPDATE SKIP LOCKED LIMIT 10
     )
     UPDATE "NotificationDelivery" d
-    SET "leaseToken" = ${randomUUID()}, "leaseExpiresAt" = now() + interval '3 minutes',
+    SET "leaseToken" = ${randomUUID()}, "leaseExpiresAt" = now() + interval '90 seconds',
       attempts = attempts + 1
     FROM pending WHERE d.id = pending.id RETURNING d.*
-  `;
+    `;
+  });
 }
 
 async function notificationPayload(delivery: NotificationDelivery): Promise<PushPayload | null> {
@@ -168,14 +195,7 @@ export async function drainNotifications(send = sendApnsNotification, sendEmail 
     `;
     lastPrunedAt = removed === 1000 ? 0 : Date.now();
   }
-  // preserve badge order per device while unrelated devices and email send concurrently
-  const pendingByDevice = new Map<string, Promise<void>>();
-  const results = await Promise.allSettled((await claimNotificationDeliveries()).map((delivery) => {
-    const previous = delivery.deviceId ? pendingByDevice.get(delivery.deviceId) : undefined;
-    const pending = (previous ?? Promise.resolve()).catch(() => {}).then(() => deliverNotification(delivery, send, sendEmail));
-    if (delivery.deviceId) pendingByDevice.set(delivery.deviceId, pending);
-    return pending;
-  }));
+  const results = await Promise.allSettled((await claimNotificationDeliveries()).map((delivery) => deliverNotification(delivery, send, sendEmail)));
   if (results.some((result) => result.status === "rejected")) console.warn("Notification delivery bookkeeping failed");
 }
 
