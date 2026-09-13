@@ -330,12 +330,17 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
         const fresh = result.data.votes.filter((vote) => !existing.has(vote.id));
         return [...fresh, ...current];
       });
-      // When there is a gap, establish a new prefix count for gap-fill insertion.
-      // When there is no gap but the refresh still prepends new votes (e.g. a second
-      // overlapping refresh while an earlier gap is still unfilled), add the new votes
-      // to the existing prefix so the insertion point for gap-fill pages stays correct.
+      // When there is a gap, prepend the new fresh votes to the existing prefix count so
+      // that any previously-accumulated prefix from an earlier unfilled gap is preserved.
+      // For example, if votes [551..452, 350..51] are loaded and a second disjoint refresh
+      // brings [700..601], freshPrefixCount must become 100 + prior_prefix rather than just
+      // 100, so that a subsequent gap-fill for the first gap is still inserted at the right
+      // position.
+      // When there is no gap but the refresh still prepends new votes (e.g. an overlapping
+      // refresh while an earlier gap is still unfilled), add the new votes to the existing
+      // prefix so the insertion point for gap-fill pages stays correct.
       if (hasGap) {
-        freshPrefixCount.current = newFreshCount;
+        freshPrefixCount.current = newFreshCount + freshPrefixCount.current;
       } else {
         freshPrefixCount.current += newFreshCount;
       }
