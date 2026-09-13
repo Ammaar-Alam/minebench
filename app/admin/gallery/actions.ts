@@ -137,11 +137,11 @@ export async function removeArenaReviewVotes(sessionId: string, voteIds: string[
   }
 }
 
-export async function blockArenaReviewSession(sessionId: string, blocked: boolean, reviewedSince?: string, reviewedUntil?: string) {
-  const parsed = z.object({ sessionId: sessionSchema, blocked: z.boolean(), reviewedSince: z.string().datetime().optional(), reviewedUntil: z.string().datetime().optional() }).safeParse({ sessionId, blocked, reviewedSince, reviewedUntil });
+export async function blockArenaReviewSession(sessionId: string, blocked: boolean, reviewedSince?: string, reviewedUntil?: string, reviewedUserId?: string) {
+  const parsed = z.object({ sessionId: sessionSchema, blocked: z.boolean(), reviewedSince: z.string().datetime().optional(), reviewedUntil: z.string().datetime().optional(), reviewedUserId: z.string().max(191).optional() }).safeParse({ sessionId, blocked, reviewedSince, reviewedUntil, reviewedUserId });
   if (!parsed.success) return { ok: false as const, error: "Invalid vote restriction." };
   try {
-    const { label } = await setArenaVoteSessionBlocked(await adminId(), parsed.data.sessionId, parsed.data.blocked, parsed.data.reviewedSince, parsed.data.reviewedUntil);
+    const { label } = await setArenaVoteSessionBlocked(await adminId(), parsed.data.sessionId, parsed.data.blocked, parsed.data.reviewedSince, parsed.data.reviewedUntil, parsed.data.reviewedUserId);
     refreshGalleryAdmin();
     return { ok: true as const, label };
   } catch (error) {

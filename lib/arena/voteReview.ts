@@ -29,6 +29,7 @@ export type VoteReviewSession = {
   blocked: boolean;
   networkLabel: string | null;
   matchingSessions: number;
+  reviewedUserId: string | null;
 };
 export type VoteReviewData = {
   sessions: VoteReviewSession[];
@@ -179,6 +180,7 @@ export async function getArenaVoteReview(adminId: string): Promise<VoteReviewDat
         matchingSessions: ip ? networkCounts.get(ip) ?? 0 : 0,
         blocked: blockedSessions.has(sessionHash) || Boolean(ip && blockedIps.has(ip)) || Boolean(userId && blockedUsers.has(userId)),
         flags: voteReviewFlags(row),
+        reviewedUserId: userId ?? null,
       };
     }),
   };
@@ -218,9 +220,17 @@ export async function setArenaVoteSessionBlocked(
   blocked: boolean,
   reviewedSince?: string,
   reviewedUntil?: string,
+  reviewedUserId?: string,
 ): Promise<{ blocked: boolean; personId: string | null; label: string }> {
   await requireMineBenchAdmin(adminId);
   checkSession(sessionId);
+  // Use the reviewed identity captured at review load time to avoid mis-targeting
+  // a user who signed in (or had votes claimed) after the admin confirmed the review.
+  if (reviewedUserId) {
+    const personId = `user:${reviewedUserId}`;
+    const { label } = await setGalleryPersonVoteBlocked(adminId, personId, blocked);
+    return { blocked, personId, label };
+  }
   const parsedSince = reviewedSince ? new Date(reviewedSince) : null;
   const since = parsedSince && Number.isFinite(parsedSince.getTime())
     ? parsedSince
