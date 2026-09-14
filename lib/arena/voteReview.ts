@@ -220,36 +220,52 @@ export async function setArenaVoteSessionBlocked(
   blocked: boolean,
   reviewedSince?: string,
   reviewedUntil?: string,
-  reviewedUserId?: string,
+  reviewedUserId?: string | null,
 ): Promise<{ blocked: boolean; personId: string | null; label: string }> {
   await requireMineBenchAdmin(adminId);
   checkSession(sessionId);
   // Use the reviewed identity captured at review load time to avoid mis-targeting
   // a user who signed in (or had votes claimed) after the admin confirmed the review.
-  if (reviewedUserId) {
+  // reviewedUserId === null means the snapshot identified a guest (no user ID at review time);
+  // skip the live vote-based re-resolution so a guest who signed in after load isn't blocked instead.
+  if (reviewedUserId !== undefined && reviewedUserId !== null) {
     const personId = `user:${reviewedUserId}`;
     const { label } = await setGalleryPersonVoteBlocked(adminId, personId, blocked);
     return { blocked, personId, label };
   }
-  const parsedSince = reviewedSince ? new Date(reviewedSince) : null;
-  const since = parsedSince && Number.isFinite(parsedSince.getTime())
-    ? parsedSince
-    : new Date(Date.now() - VOTE_REVIEW_WINDOW_MS);
-  const parsedUntil = reviewedUntil ? new Date(reviewedUntil) : null;
-  const until = parsedUntil && Number.isFinite(parsedUntil.getTime()) ? parsedUntil : new Date();
-  const vote = await prisma.vote.findFirst({
-    where: { sessionId, userId: { not: null }, createdAt: { gte: since, lte: until }, matchup: { stealthVariantId: null } },
-    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    select: { userId: true },
-  });
-  if (vote?.userId) {
-    const personId = `user:${vote.userId}`;
-    const { label } = await setGalleryPersonVoteBlocked(adminId, personId, blocked);
-    return { blocked, personId, label };
+  // If the snapshot explicitly recorded no user (null), skip live re-resolution via votes
+  // and fall through directly to session/hash-based blocking.
+  const skipLiveResolution = reviewedUserId === null;
+  if (!skipLiveResolution) {
+    const parsedSince = reviewedSince ? new Date(reviewedSince) : null;
+    const since = parsedSince && Number.isFinite(parsedSince.getTime())
+      ? parsedSince
+      : new Date(Date.now() - VOTE_REVIEW_WINDOW_MS);
+    const parsedUntil = reviewedUntil ? new Date(reviewedUntil) : null;
+    const until = parsedUntil && Number.isFinite(parsedUntil.getTime()) ? parsedUntil : new Date();
+    const vote = await prisma.vote.findFirst({
+      where: { sessionId, userId: { not: null }, createdAt: { gte: since, lte: until }, matchup: { stealthVariantId: null } },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: { userId: true },
+    });
+    if (vote?.userId) {
+      const personId = `user:${vote.userId}`;
+      const { label } = await setGalleryPersonVoteBlocked(adminId, personId, blocked);
+      return { blocked, personId, label };
+    }
+    const presence = await prisma.publicSessionActivity.findUnique({ where: { sessionId }, select: { id: true, userId: true } });
+    if (presence?.userId) {
+      const personId = `user:${presence.userId}`;
+      const { label } = await setGalleryPersonVoteBlocked(adminId, personId, blocked);
+      return { blocked, personId, label };
+    }
   }
-  const presence = await prisma.publicSessionActivity.findUnique({ where: { sessionId }, select: { id: true, userId: true } });
-  if (presence) {
-    const personId = presence.userId ? `user:${presence.userId}` : `session:${presence.id}`;
+  // For anonymous snapshots, block by session record rather than re-resolving a user.
+  const presenceForAnon = skipLiveResolution
+    ? await prisma.publicSessionActivity.findUnique({ where: { sessionId }, select: { id: true } })
+    : null;
+  if (presenceForAnon) {
+    const personId = `session:${presenceForAnon.id}`;
     const { label } = await setGalleryPersonVoteBlocked(adminId, personId, blocked);
     return { blocked, personId, label };
   }
