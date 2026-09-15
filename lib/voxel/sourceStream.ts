@@ -61,12 +61,15 @@ export async function parseVoxelBuildStream(
         });
       }
     } else {
-      for (const block of parsed.value.blocks) {
-        if (block.x < -32768 || block.x > 32767 || block.y < -32768 || block.y > 32767 || block.z < -32768 || block.z > 32767) {
-          throw new RangeError("Block coordinate is outside the supported integer range");
+      const packedBlocks = parsed.value.blocks.filter(({ x, y, z, type }) => {
+        if (x < -32768 || x > 32767 || y < -32768 || y > 32767 || z < -32768 || z > 32767) {
+          // retain overflow points for normal grid validation, matching tool execution
+          build.blocks.push({ x, y, z, type });
+          return false;
         }
-      }
-      appendPackedVoxelBlocks(build.packed!, parsed.value.blocks);
+        return true;
+      });
+      appendPackedVoxelBlocks(build.packed!, packedBlocks);
     }
     batch.length = 0;
     batchChars = 0;
@@ -147,7 +150,7 @@ export async function parseVoxelBuildStream(
       } else if (state === "item") {
         if (ch === "]" && !afterComma) state = "field-separator";
         else if (ch === "{") {
-          if (field === "blocks" && opts.maxBlocks !== undefined && build.packed!.count + batch.length >= opts.maxBlocks) {
+          if (field === "blocks" && opts.maxBlocks !== undefined && build.packed!.count + build.blocks.length + batch.length >= opts.maxBlocks) {
             throw new RangeError("Stored canonical block count does not match");
           }
           tokenStart = cursor;

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { runVoxelExec } from "../../../lib/ai/tools/voxelExec";
 import { getPalette } from "../../../lib/blocks/palettes";
 import { voxelBuildSourceJsonChunks } from "../../../lib/voxel/canonicalArtifact";
 import { parseVoxelBuildStream } from "../../../lib/voxel/sourceStream";
@@ -106,6 +107,24 @@ async function main() {
   const boundaryJson = Buffer.concat(Array.from(voxelBuildSourceJsonChunks(boundary), (chunk) => Buffer.from(chunk))).toString("utf8");
   assert.equal(boundaryJson, '{"version":"1.0","boxes":[{"x1":32767,"y1":0,"z1":0,"x2":32768,"y2":0,"z2":0,"type":"stone"}],"blocks":[]}');
 
+  const overflowRun = runVoxelExec({
+    code: 'box(0,0,0,1,0,0,"stone"); block(0,0,0,"glass"); block(40000,0,0,"stone"); block(-32769,0,0,"stone"); block(0,32768,0,"stone"); block(0,-40000,0,"stone"); block(0,0,40000,"stone"); block(0,0,-32769,"stone"); block(32767,0,0,"stone"); block(-32768,0,0,"stone");',
+    gridSize: 8192, palette: "simple",
+  });
+  const overflowJson = Buffer.concat(Array.from(voxelBuildSourceJsonChunks(overflowRun.build), (chunk) => Buffer.from(chunk)));
+  const overflow = await parseVoxelBuildStream(chunks(overflowJson.toString("utf8"), 7));
+  assert.deepEqual(overflow.blocks, overflowRun.build.blocks);
+  assert.deepEqual(unpackVoxelBlocks(overflow.packed!), unpackVoxelBlocks(overflowRun.build.packed!));
+  assert.deepEqual(Buffer.concat(Array.from(voxelBuildSourceJsonChunks(overflow), (chunk) => Buffer.from(chunk))), overflowJson);
+  const palette = getPalette("simple");
+  const evaluatedOverflow = evaluateVoxelWorldRegions(overflow, { gridSize: 8192, palette });
+  if (!evaluatedOverflow.ok) throw new Error(evaluatedOverflow.error);
+  assert.deepEqual(evaluatedOverflow.warnings, [
+    "Dropped 4 blocks with negative coordinates",
+    "Dropped 4 blocks outside the grid bounds",
+  ]);
+  assert.deepEqual(expandRegions(evaluatedOverflow.regions, palette), new Map([["0,0,0", "glass"], ["1,0,0", "stone"]]));
+
   for (const width of [1, 7, 4096]) {
     const parsed = await parseVoxelBuildStream(chunks(JSON.stringify(source, null, 2), width));
     assert.deepEqual(unpackVoxelBlocks(parsed.packed!), normalized.value.blocks);
@@ -153,7 +172,6 @@ async function main() {
     '{"version":"1.0","blocks":[],}',
     '{"version":"1.0","blocks":[],"blocks":[]}',
     '{"version":"1.0","blocks":[]} garbage',
-    '{"version":"1.0","blocks":[{"x":32768,"y":0,"z":0,"type":"stone"}]}',
     '{"version":"1.0","blocks":[{"x":0.5,"y":0,"z":0,"type":"stone"}]}',
     '{"version":"1.0","blocks":[]',
   ]) await assert.rejects(parseVoxelBuildStream(chunks(text, 3)));
@@ -161,6 +179,13 @@ async function main() {
   await assert.rejects(parseVoxelBuildStream(chunks(bounded, 17), { maxBlocks: 4099 }), /block count/);
   const exact = await parseVoxelBuildStream(chunks(bounded, 17), { maxBlocks: 4100 });
   assert.equal(exact.packed?.count, 4100);
+  const mixedBlocks = repeatedBlocks.map((block, index) => index % 2 === 0 ? { ...block, x: 40000 } : block);
+  const mixedSource = JSON.stringify({ version: "1.0", blocks: mixedBlocks });
+  await assert.rejects(parseVoxelBuildStream(chunks(mixedSource, 17), { maxBlocks: 4099 }), /block count/);
+  const mixed = await parseVoxelBuildStream(chunks(mixedSource, 17), { maxBlocks: 4100 });
+  assert.equal(mixed.packed?.count, 2050);
+  assert.deepEqual(mixed.blocks, mixedBlocks.filter((block) => block.x === 40000));
+  assert.deepEqual(unpackVoxelBlocks(mixed.packed!), mixedBlocks.filter((block) => block.x !== 40000));
 
   const require = createRequire(import.meta.url);
   const memoryResult = spawnSync(
