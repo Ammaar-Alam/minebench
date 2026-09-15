@@ -230,15 +230,22 @@ async function main() {
   assert.equal(largeToolCalls, 1, "oversized ignored wrapper fields must preserve tool extraction");
   assert.equal(completedBuild(largeTool.messages).world!.manifest.exactBlockCount, 2);
 
-  for (const [block, error] of [
-    [{ x: 0, y: 0, z: 0, type: "x".repeat(1_000_001) }, "Build entry is too large"],
-    [{ x: 32768, y: 0, z: 0, type: "stone" }, "Block coordinate is outside the supported integer range"],
-  ] as const) {
-    const bounded = startWorker();
-    await bounded.parse(JSON.stringify({ version: "1.0", blocks: [block] }));
-    assert.equal(bounded.inputs.length, 1);
-    assert.equal(bounded.maxJsonParseChars, 0, "legacy parsing must not bypass source limits");
-    assert.equal(bounded.messages.find((message) => message.type === "error")?.message, error);
+  const bounded = startWorker();
+  await bounded.parse(JSON.stringify({ version: "1.0", blocks: [{ x: 0, y: 0, z: 0, type: "x".repeat(1_000_001) }] }));
+  assert.equal(bounded.inputs.length, 1);
+  assert.equal(bounded.maxJsonParseChars, 0, "legacy parsing must not bypass source limits");
+  assert.equal(bounded.messages.find((message) => message.type === "error")?.message, "Build entry is too large");
+
+  for (const x of [32768, 40000]) {
+    const overflow = startWorker();
+    const text = JSON.stringify({ ...smallBuild, blocks: [...smallBuild.blocks, { x, y: 0, z: 0, type: "stone" }] });
+    await overflow.parse(text);
+    const manifest = completedBuild(overflow.messages).world!.manifest;
+    assert.equal(manifest.exactBlockCount, smallBuild.blocks.length);
+    assert.equal(manifest.source.sha256, createHash("sha256").update(text).digest("hex"));
+    assert.deepEqual(overflow.messages.find((message) => message.type === "complete")?.warnings, ["Dropped 1 blocks outside the grid bounds"]);
+    assert.equal(overflow.inputs.length, 1, "overflow points must not trigger fallback parsing");
+    assert.equal(overflow.maxJsonParseChars, 0);
   }
 
   const invalid = startWorker();
