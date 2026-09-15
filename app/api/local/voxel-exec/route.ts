@@ -8,13 +8,8 @@ import { createCustomBuildProcessingGate } from "@/lib/custom-builds/processingG
 import { getErrorMessage } from "@/lib/errorMessage";
 import { apiJson, apiServiceError } from "@/lib/gallery/api";
 import { createImportedGeneration } from "@/lib/generations/service";
-import {
-  createVoxelBuildSourceArtifactWriter,
-  type BuildSourceArtifactWriter,
-  type WrittenBuildArtifact,
-} from "@/lib/voxel/canonicalArtifact";
-import { parseVoxelBuildStream } from "@/lib/voxel/sourceStream";
 import { localVoxelWorldPartResponse, persistLocalVoxelWorld } from "@/lib/voxel/localWorldServer";
+import { requireMineBenchAdmin } from "@/lib/gallery/service";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
 
@@ -28,7 +23,6 @@ const bodySchema = z.object({
 });
 
 const MAX_CODE_CHARS = 600_000;
-const RAW_BUILD_CONTENT_TYPE = "application/vnd.minebench.build+json";
 const MAX_LOCAL_HEAVY_POSTS = 2;
 const LOCAL_HEAVY_RETRY_AFTER_SECONDS = 10;
 const localVoxelWorldProcessingGate = createCustomBuildProcessingGate();
@@ -76,14 +70,6 @@ function disabledResponse(req: Request): Response | null {
   return null;
 }
 
-function contentType(req: Request): string {
-  return req.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() ?? "";
-}
-
-async function cancelRequestBody(body: ReadableStream<Uint8Array> | null) {
-  await body?.cancel().catch(() => undefined);
-}
-
 function localHeavyBacklogResponse() {
   return NextResponse.json(
     { error: "Too many render requests. Wait a moment and try again." },
@@ -102,53 +88,11 @@ function acquireLocalHeavyPost(): (() => void) | null {
   };
 }
 
-function queryOptions(req: Request): { ok: true; gridSize: GridSize; palette: "simple" | "advanced" } | { ok: false; response: Response } {
-  const url = new URL(req.url);
-  const gridSize = Number(url.searchParams.get("gridSize"));
-  const palette = url.searchParams.get("palette");
-  if (!isGridSize(gridSize) || (palette !== "simple" && palette !== "advanced")) {
-    return {
-      ok: false,
-      response: NextResponse.json({ error: "Invalid build import options" }, { status: 400 }),
-    };
-  }
-  return { ok: true, gridSize, palette };
-}
-
-async function* requestBodyChunks(body: ReadableStream<Uint8Array>): AsyncIterable<Uint8Array> {
-  const reader = body.getReader();
-  let completed = false;
-  try {
-    for (;;) {
-      const next = await reader.read();
-      if (next.done) {
-        completed = true;
-        return;
-      }
-      yield next.value;
-    }
-  } finally {
-    if (!completed) await reader.cancel().catch(() => undefined);
-    reader.releaseLock();
-  }
-}
-
-async function* retainingRequestBodyChunks(
-  chunks: AsyncIterable<Uint8Array>,
-  sourceWriter: BuildSourceArtifactWriter,
-): AsyncIterable<Uint8Array> {
-  for await (const chunk of chunks) {
-    await sourceWriter.write(chunk);
-    yield chunk;
-  }
-}
-
 async function buildResponse(
   build: VoxelBuild,
   opts: {
     gridSize: GridSize;
     palette: "simple" | "advanced";
-    sourceArtifact?: WrittenBuildArtifact;
     signal?: AbortSignal;
   },
 ) {
@@ -156,7 +100,6 @@ async function buildResponse(
   if (opts.gridSize > 512) {
     return NextResponse.json(await persistLocalVoxelWorld({
       sourceBuild: build,
-      sourceArtifact: opts.sourceArtifact,
       gridSize: opts.gridSize,
       palette: opts.palette,
       signal: opts.signal,
@@ -195,58 +138,6 @@ export async function POST(req: Request) {
   const disabled = disabledResponse(req);
   if (disabled) return disabled;
 
-  if (contentType(req) === RAW_BUILD_CONTENT_TYPE) {
-    const opts = queryOptions(req);
-    if (!opts.ok) {
-      await cancelRequestBody(req.body);
-      return opts.response;
-    }
-    if (opts.gridSize <= 512) {
-      await cancelRequestBody(req.body);
-      return NextResponse.json({ error: "Raw build uploads are only supported for large grids" }, { status: 400 });
-    }
-    if (!req.body) {
-      return NextResponse.json({ error: "Missing build upload body" }, { status: 400 });
-    }
-    const releaseAdmission = acquireLocalHeavyPost();
-    if (!releaseAdmission) {
-      await cancelRequestBody(req.body);
-      return localHeavyBacklogResponse();
-    }
-    let releaseProcessing: (() => void) | undefined;
-    let sourceWriter: BuildSourceArtifactWriter | undefined;
-    let sourceArtifact: WrittenBuildArtifact | undefined;
-    let sourceArtifactHandedOff = false;
-    try {
-      releaseProcessing = await localVoxelWorldProcessingGate.acquire(req.signal);
-      sourceWriter = await createVoxelBuildSourceArtifactWriter();
-      const build = await parseVoxelBuildStream(retainingRequestBodyChunks(
-        requestBodyChunks(req.body),
-        sourceWriter,
-      ));
-      sourceArtifact = await sourceWriter.close();
-      sourceWriter = undefined;
-      sourceArtifactHandedOff = true;
-      return await buildResponse(build, {
-        gridSize: opts.gridSize,
-        palette: opts.palette,
-        sourceArtifact,
-        signal: req.signal,
-      });
-    } catch (err) {
-      await cancelRequestBody(req.body);
-      await sourceWriter?.abort();
-      if (!sourceArtifactHandedOff) await sourceArtifact?.cleanup();
-      return NextResponse.json(
-        { error: getErrorMessage(err, "Build import failed") },
-        { status: err instanceof DOMException && err.name === "AbortError" ? 499 : 400 },
-      );
-    } finally {
-      releaseProcessing?.();
-      releaseAdmission();
-    }
-  }
-
   let body: z.infer<typeof bodySchema>;
   try {
     const raw = (await req.json()) as unknown;
@@ -267,6 +158,16 @@ export async function POST(req: Request) {
     if (!ownerId) return apiJson({ error: "Sign in to import large builds." }, 401);
     try {
       return apiJson({ generation: await createImportedGeneration(ownerId, body) }, 202);
+    } catch (error) {
+      return apiServiceError(error);
+    }
+  }
+
+  if (body.gridSize > 512 && process.env.NODE_ENV === "production") {
+    const ownerId = await getAuthenticatedUserId(req);
+    if (!ownerId) return apiJson({ error: "Sign in to import large builds." }, 401);
+    try {
+      await requireMineBenchAdmin(ownerId);
     } catch (error) {
       return apiServiceError(error);
     }

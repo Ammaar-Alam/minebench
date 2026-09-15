@@ -122,18 +122,17 @@ function worldPartKey(value: unknown): string {
 
 export async function persistLocalVoxelWorld(args: {
   sourceBuild: VoxelBuild;
-  sourceArtifact?: WrittenBuildArtifact;
   gridSize: number;
   palette: PaletteName;
   signal?: AbortSignal;
 }): Promise<LocalVoxelWorldResponse> {
   let worldId: string | null = null;
-  let sourceArtifact = args.sourceArtifact;
+  let sourceArtifact: WrittenBuildArtifact | undefined;
   let keep = false;
   try {
     worldId = await createWorldDirectory();
     throwIfAborted(args.signal);
-    sourceArtifact ??= await writeVoxelBuildSourceArtifact(args.sourceBuild);
+    sourceArtifact = await writeVoxelBuildSourceArtifact(args.sourceBuild);
     throwIfAborted(args.signal);
     await rename(sourceArtifact.filePath, partPath(worldId, LOCAL_VOXEL_WORLD_SOURCE_PART_KEY));
     throwIfAborted(args.signal);

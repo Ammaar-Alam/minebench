@@ -17,9 +17,7 @@ const originalTimeoutMs = process.env.MINEBENCH_TOOL_TIMEOUT_MS;
 const testRoot = mkdtempSync(join(tmpdir(), "minebench-voxel-exec-test-"));
 const artifactDir = join(testRoot, "artifacts");
 
-// Record the timeout handed to vm.Script#runInContext. Asserting only
-// blockCount would pass under an incomplete fix: the pre-fix "" -> Number("")
-// === 0 path clamps to 250 and still produces a block.
+// capture the actual VM deadline since successful execution alone would miss a wrong timeout
 const originalRunInContext = vm.Script.prototype.runInContext;
 function captureTimeout(run: () => void): number | undefined {
   let lastTimeout: number | undefined;
@@ -43,30 +41,18 @@ try {
   delete process.env.MINEBENCH_TOOL_OUTPUT_DIR;
 
   assert.equal(DEFAULT_VOXEL_EXEC_TIMEOUT_MS, 30_000);
-  const originalRun = vm.Script.prototype.runInContext;
-  const originalTimeout = process.env.MINEBENCH_TOOL_TIMEOUT_MS;
-  const timeouts: Array<number | undefined> = [];
-  vm.Script.prototype.runInContext = function (context, options) {
-    timeouts.push(typeof options === "object" ? options.timeout : undefined);
-    return originalRun.call(this, context, options);
-  };
-  try {
+  for (const gridSize of [512, 8192] as const) {
     delete process.env.MINEBENCH_TOOL_TIMEOUT_MS;
-    for (const gridSize of [512, 8192] as const) {
+    assert.equal(captureTimeout(() => {
       const result = runVoxelExec({
         code: 'const Math = { floor: () => 7 }; block(Math.floor(), 0, 0, "stone");',
         gridSize, palette: "simple",
       });
       assert.equal((result.build.packed ? unpackVoxelBlocks(result.build.packed) : result.build.blocks)[0]?.x, 7);
-    }
-    process.env.MINEBENCH_TOOL_TIMEOUT_MS = "120000";
-    runVoxelExec({ code: "", gridSize: 8192, palette: "simple" });
-    assert.deepEqual(timeouts, [30_000, LARGE_WORLD_VOXEL_EXEC_TIMEOUT_MS, 120_000]);
-  } finally {
-    vm.Script.prototype.runInContext = originalRun;
-    if (originalTimeout === undefined) delete process.env.MINEBENCH_TOOL_TIMEOUT_MS;
-    else process.env.MINEBENCH_TOOL_TIMEOUT_MS = originalTimeout;
+    }), gridSize > 512 ? LARGE_WORLD_VOXEL_EXEC_TIMEOUT_MS : DEFAULT_VOXEL_EXEC_TIMEOUT_MS);
   }
+  process.env.MINEBENCH_TOOL_TIMEOUT_MS = "120000";
+  assert.equal(captureTimeout(() => runVoxelExec({ code: "", gridSize: 8192, palette: "simple" })), 120_000);
 
   for (const [name, code, countKey] of [
     ["MINEBENCH_TOOL_MAX_BLOCKS", 'block(0,0,0,"stone");', "blockCount"],
@@ -94,56 +80,15 @@ try {
     seed: 123,
   } as const;
 
-  // Unset env -> documented default.
-  const unsetTimeout = captureTimeout(() => {
-    delete process.env.MINEBENCH_TOOL_TIMEOUT_MS;
-    runVoxelExec(baseArgs);
-  });
-  assert.equal(unsetTimeout, DEFAULT_VOXEL_EXEC_TIMEOUT_MS);
-
-  // Non-numeric env falls back to default instead of throwing
-  // RangeError "... Received NaN" before the sandbox runs.
-  const badTimeout = captureTimeout(() => {
-    process.env.MINEBENCH_TOOL_TIMEOUT_MS = "30s";
-    runVoxelExec(baseArgs);
-  });
-  assert.equal(badTimeout, DEFAULT_VOXEL_EXEC_TIMEOUT_MS);
-
-  // Empty string falls back to default. Number("") === 0 is finite, so an
-  // isFinite-only guard would clamp to 250 instead of using the default.
-  const emptyTimeout = captureTimeout(() => {
-    process.env.MINEBENCH_TOOL_TIMEOUT_MS = "";
-    runVoxelExec(baseArgs);
-  });
-  assert.equal(emptyTimeout, DEFAULT_VOXEL_EXEC_TIMEOUT_MS);
-
-  // Non-positive finite values fall back to default (guards the `> 0` check).
-  const negativeTimeout = captureTimeout(() => {
-    process.env.MINEBENCH_TOOL_TIMEOUT_MS = "-1";
-    runVoxelExec(baseArgs);
-  });
-  assert.equal(negativeTimeout, DEFAULT_VOXEL_EXEC_TIMEOUT_MS);
-
-  // In-range integer passes through the clamp verbatim.
-  const normalTimeout = captureTimeout(() => {
-    process.env.MINEBENCH_TOOL_TIMEOUT_MS = "5000";
-    runVoxelExec(baseArgs);
-  });
-  assert.equal(normalTimeout, 5000);
-
-  // Below the 250 floor is clamped up.
-  const tinyTimeout = captureTimeout(() => {
-    process.env.MINEBENCH_TOOL_TIMEOUT_MS = "1";
-    runVoxelExec(baseArgs);
-  });
-  assert.equal(tinyTimeout, 250);
-
-  // Above the 60_000 cap is clamped down.
-  const hugeTimeout = captureTimeout(() => {
-    process.env.MINEBENCH_TOOL_TIMEOUT_MS = "999999999";
-    runVoxelExec(baseArgs);
-  });
-  assert.equal(hugeTimeout, 60_000);
+  for (const [configured, expected] of [
+    [undefined, DEFAULT_VOXEL_EXEC_TIMEOUT_MS], ["30s", DEFAULT_VOXEL_EXEC_TIMEOUT_MS],
+    ["", DEFAULT_VOXEL_EXEC_TIMEOUT_MS], ["-1", DEFAULT_VOXEL_EXEC_TIMEOUT_MS],
+    ["5000", 5000], ["1", 250], ["999999999", 60_000],
+  ] as const) {
+    if (configured === undefined) delete process.env.MINEBENCH_TOOL_TIMEOUT_MS;
+    else process.env.MINEBENCH_TOOL_TIMEOUT_MS = configured;
+    assert.equal(captureTimeout(() => runVoxelExec(baseArgs)), expected, `timeout setting: ${configured}`);
+  }
 
   // Leave the env clean for the outputDir checks below.
   delete process.env.MINEBENCH_TOOL_TIMEOUT_MS;
