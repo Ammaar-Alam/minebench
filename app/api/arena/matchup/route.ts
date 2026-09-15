@@ -848,12 +848,6 @@ export async function GET(req: Request) {
           ? prisma.build.findUnique({
               where: { id: buildA.id },
 	              select: {
-	                id: true,
-	                gridSize: true,
-	                palette: true,
-	                blockCount: true,
-	                voxelByteSize: true,
-                  voxelCompressedByteSize: true,
                   voxelSha256: true,
                 },
               })
@@ -862,12 +856,6 @@ export async function GET(req: Request) {
           ? prisma.build.findUnique({
               where: { id: buildB.id },
 	              select: {
-	                id: true,
-	                gridSize: true,
-	                palette: true,
-	                blockCount: true,
-	                voxelByteSize: true,
-                  voxelCompressedByteSize: true,
                   voxelSha256: true,
                 },
               })
