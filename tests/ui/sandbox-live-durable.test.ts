@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import { MAX_GENERATION_PROMPT_CHARS } from "../../lib/ai/limits";
+import { isSavedGenerationRecovery } from "../../lib/generations/retry";
 
 const SOURCE_PATH = "components/sandbox/SandboxLive.tsx";
 const sourceText = readFileSync(SOURCE_PATH, "utf8");
@@ -319,6 +320,40 @@ function createRuntime(fetchResponse: typeof fetch, signedIn = true) {
 }
 
 async function requestFailureChecks() {
+  const retryScope = {
+    running: false, results: new Map(), providerKeys: {}, customBuildAbortRef: { current: null },
+    isSavedGenerationRecovery, AbortController, Date,
+    customBuildRequestModel() { throw new Error("Provider profile unavailable"); },
+    setRunning() {}, setResults() {}, applyCustomBuildStatus() {}, async watchCustomBuild() {},
+    customBuildStatusPath: (id: string) => `/api/generations/${id}`,
+    isAbortError: () => false,
+    error: null as string | null,
+    setRequestError(error: string | null) { retryScope.error = error; },
+    requests: 0,
+    async fetch(_url: string, init: RequestInit) {
+      retryScope.requests += 1;
+      assert.deepEqual(JSON.parse(String(init.body)), {}, "source recovery must omit credentials and overrides");
+      return Response.json({ generation: { id: "source-retry" } });
+    },
+  };
+  const retryCode = ts.transpileModule(`
+    function customBuildRetryProvider(status) ${functionBodyText("customBuildRetryProvider")}
+    async function retryCustomBuild(model) ${retryBody}
+    ({ customBuildRetryProvider, retryCustomBuild });
+  `, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  const recoveryRuntime = runInNewContext(retryCode, retryScope);
+  for (const code of ["lease_expired", "provider_key_expired", "artifact_bookkeeping_failed", "processing_capacity_exceeded", "heap_limit_exceeded"]) {
+    const retryProvider = recoveryRuntime.customBuildRetryProvider({ model: { transport: "custom", provider: "custom" }, error: { code } });
+    assert.equal(retryProvider, undefined);
+    retryScope.results.set("model", { customBuildId: "source-retry", customBuildRetryable: true, retryProvider });
+    const before = retryScope.requests;
+    await recoveryRuntime.retryCustomBuild({ id: "model" });
+    assert.equal(retryScope.requests, before + 1);
+    assert.equal(retryScope.error, null, "recovery must bypass invalid provider profiles");
+  }
+  assert.equal(recoveryRuntime.customBuildRetryProvider({ imported: true, model: {}, error: null }), undefined);
+  assert.equal(recoveryRuntime.customBuildRetryProvider({ model: { transport: "custom" }, error: { code: "generation_failed" } }), "custom");
+
   const message = "Check the generation settings.";
   const failed = createRuntime(async (url) => {
     assert.equal(url, "/api/generations");

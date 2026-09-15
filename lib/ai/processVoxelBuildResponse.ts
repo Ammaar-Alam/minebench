@@ -38,6 +38,11 @@ export function isVoxelBuildResourceError(message: string): boolean {
   return /heap_limit_exceeded|processing_capacity_exceeded/.test(message);
 }
 
+export function voxelBuildProcessingLimit(gridSize: GridSize, output: VoxelBuildResponseOptions["buildOutput"]): number {
+  // legacy expanded artifacts need bounded arrays even when the source is compact
+  return gridSize === 512 && output === "packed" ? MAX_BLOCKS_BY_GRID[256] : MAX_BLOCKS_BY_GRID[gridSize];
+}
+
 function buildBounds(build: RenderableVoxelBuild) {
   let minX = Infinity;
   let minY = Infinity;
@@ -91,10 +96,7 @@ export function processVoxelBuildResponse(
   const validationOptions = {
     palette: getPalette(opts.palette),
     gridSize: opts.gridSize,
-    // legacy expanded artifacts need bounded arrays even when the source is compact
-    maxBlocks: opts.gridSize === 512 && buildOutput === "packed"
-      ? MAX_BLOCKS_BY_GRID[256]
-      : MAX_BLOCKS_BY_GRID[opts.gridSize],
+    maxBlocks: voxelBuildProcessingLimit(opts.gridSize, buildOutput),
     output: buildOutput === "packed" ? "packed" as const : "objects" as const,
   };
   const world = opts.gridSize > 512

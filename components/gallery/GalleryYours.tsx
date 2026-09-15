@@ -18,6 +18,7 @@ import type { ProviderApiKeys } from "@/lib/ai/types";
 import { publishGenerationToGallery } from "@/lib/gallery/client";
 import { downloadSavedGenerationJson } from "@/lib/generations/download";
 import type { SavedGenerationPayload } from "@/lib/generations/service";
+import { isSavedGenerationRecovery } from "@/lib/generations/retry";
 import { formatBuildDuration, formatBuildJsonSize } from "@/lib/buildMetrics";
 
 const VoxelViewerCard = dynamic(
@@ -99,7 +100,7 @@ function GenerationActions({
   const [anonymous, setAnonymous] = useState(!hasNickname);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const canPublish = generation.status === "succeeded" && !suspended && generation.model.kind !== "import";
+  const canPublish = generation.status === "succeeded" && !suspended && !generation.imported;
 
   async function cancel() {
     setPending(true);
@@ -120,14 +121,15 @@ function GenerationActions({
     setPending(true);
     setMessage(null);
     try {
+      const recoveryOnly = isSavedGenerationRecovery(generation.error?.code, generation.imported);
       const retryProvider = generation.model.transport === "openrouter"
         ? "openrouter"
         : generation.model.provider as keyof ProviderApiKeys;
-      const providerKey = loadProviderKeysFromStorage()[retryProvider]?.trim();
+      const providerKey = recoveryOnly ? undefined : loadProviderKeysFromStorage()[retryProvider]?.trim();
       const profileKey = generation.model.key
         ? `catalog:${generation.model.key}`
         : `openrouter:${generation.model.id}`;
-      const profile = loadModelRequestOverrideProfiles()[profileKey];
+      const profile = recoveryOnly ? undefined : loadModelRequestOverrideProfiles()[profileKey];
       const overrides = profile
         ? providerRequestOverridesFromEntries(profile.headers, profile.body)
         : {};

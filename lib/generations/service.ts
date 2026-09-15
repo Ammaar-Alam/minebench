@@ -28,6 +28,7 @@ import {
 } from "@/lib/custom-builds/storage";
 import { voxelWorldPartSourceSha256 } from "@/lib/custom-builds/worldArtifacts";
 import { resolveSavedGenerationModel } from "@/lib/generations/model";
+import { isSavedGenerationRecovery } from "@/lib/generations/retry";
 import { prisma } from "@/lib/prisma";
 import {
   addGalleryExample,
@@ -37,7 +38,7 @@ import {
   requireMineBenchAdmin,
   submitGalleryCandidate,
 } from "@/lib/gallery/service";
-import { normalizeGalleryPrompt, publicGalleryTextError } from "@/lib/gallery/policy";
+import { normalizeGalleryPrompt, normalizeGalleryPromptIdentity, publicGalleryTextError } from "@/lib/gallery/policy";
 
 const STORAGE_FAILSAFE_BYTES = 1024 * 1024 * 1024;
 const GALLERY_AUDIT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -157,12 +158,13 @@ function serializeGeneration(row: GenerationRow) {
     prompt: row.promptText,
     gridSize: row.gridSize,
     palette: row.palette,
+    imported: row.generationMode === "import",
     model: {
-      kind: row.modelKind,
+      kind: row.generationMode === "import" ? "custom" : row.modelKind,
       key: row.modelKey,
       provider: row.modelProvider,
       id: row.modelId,
-      label: row.modelDisplayName,
+      label: row.generationMode === "import" ? "Imported build" : row.modelDisplayName,
       transport: row.modelKind === "custom"
         ? "custom"
         : row.modelKind === "openrouter" || row.preferOpenRouter
@@ -222,6 +224,7 @@ export async function assertSavedGenerationStorageAvailable(ownerId: string): Pr
 }
 
 export async function createImportedGeneration(ownerId: string, input: VoxelExecToolCall["input"]) {
+  if (input.gridSize > 512) await requireMineBenchAdmin(ownerId);
   await assertSavedGenerationStorageAvailable(ownerId);
   const publicId = generateCustomBuildPublicId();
   const bytes = new TextEncoder().encode(JSON.stringify({ tool: "voxel.exec", input }));
@@ -288,6 +291,7 @@ export async function createImportedGeneration(ownerId: string, input: VoxelExec
 }
 
 export async function createSavedGenerations(input: CreateSavedGenerationsInput) {
+  if (input.gridSize > 512) await requireMineBenchAdmin(input.ownerId);
   const prompt = input.prompt.trim();
   if (!prompt || prompt.length > MAX_GENERATION_PROMPT_CHARS || input.models.length < 1 || input.models.length > 8) {
     throw new GenerationServiceError("invalid_request", "Check the prompt and model selection.");
@@ -545,7 +549,6 @@ export async function listAdminGenerations(
         canPublish: Boolean(
           row.owner &&
           !row.owner.gallerySuspendedAt &&
-          row.generationMode !== "import" &&
           generation.status === "succeeded" &&
           generation.viewerUrl &&
           row._count.galleryExamples === 0
@@ -556,7 +559,7 @@ export async function listAdminGenerations(
   };
 }
 
-export async function publishAdminGeneration(adminId: string, publicId: string) {
+export async function publishAdminGeneration(adminId: string, publicId: string, importedPrompt?: string) {
   await requireMineBenchAdmin(adminId);
   const now = new Date();
   const purgeAt = new Date(now.getTime() + GALLERY_AUDIT_RETENTION_MS);
@@ -596,7 +599,6 @@ export async function publishAdminGeneration(adminId: string, publicId: string) 
   if (!build) throw new GalleryServiceError("not_found", "Saved generation not found.");
   if (
     !build.ownerId ||
-    build.generationMode === "import" ||
     build.status !== "succeeded" ||
     build.removedAt ||
     build.objectsDeletedAt ||
@@ -620,8 +622,9 @@ export async function publishAdminGeneration(adminId: string, publicId: string) 
     throw new GalleryServiceError("generation_not_available", "Saved generation not available.");
   }
 
-  const prompt = normalizeGalleryPrompt(build.promptText);
-  if (!prompt || prompt.length > 800) {
+  const imported = build.generationMode === "import";
+  const prompt = normalizeGalleryPrompt(imported ? importedPrompt ?? "" : build.promptText);
+  if (!prompt || prompt.length > 800 || (imported && normalizeGalleryPromptIdentity(prompt) === "imported build")) {
     throw new GalleryServiceError("invalid_prompt", "Enter a prompt to submit.");
   }
   if (publicGalleryTextError(prompt)) {
@@ -635,13 +638,13 @@ export async function publishAdminGeneration(adminId: string, publicId: string) 
   }
 
   const submission = await submitGalleryCandidate(build.ownerId, {
-    generationId: publicId,
+    ...(imported ? { prompt } : { generationId: publicId }),
     postAnonymously: true,
   });
   const example = await addGalleryExample(build.ownerId, submission.candidate.id, {
     generationId: publicId,
     postAnonymously: true,
-  });
+  }, imported ? { adminId, prompt } : undefined);
   const changed = submission.created || example.created;
   if (changed) {
     await prisma.galleryModerationRecord.create({
@@ -671,14 +674,16 @@ export async function getAdminGenerationArtifact(
   adminId: string,
   publicId: string,
   kinds: CustomBuildArtifactKind[],
+  worldPart?: { sourceBuildSha256: string; partKey: string },
 ) {
   await requireMineBenchAdmin(adminId);
   return prisma.customBuildArtifact.findFirst({
     where: {
       kind: { in: kinds },
+      ...(worldPart ? { sourceBuildSha256: voxelWorldPartSourceSha256(worldPart.sourceBuildSha256, worldPart.partKey) } : {}),
       customBuild: { publicId, removedAt: null, status: "succeeded" },
     },
-    select: { kind: true, bucket: true, path: true, contentType: true, encoding: true },
+    select: { kind: true, bucket: true, path: true, contentType: true, encoding: true, sha256: true, sourceBuildSha256: true },
     orderBy: { createdAt: "desc" },
   });
 }
@@ -720,6 +725,7 @@ export async function retrySavedGeneration(
       errorCode: true,
       errorRetryable: true,
       generationMode: true,
+      gridSize: true,
       modelKind: true,
       modelKey: true,
       modelProvider: true,
@@ -728,11 +734,11 @@ export async function retrySavedGeneration(
     },
   });
   if (!build) throw new GenerationServiceError("not_found", "Saved generation not found.");
+  if (build.gridSize > 512) await requireMineBenchAdmin(ownerId);
   if (build.status !== "failed" || build.errorRetryable !== true) {
     throw new GenerationServiceError("not_retryable", "This generation cannot be retried.");
   }
-  const recoveryOnly = build.generationMode === "import" ||
-    ["lease_expired", "provider_key_expired", "artifact_bookkeeping_failed"].includes(build.errorCode ?? "");
+  const recoveryOnly = isSavedGenerationRecovery(build.errorCode, build.generationMode === "import");
   if (recoveryOnly && !await prisma.customBuildArtifact.findFirst({
     where: { customBuildId: build.id, kind: { in: ["build_json", "raw_text_debug"] } },
     select: { id: true },

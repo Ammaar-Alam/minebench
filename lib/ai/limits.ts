@@ -3,6 +3,7 @@
 // dedupe, there can be at most one block per occupied cell.
 
 export const GRID_SIZES = [32, 64, 256, 512, 2048, 8192] as const;
+export const PUBLIC_GRID_SIZES = GRID_SIZES.filter((size) => size <= 512);
 export type GridSize = (typeof GRID_SIZES)[number];
 
 export function isGridSize(value: unknown): value is GridSize {

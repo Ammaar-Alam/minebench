@@ -51,7 +51,7 @@ async function main() {
   const codeIs = (code: string) => (error: unknown) =>
     error instanceof Error && "code" in error && error.code === code;
 
-  for (const errorCode of ["lease_expired", "provider_key_expired", "artifact_bookkeeping_failed"]) {
+  for (const errorCode of ["lease_expired", "provider_key_expired", "artifact_bookkeeping_failed", "processing_capacity_exceeded", "heap_limit_exceeded"]) {
     for (const kind of ["raw_text_debug", "build_json"]) {
       reset(errorCode, kind);
       current.modelKind = "custom";

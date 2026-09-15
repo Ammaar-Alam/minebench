@@ -30,6 +30,7 @@ type ParseRequest = {
   gridSize: GridSize;
   palette: Palette;
   maxBlocksByGrid: Record<GridSize, number>;
+  allowLargeWorlds?: boolean;
 };
 
 type CancelRequest = {
@@ -588,6 +589,7 @@ async function runParse(request: ParseRequest) {
   };
 
   try {
+    if (request.gridSize > 512 && !request.allowLargeWorlds) throw new Error("Large builds require admin access.");
     const finishWorld = (
       build: RenderableVoxelBuild,
       warnings: string[],
@@ -695,6 +697,7 @@ async function runParse(request: ParseRequest) {
           : extractBestVoxelBuildJson(raw);
 
       if (toolCall) {
+        if (toolCall.gridSize > 512 && !request.allowLargeWorlds) throw new Error("Large builds require admin access.");
         const executed = await executeVoxelExecToolCall(toolCall, abortController.signal);
         if (isCancelled(request.requestId)) {
           throw new Error(CANCELLED_ERROR);

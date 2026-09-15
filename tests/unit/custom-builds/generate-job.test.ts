@@ -248,6 +248,23 @@ async function main() {
   const { decodeAndVerifyCustomBuildArtifactText, gzipBytes, jsonBytes, sha256Hex, uploadAndRecordCustomBuildArtifact } = await import("../../../lib/custom-builds/artifacts");
   const { downloadCustomBuildArtifactBytes } = await import("../../../lib/custom-builds/storage");
   const { CustomBuildLeaseLostError } = await import("../../../lib/custom-builds/lease");
+  const { voxelBuildProcessingLimit } = await import("../../../lib/ai/processVoxelBuildResponse");
+
+  for (const gridSize of [32, 64, 256, 512, 2048, 8192] as const) {
+    assert.equal(voxelBuildProcessingLimit(gridSize, "packed"), gridSize === 512 ? 256 ** 3 : gridSize ** 3);
+    assert.equal(voxelBuildProcessingLimit(gridSize, "objects"), gridSize ** 3);
+  }
+  // unknown material keeps a regressed expansion limit from allocating the full cube
+  assert.throws(() => validateGeneratedBuildForArtifacts({
+    version: "1.0",
+    blocks: [],
+    boxes: [{ x1: 0, y1: 0, z1: 0, x2: 511, y2: 511, z2: 511, type: "unknown_material" }],
+  }, { gridSize: 512, palette: "simple" }, "packed"), /processing_capacity_exceeded/);
+  const packedSmall = validateGeneratedBuildForArtifacts({
+    version: "1.0", blocks: [{ x: 511, y: 511, z: 511, type: "stone" }],
+  }, { gridSize: 512, palette: "simple" }, "packed");
+  assert.equal(packedSmall.blockCount, 1);
+  assert.equal(packedSmall.build.packed?.count, 1);
 
   assert.ok(
     generateJobSource.includes("buildGalleryPreviewSvg(useWorldArtifacts ? preview : canonicalBuild)") &&

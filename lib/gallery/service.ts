@@ -151,6 +151,7 @@ const candidateListSelect = {
 } satisfies Prisma.GalleryCandidateSelect;
 
 function publicGalleryModel(model: GalleryModelRow) {
+  if (model.modelKind === "import") return { kind: "custom", label: "Imported build" };
   const kind =
     model.modelKind === "openrouter"
       ? "openrouter"
@@ -548,13 +549,13 @@ function assertAttribution(account: { publicNickname: string | null }, postAnony
   }
 }
 
-async function loadEligibleGeneration(ownerId: string, publicId: string) {
+async function loadEligibleGeneration(ownerId: string, publicId: string, allowImport = false) {
   return prisma.customBuild.findFirst({
     where: {
       publicId,
       ownerId,
       status: "succeeded",
-      generationMode: { not: "import" },
+      ...(allowImport ? {} : { generationMode: { not: "import" } }),
       removedAt: null,
       objectsDeletedAt: null,
       artifacts: { some: { kind: "build_json" } },
@@ -562,6 +563,7 @@ async function loadEligibleGeneration(ownerId: string, publicId: string) {
     select: {
       id: true,
       promptText: true,
+      generationMode: true,
       modelKind: true,
       modelDisplayName: true,
       modelId: true,
@@ -655,7 +657,9 @@ export async function addGalleryExample(
   userId: string,
   candidatePublicId: string,
   input: { generationId: string; postAnonymously: boolean },
+  adminPublication?: { adminId: string; prompt: string },
 ) {
+  if (adminPublication) await requireMineBenchAdmin(adminPublication.adminId);
   const account = await requirePublishingAccount(userId);
   assertAttribution(account, input.postAnonymously);
   const [candidate, generation] = await Promise.all([
@@ -663,12 +667,12 @@ export async function addGalleryExample(
       where: { publicId: candidatePublicId, ...publicCandidateWhere },
       select: { id: true, promptText: true, uploaderId: true },
     }),
-    loadEligibleGeneration(userId, input.generationId),
+    loadEligibleGeneration(userId, input.generationId, Boolean(adminPublication)),
   ]);
   if (!candidate) throw new GalleryServiceError("not_found", "Gallery prompt not found.");
   if (
     !generation ||
-    normalizeGalleryPromptIdentity(generation.promptText) !== normalizeGalleryPromptIdentity(candidate.promptText)
+    normalizeGalleryPromptIdentity(generation.generationMode === "import" ? adminPublication?.prompt ?? "" : generation.promptText) !== normalizeGalleryPromptIdentity(candidate.promptText)
   ) {
     throw new GalleryServiceError("generation_mismatch", "Choose a successful generation for this exact prompt.");
   }
@@ -686,6 +690,20 @@ export async function addGalleryExample(
   const id = randomBytes(16).toString("hex");
   return prisma.$transaction(async (tx) => {
     await lockNotificationAccounts(tx, [userId, candidate.uploaderId]);
+    if (generation.generationMode === "import" && adminPublication) {
+      // refresh the example check after concurrent publishers release the build
+      await tx.$queryRaw`SELECT id FROM "CustomBuild" WHERE id = ${generation.id} FOR UPDATE`;
+      const updated = await tx.customBuild.updateMany({
+        where: {
+          id: generation.id, ownerId: userId, status: "succeeded", removedAt: null, objectsDeletedAt: null,
+          owner: { gallerySuspendedAt: null }, galleryExamples: { none: {} },
+        },
+        data: { promptText: candidate.promptText, promptSha256: sha256Hex(candidate.promptText) },
+      });
+      if (updated.count !== 1) {
+        throw new GalleryServiceError("generation_not_available", "Saved generation not available.");
+      }
+    }
     const example = await tx.galleryExample.upsert({
       where: {
         candidateId_customBuildId: {
@@ -1208,15 +1226,7 @@ export async function submitGalleryReport(input: {
   }
   const prompt = candidate?.promptText ?? example!.candidate.promptText;
   const model = example
-    ? resolveGalleryModelLabel({
-        kind: example.customBuild.modelKind === "custom"
-          ? "custom"
-          : example.customBuild.modelKind === "openrouter"
-            ? "openrouter"
-            : "catalog",
-        displayName: example.customBuild.modelDisplayName,
-        modelId: example.customBuild.modelId,
-      })
+    ? publicGalleryModel(example.customBuild).label
     : null;
   const now = new Date();
   await prisma.galleryModerationRecord.create({

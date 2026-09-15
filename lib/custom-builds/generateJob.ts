@@ -6,9 +6,9 @@ import {
   type SavedGenerationRequestConfig,
 } from "@/lib/ai/customProviderConfig";
 import type { Provider } from "@/lib/ai/modelCatalog";
-import { isVoxelBuildResourceError, processVoxelBuildResponse, type ProcessVoxelBuildResponse } from "@/lib/ai/processVoxelBuildResponse";
+import { isVoxelBuildResourceError, processVoxelBuildResponse, voxelBuildProcessingLimit, type ProcessVoxelBuildResponse } from "@/lib/ai/processVoxelBuildResponse";
 import { generateVoxelBuild, type GenerateVoxelBuildParams } from "@/lib/ai/generateVoxelBuild";
-import { MAX_BLOCKS_BY_GRID, type GridSize, isGridSize } from "@/lib/ai/limits";
+import { type GridSize, isGridSize } from "@/lib/ai/limits";
 import type { ProviderApiKeys } from "@/lib/ai/types";
 import { encodeBinaryArtifact } from "@/lib/arena/binaryArtifact";
 import { recordGenerationError, recordGenerationSuccess } from "@/lib/observability/cloudwatch";
@@ -267,10 +267,13 @@ export function validateGeneratedBuildForArtifacts(
   const validated = (output === "packed" ? validateOwnedVoxelBuild : validateVoxelBuild)(build, {
     gridSize,
     palette: getPalette(palette),
-    maxBlocks: MAX_BLOCKS_BY_GRID[gridSize],
+    maxBlocks: voxelBuildProcessingLimit(gridSize, output),
     output,
   });
   if (!validated.ok) {
+    if (gridSize === 512 && output === "packed" && validated.error.startsWith("Too many blocks")) {
+      throw new Error("processing_capacity_exceeded");
+    }
     throw new Error(`Generated custom build is invalid: ${validated.error}`);
   }
   return { ...validated.value, blockCount: voxelBuildBlockCount(validated.value.build) };
@@ -551,9 +554,14 @@ async function recoverStoredBuild(
       throw new Error("Stored canonical artifact metadata is incomplete");
     }
     const gridSize = assertGridSize(customBuild.gridSize);
+    const maxBlocks = gridSize <= 512 ? voxelBuildProcessingLimit(gridSize, "packed") : undefined;
+    if (gridSize === 512 && maxBlocks !== undefined && artifact.blockCount != null &&
+        BigInt(artifact.blockCount) > BigInt(maxBlocks)) {
+      throw new Error("processing_capacity_exceeded");
+    }
     const build = await readStoredBuildSource(artifact, {
       signal: opts.signal,
-      maxBlocks: gridSize <= 512 ? MAX_BLOCKS_BY_GRID[gridSize] : undefined,
+      maxBlocks,
     });
     throwIfCustomBuildLeaseLost(opts.signal);
     const validated = validateGeneratedBuildForArtifacts(build, customBuild, "packed");
@@ -834,12 +842,13 @@ export async function runCustomBuildGenerateJob(
     throwIfCustomBuildLeaseLost(opts.signal);
     const infrastructureFailure = !(error instanceof CustomBuildGenerationFailedError) ||
       error.reason.includes("custom_build_artifact_persistence_failed");
-    const retryFinalization = artifactsPersisted || (infrastructureFailure && Boolean(
+    const resourceFailure = isVoxelBuildResourceError(redactSensitiveText(error));
+    const retryFinalization = !resourceFailure && (artifactsPersisted || (infrastructureFailure && Boolean(
       await prisma.customBuildArtifact.findFirst({
         where: { customBuildId: customBuild.id, kind: { in: ["build_json", "raw_text_debug"] } },
         select: { id: true },
       }),
-    ));
+    )));
     throwIfCustomBuildLeaseLost(opts.signal);
     const effectiveError =
       retryFinalization && !isCustomBuildArtifactBookkeepingError(error)
@@ -854,9 +863,9 @@ export async function runCustomBuildGenerateJob(
       });
     }
     const manuallyRetryable =
-      retryFinalization ||
+      resourceFailure || retryFinalization ||
       (effectiveError instanceof CustomBuildGenerationFailedError &&
-        (!isTerminalCustomBuildGenerateError(message) || isVoxelBuildResourceError(message)));
+        !isTerminalCustomBuildGenerateError(message));
     const terminal =
       (!retryFinalization && (isCustomBuildArtifactPersistenceError(effectiveError) ||
         isCustomBuildArtifactBookkeepingError(effectiveError) ||

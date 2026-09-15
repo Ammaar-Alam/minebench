@@ -3,7 +3,7 @@
 import { ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { SandboxGifExportButton, type SandboxGifExportTarget } from "@/components/sandbox/SandboxGifExportButton";
 import { buildSystemPrompt, buildUserPrompt, buildWebPrompt } from "@/lib/ai/prompts";
-import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID, GRID_SIZES, type GridSize } from "@/lib/ai/limits";
+import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID, GRID_SIZES, PUBLIC_GRID_SIZES, type GridSize } from "@/lib/ai/limits";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import { getPalette } from "@/lib/blocks/palettes";
 import {
@@ -44,6 +44,7 @@ type LocalParseWorkerRequest =
       gridSize: GridSize;
       palette: Palette;
       maxBlocksByGrid: Record<GridSize, number>;
+      allowLargeWorlds: boolean;
     }
   | {
       type: "cancel";
@@ -268,7 +269,7 @@ function SegmentedField({
   );
 }
 
-export function LocalLab() {
+export function LocalLab({ allowLargeWorlds = false }: { allowLargeWorlds?: boolean }) {
   const [gridSize, setGridSize] = useState<GridSize>(256);
   const [palette, setPalette] = useState<Palette>("simple");
 
@@ -509,6 +510,10 @@ export function LocalLab() {
 
   function renderFromText(text: string, file?: File) {
     const trimmed = trimOuterWhitespace(text);
+    if (gridSize > 512 && !allowLargeWorlds) {
+      setRendered({ kind: "error", build: null, warnings: [], message: "Large builds require admin access." });
+      return;
+    }
     if (!trimmed && !file) {
       setStatusNote(null);
       setRendered({
@@ -644,6 +649,7 @@ export function LocalLab() {
         gridSize,
         palette,
         maxBlocksByGrid: MAX_BLOCKS_BY_GRID,
+        allowLargeWorlds,
       } satisfies LocalParseWorkerRequest);
     } catch {
       void fallbackParse();
@@ -685,7 +691,7 @@ export function LocalLab() {
                 value={gridSize}
                 onChange={(event) => setGridSize(Number(event.target.value) as GridSize)}
               >
-                {GRID_SIZES.map((size) => (
+                {(allowLargeWorlds ? GRID_SIZES : PUBLIC_GRID_SIZES).map((size) => (
                   <option key={size} value={size}>{size}³</option>
                 ))}
               </select>
