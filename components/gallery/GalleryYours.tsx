@@ -121,7 +121,7 @@ function GenerationActions({
     setPending(true);
     setMessage(null);
     try {
-      const recoveryOnly = isSavedGenerationRecovery(generation.error?.code, generation.imported);
+      const recoveryOnly = isSavedGenerationRecovery(generation.error?.code, generation.imported, generation.hasSavedSource);
       const retryProvider = generation.model.transport === "openrouter"
         ? "openrouter"
         : generation.model.provider as keyof ProviderApiKeys;

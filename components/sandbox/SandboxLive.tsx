@@ -579,7 +579,7 @@ function customBuildPalette(value: string, fallback: Palette): Palette {
 }
 
 function customBuildRetryProvider(status: SavedGenerationPayload): keyof ProviderApiKeys | undefined {
-  if (isSavedGenerationRecovery(status.error?.code, status.imported)) return undefined;
+  if (isSavedGenerationRecovery(status.error?.code, status.imported, status.hasSavedSource)) return undefined;
   if (status.model.transport === "openrouter") return "openrouter";
   if (status.model.transport === "custom") return "custom";
   return status.model.provider as keyof ProviderApiKeys;

@@ -342,8 +342,8 @@ async function requestFailureChecks() {
     ({ customBuildRetryProvider, retryCustomBuild });
   `, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   const recoveryRuntime = runInNewContext(retryCode, retryScope);
-  for (const code of ["lease_expired", "provider_key_expired", "artifact_bookkeeping_failed", "processing_capacity_exceeded", "heap_limit_exceeded"]) {
-    const retryProvider = recoveryRuntime.customBuildRetryProvider({ model: { transport: "custom", provider: "custom" }, error: { code } });
+  for (const code of ["lease_expired", "provider_key_expired", "artifact_bookkeeping_failed", "processing_capacity_exceeded", "heap_limit_exceeded", "generation_failed"]) {
+    const retryProvider = recoveryRuntime.customBuildRetryProvider({ hasSavedSource: true, model: { transport: "custom", provider: "custom" }, error: { code } });
     assert.equal(retryProvider, undefined);
     retryScope.results.set("model", { customBuildId: "source-retry", customBuildRetryable: true, retryProvider });
     const before = retryScope.requests;

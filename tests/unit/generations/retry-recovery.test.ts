@@ -38,7 +38,7 @@ const fakePrisma = {
 (globalThis as unknown as { prisma?: unknown }).prisma = fakePrisma;
 
 function reset(errorCode = "lease_expired", kind?: string) {
-  current = { ...initial, errorCode };
+  current = { ...initial, errorCode, artifacts: kind ? [{ kind }] : [] };
   artifactKind = kind;
   deletedCredentials = 0;
   credentials.length = 0;
@@ -85,9 +85,21 @@ async function main() {
     assert.equal(jobs.length, 0);
   }
 
-  reset("generation_failed", "raw_text_debug");
-  await assert.rejects(retry(), codeIs("missing_provider_key"));
-  assert.equal(jobs.length, 0, "invalid model output keeps its existing credential requirement");
+  for (const kind of ["raw_text_debug", "build_json"]) {
+    reset("generation_failed", kind);
+    current.modelKind = "custom";
+    current.modelProvider = "custom";
+    const recovered = await retry({ customBaseUrl: "invalid" });
+    assert.equal(recovered.status, "queued", "saved execution retries need no provider key or endpoint");
+    assert.equal(recovered.hasSavedSource, true, "reloaded clients can distinguish execution recovery");
+    assert.equal(credentials.length, 0);
+    assert.equal(jobs.length, 1);
+  }
+  for (const kind of [undefined, "preview_svg"]) {
+    reset("generation_failed", kind);
+    await assert.rejects(retry(), codeIs("missing_provider_key"));
+    assert.equal(jobs.length, 0, "provider failures without source still need credentials");
+  }
 
   for (const kind of ["raw_text_debug", "build_json", undefined]) {
     reset("generation_failed", kind);
@@ -106,7 +118,7 @@ async function main() {
   process.env.CUSTOM_BUILD_KEY_ENCRYPTION_SECRET = "unit-retry-recovery-encryption-secret";
   process.env.MINEBENCH_FREE_OPENROUTER_API_KEY = "unit-hosted-retry-key";
   try {
-    for (const kind of [undefined, "raw_text_debug"]) {
+    for (const kind of [undefined, "preview_svg"]) {
       reset("generation_failed", kind);
       assert.equal((await retry({ providerKey: "unit-provider-retry-key" })).status, "queued");
       assert.equal(credentials.length, 1, "ordinary manual retry still stores the supplied key");

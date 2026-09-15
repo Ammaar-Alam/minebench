@@ -159,6 +159,7 @@ function serializeGeneration(row: GenerationRow) {
     gridSize: row.gridSize,
     palette: row.palette,
     imported: row.generationMode === "import",
+    hasSavedSource: artifactKinds.has("build_json") || artifactKinds.has("raw_text_debug"),
     model: {
       kind: row.generationMode === "import" ? "custom" : row.modelKind,
       key: row.modelKey,
@@ -738,11 +739,12 @@ export async function retrySavedGeneration(
   if (build.status !== "failed" || build.errorRetryable !== true) {
     throw new GenerationServiceError("not_retryable", "This generation cannot be retried.");
   }
-  const recoveryOnly = isSavedGenerationRecovery(build.errorCode, build.generationMode === "import");
-  if (recoveryOnly && !await prisma.customBuildArtifact.findFirst({
+  const savedSource = await prisma.customBuildArtifact.findFirst({
     where: { customBuildId: build.id, kind: { in: ["build_json", "raw_text_debug"] } },
     select: { id: true },
-  })) {
+  });
+  const recoveryOnly = isSavedGenerationRecovery(build.errorCode, build.generationMode === "import", Boolean(savedSource));
+  if (recoveryOnly && !savedSource) {
     throw new GenerationServiceError("not_retryable", "The saved generation output is no longer available.");
   }
   const provider = retryCredentialProvider(build);
