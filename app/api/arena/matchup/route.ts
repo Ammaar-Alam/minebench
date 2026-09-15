@@ -848,12 +848,6 @@ export async function GET(req: Request) {
           ? prisma.build.findUnique({
               where: { id: buildA.id },
 	              select: {
-	                id: true,
-	                gridSize: true,
-	                palette: true,
-	                blockCount: true,
-	                voxelByteSize: true,
-                  voxelCompressedByteSize: true,
                   voxelSha256: true,
                 },
               })
@@ -862,12 +856,6 @@ export async function GET(req: Request) {
           ? prisma.build.findUnique({
               where: { id: buildB.id },
 	              select: {
-	                id: true,
-	                gridSize: true,
-	                palette: true,
-	                blockCount: true,
-	                voxelByteSize: true,
-                  voxelCompressedByteSize: true,
                   voxelSha256: true,
                 },
               })
@@ -1090,14 +1078,7 @@ export async function GET(req: Request) {
   if (Number.isFinite(totalMs) && totalMs >= MATCHUP_SLOW_EVENT_MS) {
     trackServerEventInBackground("arena_matchup_slow", {
       ms: Math.round(totalMs),
-      eligibilityMs: Math.round(sampling.meta.eligibilityMs),
-      coverageMs: Math.round(sampling.meta.coverageMs),
-      buildMetaMs: Math.round(buildMetaMs),
-      prepareMs: Math.round(prepareMs),
-      txMs: Math.round(txMs),
       cacheStatus: sampling.meta.cacheStatus,
-      lane: picked.lane,
-      payloadMode,
     });
   }
 

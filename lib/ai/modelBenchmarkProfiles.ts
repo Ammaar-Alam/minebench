@@ -190,6 +190,10 @@ const MODEL_RUN_PARAMETERS = {
     { label: "Thinking", value: "Enabled" },
     { label: "Reasoning effort", value: "Max" },
   ],
+  deepseek_v4_1_flash: [
+    { label: "Thinking", value: "Enabled" },
+    { label: "Reasoning effort", value: "Max" },
+  ],
   deepseek_v4_flash_0731: [
     { label: "Thinking", value: "Enabled" },
     { label: "Reasoning effort", value: "Max" },
@@ -455,6 +459,10 @@ const MODEL_BENCHMARK_METADATA: Partial<
   deepseek_v4_pro: {
     sourceRelease: "3.3.2",
     totalCost: { usd: 3.92 },
+  },
+  deepseek_v4_1_flash: {
+    sourceRelease: "4.5.0",
+    totalCost: { usd: 1.1, attemptCount: 24 },
   },
   deepseek_v4_flash_0731: {
     sourceRelease: "3.12.0",

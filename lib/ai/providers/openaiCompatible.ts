@@ -275,6 +275,7 @@ export async function openAiCompatibleGenerateText(params: {
   let selectedTokenBudget: number | null = null;
   let useStructuredOutput = Boolean(params.jsonSchema);
 
+  let resultText: string | null = null;
   try {
     const tokenBudgets = customMaxTokens
       ? [customMaxTokens, customMaxTokens]
@@ -332,9 +333,71 @@ export async function openAiCompatibleGenerateText(params: {
       }
       break;
     }
+    if (!res) {
+      throw new Error("Custom API request failed");
+    }
+
+    if (res.status < 200 || res.status >= 300) {
+      const body = lastBody || (await readResponseText(res.body).catch(() => ""));
+      const rid = requestIdFromHeaders(res.headers);
+      throw new Error(`${serviceLabel} error ${res.status}${rid ? ` (request ${rid})` : ""}: ${body}`);
+    }
+
+    const budget = selectedTokenBudget ?? maxTokens;
+    params.onAcceptedOutputTokens?.(budget);
+    params.onAcceptedRequestConfiguration?.({
+      apiMode: "chat_completions",
+      maxOutputTokens: budget,
+      thinkingMode: typeof customConfig.body?.reasoning_effort === "string"
+        ? `reasoning=${customConfig.body.reasoning_effort}`
+        : Object.hasOwn(customConfig.body ?? {}, "thinking")
+          ? "custom"
+          : params.reasoningEffort
+            ? `reasoning=${params.reasoningEffort}`
+            : "default",
+      temperature: typeof customConfig.body?.temperature === "number"
+        ? customConfig.body.temperature
+        : params.temperature ?? "default",
+      textVerbosity: "default",
+      responseFormat: useStructuredOutput ? "json_schema" : "text",
+    });
+    params.onTrace?.(
+      withMaxOutputTokens(
+        useStructuredOutput
+          ? `${serviceLabel} chat completions in use with structured output.`
+          : `${serviceLabel} chat completions in use without structured output.`,
+        budget,
+      ),
+    );
+
+    if (params.onDelta) {
+      let text = "";
+      await consumeNodeSseStream(res.body, (evt) => {
+        if (controller.signal.aborted) return;
+        if (evt.data === "[DONE]") return;
+        let parsed: OpenAiCompatibleChatStreamChunk | null = null;
+        try {
+          parsed = JSON.parse(evt.data) as OpenAiCompatibleChatStreamChunk;
+        } catch {
+          return;
+        }
+        const chunk = parsed?.choices?.[0]?.delta?.content;
+        if (typeof chunk === "string" && chunk) {
+          text += chunk;
+          params.onDelta?.(chunk);
+        }
+      });
+      resultText = text;
+    } else {
+      const data = JSON.parse(await readResponseText(res.body)) as OpenAiCompatibleChatResponse;
+      resultText = extractChatCompletionText(data);
+    }
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error(`${serviceLabel} request timed out`);
+    }
+    if (err instanceof Error && err.message.startsWith(`${serviceLabel} error `)) {
+      throw err;
     }
     const code = err && typeof err === "object" && "code" in err ? String(err.code) : "unknown";
     console.error("OpenAI-compatible provider network error", { code });
@@ -344,63 +407,5 @@ export async function openAiCompatibleGenerateText(params: {
     if (timeout) clearTimeout(timeout);
   }
 
-  if (!res) {
-    throw new Error("Custom API request failed");
-  }
-
-  if (res.status < 200 || res.status >= 300) {
-    const body = lastBody || (await readResponseText(res.body).catch(() => ""));
-    const rid = requestIdFromHeaders(res.headers);
-    throw new Error(`${serviceLabel} error ${res.status}${rid ? ` (request ${rid})` : ""}: ${body}`);
-  }
-
-  const budget = selectedTokenBudget ?? maxTokens;
-  params.onAcceptedOutputTokens?.(budget);
-  params.onAcceptedRequestConfiguration?.({
-    apiMode: "chat_completions",
-    maxOutputTokens: budget,
-    thinkingMode: typeof customConfig.body?.reasoning_effort === "string"
-      ? `reasoning=${customConfig.body.reasoning_effort}`
-      : Object.hasOwn(customConfig.body ?? {}, "thinking")
-        ? "custom"
-        : params.reasoningEffort
-          ? `reasoning=${params.reasoningEffort}`
-          : "default",
-    temperature: typeof customConfig.body?.temperature === "number"
-      ? customConfig.body.temperature
-      : params.temperature ?? "default",
-    textVerbosity: "default",
-    responseFormat: useStructuredOutput ? "json_schema" : "text",
-  });
-  params.onTrace?.(
-    withMaxOutputTokens(
-      useStructuredOutput
-        ? `${serviceLabel} chat completions in use with structured output.`
-        : `${serviceLabel} chat completions in use without structured output.`,
-      budget,
-    ),
-  );
-
-  if (params.onDelta) {
-    let text = "";
-    await consumeNodeSseStream(res.body, (evt) => {
-      if (evt.data === "[DONE]") return;
-      let parsed: OpenAiCompatibleChatStreamChunk | null = null;
-      try {
-        parsed = JSON.parse(evt.data) as OpenAiCompatibleChatStreamChunk;
-      } catch {
-        return;
-      }
-      const chunk = parsed?.choices?.[0]?.delta?.content;
-      if (typeof chunk === "string" && chunk) {
-        text += chunk;
-        params.onDelta?.(chunk);
-      }
-    });
-    return { text };
-  }
-
-  const data = JSON.parse(await readResponseText(res.body)) as OpenAiCompatibleChatResponse;
-  const text = extractChatCompletionText(data);
-  return { text };
+  return { text: resultText ?? "" };
 }

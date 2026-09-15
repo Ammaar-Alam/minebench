@@ -2,6 +2,7 @@ import { getAuthenticatedUserId } from "@/lib/auth/request";
 import { customBuildWorldViewerResponse } from "@/lib/custom-builds/worldDelivery";
 import { createCustomBuildArtifactSignedUrl, downloadCustomBuildArtifactBytes } from "@/lib/custom-builds/storage";
 import { apiJson, apiServiceError } from "@/lib/gallery/api";
+import { rasterizeGalleryPreview } from "@/lib/gallery/preview";
 import {
   GenerationServiceError,
   getOwnedGenerationArtifact,
@@ -37,6 +38,15 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     }
     if (kind === "viewer" && new URL(request.url).searchParams.has("part")) {
       throw new GenerationServiceError("not_found", "Artifact not found.");
+    }
+    if (kind === "thumbnail" && new URL(request.url).searchParams.get("format") === "png") {
+      const bytes = await rasterizeGalleryPreview(await downloadCustomBuildArtifactBytes(artifact));
+      return new Response(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, {
+        headers: {
+          "Cache-Control": "private, no-store",
+          "Content-Type": "image/png",
+        },
+      });
     }
     const signedUrl = await createCustomBuildArtifactSignedUrl(artifact);
     if (signedUrl.startsWith("file:")) {

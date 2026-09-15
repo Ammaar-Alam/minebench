@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
-import type { User as SupabaseAuthUser } from "@supabase/supabase-js";
+import { AuthApiError, type User as SupabaseAuthUser } from "@supabase/supabase-js";
 import {
   deleteMineBenchAccount,
   retryPendingAuthDeletions,
+  type AuthAdminClient,
 } from "../../lib/account/service";
 import { getPublicAccount, syncAuthUser } from "../../lib/auth/account";
 
@@ -21,6 +22,9 @@ async function main() {
   const pendingUserId = randomUUID();
   const adminId = randomUUID();
   const affectedUserId = randomUUID();
+  const stuckUserId = randomUUID();
+  const goneUserId = randomUUID();
+  const retryFailUserId = randomUUID();
   const now = new Date("2026-08-29T15:00:00.000Z");
   const promptId = `account-delete-prompt-${suffix}`;
   const modelAId = `account-delete-model-a-${suffix}`;
@@ -87,6 +91,9 @@ async function main() {
           gallerySuspendedAt: now,
           gallerySuspendedById: userId,
         },
+        { id: stuckUserId, email: `stuck-${suffix}@example.test` },
+        { id: goneUserId, email: `gone-${suffix}@example.test` },
+        { id: retryFailUserId, email: `retry-fail-${suffix}@example.test` },
       ],
     });
 
@@ -440,6 +447,110 @@ async function main() {
       now.getTime(),
     );
 
+    const deleteAuthCalls: string[] = [];
+    const notFoundClient: AuthAdminClient = {
+      auth: {
+        admin: {
+          deleteUser: async (id: string) => {
+            deleteAuthCalls.push(id);
+            return {
+              data: { user: null },
+              error: new AuthApiError("User not found", 404, "user_not_found"),
+            };
+          },
+        },
+      },
+    };
+    const badJwtClient: AuthAdminClient = {
+      auth: {
+        admin: {
+          deleteUser: async () => ({
+            data: { user: null },
+            error: new AuthApiError("Invalid JWT", 401, "bad_jwt"),
+          }),
+        },
+      },
+    };
+
+    const restoreConsole = console.error;
+    console.error = () => {};
+    try {
+      await deleteMineBenchAccount(stuckUserId, {
+        now,
+        deleteAuthUser: async () => { throw new Error("interrupted before markAuthDeleted"); },
+      });
+    } finally {
+      console.error = restoreConsole;
+    }
+    const stuckRow = await db.user.findUniqueOrThrow({ where: { id: stuckUserId } });
+    assert.equal(stuckRow.authDeletedAt, null);
+    assert.notEqual(stuckRow.deletedAt, null);
+
+    deleteAuthCalls.length = 0;
+    assert.deepEqual(
+      await retryPendingAuthDeletions({ now, createAdminClient: () => notFoundClient }),
+      { deleted: 1, failures: 0 },
+    );
+    assert.deepEqual(deleteAuthCalls, [stuckUserId]);
+    assert.equal(
+      (await db.user.findUniqueOrThrow({ where: { id: stuckUserId } })).authDeletedAt?.getTime(),
+      now.getTime(),
+    );
+
+    deleteAuthCalls.length = 0;
+    assert.deepEqual(
+      await retryPendingAuthDeletions({ now, createAdminClient: () => notFoundClient }),
+      { deleted: 0, failures: 0 },
+    );
+    assert.deepEqual(deleteAuthCalls, []);
+
+    assert.deepEqual(await deleteMineBenchAccount(goneUserId, {
+      now,
+      createAdminClient: () => notFoundClient,
+    }), { deleted: true });
+    assert.equal(
+      (await db.user.findUniqueOrThrow({ where: { id: goneUserId } })).deletedAt?.getTime(),
+      now.getTime(),
+    );
+    assert.equal(
+      (await db.user.findUniqueOrThrow({ where: { id: goneUserId } })).authDeletedAt?.getTime(),
+      now.getTime(),
+    );
+
+    console.error = () => {};
+    try {
+      await deleteMineBenchAccount(retryFailUserId, {
+        now,
+        deleteAuthUser: async () => { throw new Error("interrupted before markAuthDeleted"); },
+      });
+      assert.equal(
+        (await db.user.findUniqueOrThrow({ where: { id: retryFailUserId } })).authDeletedAt,
+        null,
+      );
+      assert.deepEqual(
+        await retryPendingAuthDeletions({ now, createAdminClient: () => badJwtClient }),
+        { deleted: 0, failures: 1 },
+      );
+      assert.equal(
+        (await db.user.findUniqueOrThrow({ where: { id: retryFailUserId } })).authDeletedAt,
+        null,
+      );
+      assert.deepEqual(
+        await retryPendingAuthDeletions({ now, createAdminClient: () => badJwtClient }),
+        { deleted: 0, failures: 1 },
+      );
+      assert.equal(
+        (await db.user.findUniqueOrThrow({ where: { id: retryFailUserId } })).deletedAt?.getTime(),
+        now.getTime(),
+      );
+      assert.equal(
+        (await db.user.findUniqueOrThrow({ where: { id: retryFailUserId } })).authDeletedAt,
+        null,
+      );
+    } finally {
+      console.error = restoreConsole;
+    }
+
     console.log("account deletion lifecycle checks passed");
   } finally {
     if (voteBlockId) await db.galleryVoteBlock.deleteMany({ where: { id: voteBlockId } });
@@ -458,7 +569,7 @@ async function main() {
     await db.prompt.deleteMany({ where: { id: promptId } });
     if (organizationId) await db.organization.deleteMany({ where: { id: organizationId } });
     await db.user.deleteMany({
-      where: { id: { in: [userId, pendingUserId, adminId, affectedUserId] } },
+      where: { id: { in: [userId, pendingUserId, adminId, affectedUserId, stuckUserId, goneUserId, retryFailUserId] } },
     });
     await db.$disconnect();
   }

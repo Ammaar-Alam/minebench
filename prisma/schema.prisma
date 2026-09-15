@@ -126,6 +126,7 @@ model PushDevice {
   userId      String          @db.Uuid
   token       String          @db.VarChar(512)
   environment PushEnvironment
+  badgeCount  Int             @default(0)
   updatedAt   DateTime        @updatedAt
   user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   deliveries  NotificationDelivery[]
@@ -148,6 +149,7 @@ model NotificationDelivery {
   leaseToken     String?
   leaseExpiresAt DateTime?
   attempts       Int              @default(0)
+  badgeCounted   Boolean          @default(false)
   finishedAt     DateTime?
   createdAt      DateTime         @default(now())
   device         PushDevice?      @relation(fields: [deviceId], references: [id], onDelete: Cascade)

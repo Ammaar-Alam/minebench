@@ -1,0 +1,2 @@
+ALTER TABLE "PushDevice" ADD COLUMN "badgeCount" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "NotificationDelivery" ADD COLUMN "badgeCounted" BOOLEAN NOT NULL DEFAULT false;

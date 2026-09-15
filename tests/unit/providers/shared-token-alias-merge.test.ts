@@ -82,22 +82,35 @@ async function main() {
   const body = result.captured[0];
   assert.equal(
     Object.hasOwn(body, "max_completion_tokens"),
+    true,
+    "adapter token alias must survive so the provider receives a recognized field",
+  );
+  assert.equal(
+    body.max_completion_tokens,
+    16384,
+    "adapter alias carries the token-budget value",
+  );
+  assert.equal(
+    Object.hasOwn(body, "max_tokens"),
     false,
-    "adapter token alias must be stripped when user supplies a different alias",
+    "user-supplied alias must be stripped to avoid a second, mismatched alias",
   );
   assert.equal(
     Object.hasOwn(body, "max_output_tokens"),
     false,
     "no other token alias should be present",
   );
-  assert.equal(body.max_tokens, 8192, "user token alias should win");
   assert.equal(body.model, "MiniMax-M2");
   assert.equal(body.reasoning_split, true);
   assert.equal(result.acceptedTokenBudget, 16384);
 
   const sameAlias = await runScenario(minimaxBuildBody, { max_completion_tokens: 4096 });
   assert.equal(sameAlias.captured.length, 1);
-  assert.equal(sameAlias.captured[0].max_completion_tokens, 4096);
+  assert.equal(
+    sameAlias.captured[0].max_completion_tokens,
+    16384,
+    "adapter budget value survives; the user-supplied same-alias value is reconciled via the token-budget pipeline, not the merge",
+  );
   assert.equal(Object.hasOwn(sameAlias.captured[0], "max_tokens"), false);
 
   const deepseekBuildBody = (tok: number) => ({
@@ -114,10 +127,15 @@ async function main() {
   assert.equal(deepseek.captured.length, 1);
   assert.equal(
     Object.hasOwn(deepseek.captured[0], "max_tokens"),
-    false,
-    "adapter max_tokens stripped when user sets max_output_tokens",
+    true,
+    "adapter max_tokens must survive when user sets max_output_tokens",
   );
-  assert.equal(deepseek.captured[0].max_output_tokens, 8192);
+  assert.equal(deepseek.captured[0].max_tokens, 16384);
+  assert.equal(
+    Object.hasOwn(deepseek.captured[0], "max_output_tokens"),
+    false,
+    "user-supplied alias must be stripped to avoid a second, mismatched alias",
+  );
 
   const noOverride = await runScenario(minimaxBuildBody, undefined);
   assert.equal(noOverride.captured.length, 1);

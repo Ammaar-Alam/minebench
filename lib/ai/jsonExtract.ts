@@ -32,7 +32,27 @@ function topLevelJsonObjectSlices(text: string): string[] {
       continue;
     }
 
-    if (ch === '"') {
+    // At depth 0 a `"` opens a prose-quote span. If the closing `"` appears
+    // before the next top-level `{`, the span is balanced prose (e.g.
+    // `The JSON starts with "{"`). Skip the entire span so that any braces
+    // inside it are not mistaken for object boundaries.
+    // If the closing `"` is absent or comes only after a `{`, the quote is a
+    // stray prose quote; skip just the quote character and scan on normally,
+    // preserving the original behaviour for unbalanced quotes.
+    if (depth === 0 && ch === '"') {
+      // Lookahead: find closing quote and next brace.
+      const closeIdx = text.indexOf('"', i + 1);
+      const braceIdx = text.indexOf('{', i + 1);
+      if (closeIdx !== -1 && (braceIdx === -1 || closeIdx < braceIdx)) {
+        // Balanced prose-quote span — skip past the closing quote.
+        i = closeIdx;
+      }
+      // Whether balanced or stray, consume the opening quote and continue.
+      continue;
+    }
+
+    // Only treat " as a JSON string delimiter once we are inside an object.
+    if (depth > 0 && ch === '"') {
       inString = true;
       continue;
     }

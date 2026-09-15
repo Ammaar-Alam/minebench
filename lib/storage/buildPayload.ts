@@ -10,7 +10,6 @@ import {
   normalizeBuildStoragePath,
   type SupabaseStorageConfig,
 } from "@/lib/storage/config";
-import { parseVoxelBuildSpec } from "@/lib/voxel/validate";
 
 const STORAGE_DELETE_BATCH_SIZE = 1000;
 
@@ -405,13 +404,4 @@ export async function resolveBuildPayload(
     path,
     encoding: source.voxelStorageEncoding,
   }, opts);
-}
-
-export async function resolveBuildSpec(source: BuildPayloadSource, opts?: LoadBuildPayloadOptions) {
-  const payload = await resolveBuildPayload(source, opts);
-  const spec = parseVoxelBuildSpec(payload);
-  if (!spec.ok) {
-    throw new Error(`Build payload is invalid: ${spec.error}`);
-  }
-  return spec.value;
 }

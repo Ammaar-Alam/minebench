@@ -27,7 +27,6 @@ import { parseArenaBuildAccessToken } from "@/lib/arena/matchupToken";
 import { isLoopbackDatabaseUrl } from "@/lib/db/identity";
 import { prisma } from "@/lib/prisma";
 import { ServerTiming } from "@/lib/serverTiming";
-import { trackServerEvent } from "@/lib/analytics.server";
 import {
   getArenaBlockCountBucket,
   roundMetricMs,
@@ -93,13 +92,6 @@ function logArenaBuildDelivery(
   status: number,
 ) {
   const blockCountBucket = getArenaBlockCountBucket(observation.blockCount);
-  const path = [
-    observation.variant,
-    observation.requestedFormat,
-    observation.servedFormat,
-    observation.source,
-    observation.artifactOutcome,
-  ].join(":");
   const roundedStages = {
     tokenValidateMs: roundMetricMs(stages.token_validate),
     artifactResolveMs: roundMetricMs(stages.artifact_resolve),
@@ -121,32 +113,6 @@ function logArenaBuildDelivery(
     }),
   );
   emitArenaBuildCustomMetrics(observation, stages, status);
-
-  // Web Analytics Plus accepts at most eight properties per custom event
-  after(async () => {
-    await trackServerEvent("arena_build_server_timing", {
-      path,
-      blockCountBucket,
-      tokenMs: roundedStages.tokenValidateMs,
-      resolveMs: roundedStages.artifactResolveMs,
-      bodyReadyMs: roundedStages.bodyReadyMs,
-      totalMs: roundedStages.totalMs,
-      status,
-      optimized: observation.optimizedDelivered,
-    });
-    if (stages.artifact_fetch != null) {
-      await trackServerEvent("arena_artifact_server_timing", {
-        path,
-        cache: observation.artifactCacheStatus,
-        fetchMs: roundedStages.artifactFetchMs,
-        inflateMs: roundedStages.inflateMs,
-        rewriteMs: roundedStages.identityRewriteMs,
-        deflateMs: roundedStages.deflateMs,
-        transferBytes: observation.transferBytes,
-        decodedBytes: observation.decodedBytes,
-      });
-    }
-  });
 }
 
 // short process cache avoids rebuilding the same snapshot json
