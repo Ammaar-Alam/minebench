@@ -228,6 +228,20 @@ async function main() {
       where: { customBuild: { publicId: importedPublicId }, kind: "viewer_mbv4" },
       data: { kind: "viewer_world", format: "json", contentType: "application/json" },
     });
+    const importedBuild = await db.customBuild.findUniqueOrThrow({ where: { publicId: importedPublicId } });
+    await db.customBuildArtifact.createMany({ data: ["preview_svg", "preview_mbv4"].map((kind) => ({
+      customBuildId: importedBuild.id, kind: kind as "preview_svg" | "preview_mbv4", format: kind,
+      bucket: "builds", path: `admin-publish/${suffix}/${kind}`, contentType: "application/octet-stream",
+      fileName: kind, sha256: "f".repeat(64), byteSize: 60, storedByteSize: 60,
+    })) });
+    const worldCandidate = await getGalleryCandidate(importedPublications[0]!.candidateId);
+    for (const example of [worldCandidate?.cover, ...worldCandidate!.examples]) {
+      assert.ok(example);
+      assert.equal(example.viewerUrl, null, "legacy clients must not receive spatial viewer URLs");
+      assert.equal(example.thumbnailUrl, null, "world preview coordinates may exceed native packing limits");
+      assert.ok(example.previewUrl, "legacy clients retain their PNG image preview");
+      assert.equal(example.worldViewerUrl, `/api/gallery/examples/${example.id}/viewer?format=world`);
+    }
     await db.customBuildArtifact.create({
       data: {
         customBuild: { connect: { publicId: importedPublicId } }, kind: "world_part", format: "mbv4", bucket: "builds",

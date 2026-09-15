@@ -24,6 +24,11 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     const artifact = await getPublicGalleryExampleArtifact(id, [...kinds]);
     if (!artifact) throw new GalleryServiceError("not_found", "Artifact not found.");
     if (kind === "viewer" && artifact.kind === "viewer_world") {
+      if (new URL(request.url).searchParams.get("format") !== "world") {
+        return Response.json({ error: "This viewer requires world support." }, {
+          status: 406, headers: { "Cache-Control": "private, no-store" },
+        });
+      }
       return await customBuildWorldViewerResponse({
         request,
         artifact,

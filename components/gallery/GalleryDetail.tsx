@@ -374,7 +374,8 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
     for (const exampleId of selectedIds) {
       const example = examples.find((item) => item.id === exampleId);
       if (!example || viewerStatesRef.current[exampleId] || viewerControllers.current.has(exampleId)) continue;
-      if (!example.viewerUrl) {
+      const viewerUrl = example.worldViewerUrl ?? example.viewerUrl;
+      if (!viewerUrl) {
         updateViewerState(exampleId, { build: null, loading: false, error: "Viewer unavailable" });
         continue;
       }
@@ -382,7 +383,7 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
       const controller = new AbortController();
       viewerControllers.current.set(exampleId, controller);
       updateViewerState(exampleId, { build: null, loading: true, error: null });
-      void fetch(example.viewerUrl, { signal: controller.signal, cache: "no-store" })
+      void fetch(viewerUrl, { signal: controller.signal, cache: "no-store" })
         .then(async (response) => {
           if (!response.ok) throw new Error("Viewer unavailable");
           return readBuildVariantPayload(response, {
@@ -458,7 +459,7 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
   function renderViewerCard(example: GalleryExamplePayload, isComparison: boolean) {
     const state = viewerStates[example.id];
     const build = state?.build ?? null;
-    const loading = state?.loading ?? Boolean(example.viewerUrl);
+    const loading = state?.loading ?? Boolean(example.worldViewerUrl ?? example.viewerUrl);
     return (
       <VoxelViewerCard
         title={example.model.label}

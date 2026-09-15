@@ -190,10 +190,14 @@ function publicExample(example: ExampleRow, viewerUserId?: string | null) {
     previewUrl: kinds.has("preview_svg")
       ? `/api/gallery/examples/${example.id}/preview`
       : null,
-    thumbnailUrl: kinds.has("preview_mbv4")
+    thumbnailUrl: !kinds.has("viewer_world") && kinds.has("preview_mbv4")
       ? `/api/gallery/examples/${example.id}/thumbnail`
       : null,
-    viewerUrl: kinds.has("viewer_world") || kinds.has("viewer_mbv4") || kinds.has("viewer_mbf1")
+    // older clients only consume binary viewer URLs and image previews
+    worldViewerUrl: kinds.has("viewer_world")
+      ? `/api/gallery/examples/${example.id}/viewer?format=world`
+      : null,
+    viewerUrl: !kinds.has("viewer_world") && (kinds.has("viewer_mbv4") || kinds.has("viewer_mbf1"))
       ? `/api/gallery/examples/${example.id}/viewer`
       : null,
   };

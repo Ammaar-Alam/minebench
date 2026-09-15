@@ -135,7 +135,7 @@ async function fetchExplorerBuild(buildId: string, signal: AbortSignal): Promise
   const target = parseExplorerBuildId(buildId);
   if (target.source === "gallery") {
     const response = await fetch(
-      `/api/gallery/examples/${encodeURIComponent(target.id)}/viewer`,
+      `/api/gallery/examples/${encodeURIComponent(target.id)}/viewer?format=world`,
       { signal },
     );
     if (!response.ok) {

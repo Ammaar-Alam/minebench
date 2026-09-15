@@ -90,6 +90,9 @@ unreferenced artifacts without guessing from path names.
 Grids above 512 are available to MineBench administrators through saved generation
 and pasted tool calls. Public requests and imports remain limited to 512 or below;
 reading an explicitly published Gallery world does not require administrator access.
+World-capable clients follow `worldViewerUrl` with `format=world`; older clients
+retain image previews through `previewUrl`. Binary-only viewer and thumbnail URLs
+are omitted for spatial worlds.
 
 Large worlds retain compact canonical source and prepare exact surface meshes once.
 Viewers reuse stored mesh parts without invoking the generation worker. Rendering
