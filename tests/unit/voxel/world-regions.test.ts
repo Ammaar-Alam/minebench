@@ -5,7 +5,6 @@ import { fileURLToPath } from "node:url";
 
 import { getPalette } from "../../../lib/blocks/palettes";
 import {
-  createVoxelWorldRegionEvaluator,
   evaluateVoxelWorldRegions,
   summarizeVoxelWorldRegions,
   type VoxelWorldRegion,
@@ -92,27 +91,12 @@ function assertTightenedGroundRegions() {
   };
   assertMatchesValidator(build, 128);
 
-  const evaluator = createVoxelWorldRegionEvaluator(build, { gridSize: 128, palette });
+  const evaluator = evaluateVoxelWorldRegions(build, { gridSize: 128, palette });
   if (!evaluator.ok) throw new Error(evaluator.error);
-  const regions = Array.from(evaluator.value.regions);
+  const regions = Array.from(evaluator.regions);
   assert.equal(sumBlocks(regions), 20_480);
   assert.ok(regions.some((region) => region.kind === "uniform" && region.size.y === 1));
   assert.ok(regions.every((region) => region.kind === "uniform" || region.size.y <= 64));
-
-  const groundLeaf = evaluator.value.evaluateBounds({ x: 0, y: 0, z: 0 }, { x: 64, y: 1, z: 64 });
-  assert.deepEqual(groundLeaf, {
-    ok: true,
-    region: {
-      kind: "uniform",
-      origin: { x: 0, y: 0, z: 0 },
-      size: { x: 64, y: 1, z: 64 },
-      type: "grass_block",
-      blockCount: 4096,
-    },
-  });
-
-  const oversized = evaluator.value.evaluateBounds({ x: 0, y: 0, z: 0 }, { x: 65, y: 1, z: 1 });
-  assert.deepEqual(oversized, { ok: false, error: "Bounds size must be at most 64 per axis" });
 }
 
 function assertLargeWorldSmoke() {
@@ -184,14 +168,13 @@ async function main() {
     x: index * 37 % 128, y: index * 17 % 96, z: index * 73 % 128,
     type: index < 300 ? "water" : "glass",
   }));
-  const isolated = createVoxelWorldRegionEvaluator({ version: "1.0", blocks: [], packed: packVoxelBlocks(scattered) }, {
+  const isolated = evaluateVoxelWorldRegions({ version: "1.0", blocks: [], packed: packVoxelBlocks(scattered) }, {
     gridSize: 128, palette: getPalette("simple"),
   });
   if (!isolated.ok) throw new Error(isolated.error);
-  const first = isolated.value.regions[Symbol.iterator]();
+  const first = isolated.regions[Symbol.iterator]();
   const partial = [first.next().value as VoxelWorldRegion];
-  const independentlyEvaluated = Array.from(isolated.value.regions);
-  assert.equal(isolated.value.evaluateBounds({ x: 0, y: 0, z: 0 }, { x: 64, y: 64, z: 64 }).ok, true);
+  const independentlyEvaluated = Array.from(isolated.regions);
   for (let next = first.next(); !next.done; next = first.next()) partial.push(next.value);
   assert.deepEqual(expandRegions(partial, getPalette("simple")), expandRegions(independentlyEvaluated, getPalette("simple")));
   assertMatchesValidator({

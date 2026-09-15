@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import {
-  appendCoalescedVoxelBox,
   appendPackedVoxelBox,
   appendPackedVoxelBlocks,
   copyPackedVoxelBlocks,
@@ -19,7 +18,7 @@ import {
   voxelBuildBlocksRef,
   type PackedVoxelBoxRecord,
 } from "../../../lib/voxel/packedBlocks";
-import type { VoxelBlock, VoxelBox } from "../../../lib/voxel/types";
+import type { VoxelBlock } from "../../../lib/voxel/types";
 import { parseVoxelBuildSpec } from "../../../lib/voxel/validate";
 
 function makeBlocks(count: number, offset = 0): VoxelBlock[] {
@@ -39,17 +38,18 @@ function assertRoundTrip(packed: ReturnType<typeof packVoxelBlocks>, expected: V
 
 async function main() {
   {
-    const boxes: VoxelBox[] = [];
-    for (const x of [0, 1, 2]) appendCoalescedVoxelBox(boxes, { x1: x, y1: 0, z1: 0, x2: x, y2: 1, z2: 1, type: "stone" });
-    assert.deepEqual(boxes, [{ x1: 0, y1: 0, z1: 0, x2: 2, y2: 1, z2: 1, type: "stone" }]);
-    appendCoalescedVoxelBox(boxes, { x1: 2, y1: 0, z1: 0, x2: 3, y2: 1, z2: 1, type: "stone" });
-    assert.equal(boxes.length, 2);
-    const reversed: VoxelBox[] = [{ x1: 3, y1: 0, z1: 0, x2: 1, y2: 0, z2: 0, type: "stone" }];
-    appendCoalescedVoxelBox(reversed, { x1: 2, y1: 0, z1: 0, x2: 2, y2: 0, z2: 0, type: "stone" });
-    assert.equal(reversed.length, 2);
+    const boxes = createPackedVoxelBoxes();
+    for (const x of [0, 1, 2]) appendPackedVoxelBox(boxes, { x1: x, y1: 0, z1: 0, x2: x, y2: 1, z2: 1, type: "stone" });
+    assert.deepEqual(unpackVoxelBoxes(boxes), [{ x1: 0, y1: 0, z1: 0, x2: 2, y2: 1, z2: 1, type: "stone" }]);
+    appendPackedVoxelBox(boxes, { x1: 2, y1: 0, z1: 0, x2: 3, y2: 1, z2: 1, type: "stone" });
+    assert.equal(boxes.count, 2);
+    const reversed = createPackedVoxelBoxes();
+    appendPackedVoxelBox(reversed, { x1: 3, y1: 0, z1: 0, x2: 1, y2: 0, z2: 0, type: "stone" });
+    appendPackedVoxelBox(reversed, { x1: 2, y1: 0, z1: 0, x2: 2, y2: 0, z2: 0, type: "stone" });
+    assert.equal(reversed.count, 2);
 
     const packed = packVoxelBlocks([{ x: 8191, y: 2, z: 3, type: "stone" }]);
-    const source = { version: "1.0", blocks: [], boxes, packed };
+    const source = { version: "1.0", blocks: [], boxes: unpackVoxelBoxes(boxes), packed };
     const parsed = parseVoxelBuildSpec(source);
     assert.ok(parsed.ok);
     if (parsed.ok) assert.equal(parsed.value, source);

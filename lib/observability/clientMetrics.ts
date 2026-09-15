@@ -32,6 +32,13 @@ function flushClientMetrics() {
   }
 }
 
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", flushClientMetrics);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushClientMetrics();
+  });
+}
+
 export function enqueueClientMetric(sample: ClientMetricSample) {
   if (typeof window === "undefined") return;
   pendingSamples.push(sample);

@@ -83,6 +83,7 @@ function SandboxModeTabs({
 export function Sandbox({
   initialPrompt,
   signedIn,
+  allowLargeWorlds = false,
   anonymousServerKeysEnabled,
   hostedGeminiEnabled,
   hostedGeminiAvailable,
@@ -91,6 +92,7 @@ export function Sandbox({
 }: {
   initialPrompt?: string;
   signedIn: boolean;
+  allowLargeWorlds?: boolean;
   anonymousServerKeysEnabled: boolean;
   hostedGeminiEnabled: boolean;
   hostedGeminiAvailable: boolean;
@@ -142,6 +144,7 @@ export function Sandbox({
           key={livePrompt ?? "default"}
           initialPrompt={livePrompt}
           signedIn={signedIn}
+          allowLargeWorlds={allowLargeWorlds}
           anonymousServerKeysEnabled={anonymousServerKeysEnabled}
           hostedGeminiEnabled={hostedGeminiEnabled}
           hostedGeminiAvailable={hostedGeminiAvailable}
@@ -149,7 +152,7 @@ export function Sandbox({
           gallerySuspended={gallerySuspended}
         />
       ) : (
-        <LocalLab />
+        <LocalLab allowLargeWorlds={allowLargeWorlds} />
       )}
     </div>
   );

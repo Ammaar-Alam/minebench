@@ -8,12 +8,14 @@ const require = createRequire(import.meta.url);
 const storageDir = ".custom-build-storage/unit-import-request";
 const originalEnv = { ...process.env };
 let ownerId: string | null = "00000000-0000-4000-8000-000000000001";
+let admin = true;
 let storedBytes = 0;
 let localPreparations = 0;
 let failCreate = false;
 let uploadedPath = "";
 const created: Record<string, unknown>[] = [];
 const fakePrisma = {
+  user: { findFirst: async () => admin ? { id: ownerId } : null },
   customBuild: {
     aggregate: async () => ({ _sum: { storedByteSize: storedBytes } }),
     create: async ({ data }: { data: Record<string, unknown> }) => {
@@ -77,6 +79,9 @@ async function main() {
     assert.equal(generation.status, "queued");
     assert.equal(generation.gridSize, gridSize);
     assert.equal(generation.viewerUrl, null);
+    assert.equal(generation.imported, true);
+    assert.equal(generation.model.kind, "custom");
+    assert.equal(generation.model.label, "Imported build");
     const data = created.at(-1)!;
     assert.equal(data.ownerId, ownerId);
     assert.equal(data.generationMode, "import");
@@ -86,6 +91,11 @@ async function main() {
     assert.equal((data.jobs as { create: { type: string } }).create.type, "generate");
   }
   assert.equal(localPreparations, 0);
+
+  admin = false;
+  assert.equal((await POST(request())).status, 403, "large imports require administrator access before storage or queueing");
+  assert.equal(created.length, 2);
+  admin = true;
 
   ownerId = null;
   assert.equal((await POST(request())).status, 401);

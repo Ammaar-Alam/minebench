@@ -1,15 +1,9 @@
 import assert from "node:assert/strict";
 import { NextRequest } from "next/server";
-import { unstable_doesMiddlewareMatch } from "next/experimental/testing/server";
 
-import { config, middleware } from "../../middleware";
+import { middleware } from "../../middleware";
 
 async function main() {
-  const uploadHeaders = { "content-type": "application/vnd.minebench.build+json" };
-  assert.equal(unstable_doesMiddlewareMatch({ config, url: "/api/local/voxel-exec", headers: uploadHeaders }), false);
-  assert.equal(unstable_doesMiddlewareMatch({ config, url: "/api/local/voxel-exec", headers: { "content-type": "application/json" } }), true);
-  assert.equal(unstable_doesMiddlewareMatch({ config, url: "/api/local/voxel-exec?world=city&part=page-0" }), true);
-  assert.equal(unstable_doesMiddlewareMatch({ config, url: "/api/generations", headers: uploadHeaders }), true);
   process.env.ARENA_TRUST_X_FORWARDED_FOR = "1";
   const ip = "203.0.113.42";
 

@@ -266,6 +266,23 @@ async function main() {
   assert.deepEqual(notifications, ["generation_succeeded"], "canonical recovery must notify once");
 
   reset();
+  current.gridSize = 512;
+  const oversizedCanonical: Record<string, unknown> = {
+    ...completedArtifacts.find((artifact) => artifact.kind === "build_json")!,
+    blockCount: BigInt(256 ** 3 + 1),
+    path: "must-not-download-oversized-canonical.json.gz",
+  };
+  artifacts.push(oversizedCanonical);
+  await assert.rejects(runCustomBuildGenerateJob(job as never), /processing_capacity_exceeded/);
+  assertNoProvider();
+  assert.equal(current.status, "failed");
+  assert.equal(current.errorCode, "processing_capacity_exceeded");
+  assert.equal(current.errorRetryable, true);
+  assert.equal(current.deletionPendingAt, null);
+  assert.deepEqual(artifacts, [oversizedCanonical], "capacity failure must retain the saved source");
+  assert.equal(updates.some((update) => update.status === "queued"), false);
+
+  reset();
   const retainedRaw = await saveRaw(validText);
   savedSecret = { expiresAt: new Date(Date.now() + 60_000) };
   failArtifactKind = "build_json";

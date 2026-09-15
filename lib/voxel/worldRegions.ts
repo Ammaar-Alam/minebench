@@ -89,16 +89,6 @@ export type VoxelWorldRegionEvaluation =
   | { ok: true; warnings: string[]; regions: Iterable<VoxelWorldRegion> }
   | { ok: false; error: string };
 
-export type VoxelWorldRegionBoundsEvaluation =
-  | { ok: true; region: VoxelWorldRegion | null }
-  | { ok: false; error: string };
-
-export type VoxelWorldRegionEvaluator = {
-  warnings: string[];
-  regions: Iterable<VoxelWorldRegion>;
-  evaluateBounds(origin: VoxelPoint, size: VoxelPoint): VoxelWorldRegionBoundsEvaluation;
-};
-
 function normalizeGridExtent(gridSize: number): number {
   return Number.isFinite(gridSize)
     ? Math.min(Math.max(0, Math.floor(gridSize)), MAX_VOXEL_COORDINATE + 1)
@@ -204,33 +194,6 @@ function toRegionPoint(x: number, y: number, z: number): VoxelPoint {
 
 function toRegionSize(bounds: Bounds): VoxelPoint {
   return toRegionPoint(bounds.x2 - bounds.x1 + 1, bounds.y2 - bounds.y1 + 1, bounds.z2 - bounds.z1 + 1);
-}
-
-function boundsFromOriginSize(origin: VoxelPoint, size: VoxelPoint, leafSize: number): Bounds | string {
-  if (
-    !Number.isInteger(origin.x) ||
-    !Number.isInteger(origin.y) ||
-    !Number.isInteger(origin.z) ||
-    !Number.isInteger(size.x) ||
-    !Number.isInteger(size.y) ||
-    !Number.isInteger(size.z)
-  ) {
-    return "Bounds origin and size must be integers";
-  }
-  if (size.x <= 0 || size.y <= 0 || size.z <= 0) {
-    return "Bounds size must be positive";
-  }
-  if (size.x > leafSize || size.y > leafSize || size.z > leafSize) {
-    return `Bounds size must be at most ${leafSize} per axis`;
-  }
-  return {
-    x1: origin.x,
-    y1: origin.y,
-    z1: origin.z,
-    x2: origin.x + size.x - 1,
-    y2: origin.y + size.y - 1,
-    z2: origin.z + size.z - 1,
-  };
 }
 
 function pushWarningCounts(
@@ -737,78 +700,43 @@ function* evaluateNode(
   }
 }
 
-function regionsIterable(
-  root: Bounds | null,
-  operations: PaintOperation[],
-  boxSources: PackedBoxSource[],
-  palette: BlockDefinition[],
-  leafSize: number,
-  points?: PackedPointSource,
-): Iterable<VoxelWorldRegion> {
-  return {
-    [Symbol.iterator]() {
-      return root
-        ? evaluateNode(root, operations, collectPackedBoxRanges(boxSources, root), palette, leafSize, collectPackedPoints(points, root))
-        : [][Symbol.iterator]();
-    },
-  };
-}
-
-function createEvaluatorFromBuild(
-  build: VoxelBuild,
-  opts: VoxelWorldRegionOptions,
-): { ok: true; value: VoxelWorldRegionEvaluator } | { ok: false; error: string } {
+function evaluateRegionsFromBuild(build: VoxelBuild, opts: VoxelWorldRegionOptions): VoxelWorldRegionEvaluation {
   const prepared = preprocessBuild(build, opts);
   if (!prepared.ok) return prepared;
-
   const leafSize = normalizeLeafSize(opts.mixedLeafSize);
   return {
     ok: true,
-    value: {
-      warnings: prepared.warnings,
-      regions: regionsIterable(prepared.root, prepared.operations, prepared.boxSources, opts.palette, leafSize, prepared.points),
-      evaluateBounds(origin, size) {
-        const bounds = boundsFromOriginSize(origin, size, leafSize);
-        if (typeof bounds === "string") return { ok: false, error: bounds };
-        const operations = prepared.operations.filter((operation) => intersects(operation.bounds, bounds));
-        const boxRanges = collectPackedBoxRanges(prepared.boxSources, bounds);
-        const points = collectPackedPoints(prepared.points, bounds);
-        const region = operations.length > 0 || boxRanges.length > 0 || points
-          ? Array.from(evaluateNode(bounds, operations, boxRanges, opts.palette, leafSize, points))[0] ?? null
-          : null;
-        return { ok: true, region };
+    warnings: prepared.warnings,
+    regions: {
+      // each iteration starts with fresh point partitions
+      *[Symbol.iterator]() {
+        if (prepared.root) yield* evaluateNode(
+          prepared.root, prepared.operations, collectPackedBoxRanges(prepared.boxSources, prepared.root),
+          opts.palette, leafSize, collectPackedPoints(prepared.points, prepared.root),
+        );
       },
     },
   };
-}
-
-export function createVoxelWorldRegionEvaluator(
-  input: unknown,
-  opts: VoxelWorldRegionOptions,
-): { ok: true; value: VoxelWorldRegionEvaluator } | { ok: false; error: string } {
-  const parsed = parseVoxelBuildSpec(input);
-  if (!parsed.ok) return parsed;
-  return createEvaluatorFromBuild(parsed.value, opts);
 }
 
 export function evaluateVoxelWorldRegions(
   input: unknown,
   opts: VoxelWorldRegionOptions,
 ): VoxelWorldRegionEvaluation {
-  const evaluator = createVoxelWorldRegionEvaluator(input, opts);
-  if (!evaluator.ok) return evaluator;
-  return { ok: true, warnings: evaluator.value.warnings, regions: evaluator.value.regions };
+  const parsed = parseVoxelBuildSpec(input);
+  if (!parsed.ok) return parsed;
+  return evaluateRegionsFromBuild(parsed.value, opts);
 }
 
 // retain the compact source while counting disjoint regions without expanding the world
 export function summarizeVoxelWorldRegions(input: unknown, opts: VoxelWorldRegionOptions) {
   const parsed = parseVoxelBuildSpec(input);
   if (!parsed.ok) return parsed;
-  const evaluator = createEvaluatorFromBuild(parsed.value, opts);
+  const evaluator = evaluateRegionsFromBuild(parsed.value, opts);
   if (!evaluator.ok) return evaluator;
   let blockCount = 0;
   let bounds: { origin: VoxelPoint; size: VoxelPoint } | null = null;
-  for (const region of evaluator.value.regions) {
+  for (const region of evaluator.regions) {
     blockCount += region.blockCount;
     if (!bounds) {
       bounds = { origin: { ...region.origin }, size: { ...region.size } };
@@ -820,5 +748,5 @@ export function summarizeVoxelWorldRegions(input: unknown, opts: VoxelWorldRegio
       bounds.size[axis] = end - bounds.origin[axis];
     }
   }
-  return { ok: true as const, value: { build: parsed.value, warnings: evaluator.value.warnings, blockCount, bounds } };
+  return { ok: true as const, value: { build: parsed.value, warnings: evaluator.warnings, blockCount, bounds } };
 }

@@ -18,7 +18,7 @@ import {
 } from "@/lib/gallery/service";
 
 const mutationSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("generation_published"), publicId: z.string().min(1).max(100) }),
+  z.object({ type: z.literal("generation_published"), publicId: z.string().min(1).max(100), prompt: z.string().trim().min(1).max(800).optional() }),
   z.object({ type: z.literal("candidate_hidden"), publicId: z.string().min(1).max(100), hidden: z.boolean() }),
   z.object({ type: z.literal("example_hidden"), exampleId: z.string().min(1).max(100) }),
   z.object({
@@ -64,7 +64,7 @@ export async function mutateGalleryAdmin(input: unknown) {
     const actorId = await adminId();
     switch (parsed.data.type) {
       case "generation_published":
-        await publishAdminGeneration(actorId, parsed.data.publicId);
+        await publishAdminGeneration(actorId, parsed.data.publicId, parsed.data.prompt);
         break;
       case "candidate_hidden":
         await setGalleryCandidateHidden(actorId, parsed.data.publicId, parsed.data.hidden);
@@ -137,13 +137,13 @@ export async function removeArenaReviewVotes(sessionId: string, voteIds: string[
   }
 }
 
-export async function blockArenaReviewSession(sessionId: string, blocked: boolean) {
-  const parsed = z.object({ sessionId: sessionSchema, blocked: z.boolean() }).safeParse({ sessionId, blocked });
+export async function blockArenaReviewSession(sessionId: string, blocked: boolean, reviewedSince?: string, reviewedUntil?: string, reviewedUserId?: string | null) {
+  const parsed = z.object({ sessionId: sessionSchema, blocked: z.boolean(), reviewedSince: z.string().datetime().optional(), reviewedUntil: z.string().datetime().optional(), reviewedUserId: z.string().max(191).nullable().optional() }).safeParse({ sessionId, blocked, reviewedSince, reviewedUntil, reviewedUserId });
   if (!parsed.success) return { ok: false as const, error: "Invalid vote restriction." };
   try {
-    await setArenaVoteSessionBlocked(await adminId(), parsed.data.sessionId, parsed.data.blocked);
+    const { label } = await setArenaVoteSessionBlocked(await adminId(), parsed.data.sessionId, parsed.data.blocked, parsed.data.reviewedSince, parsed.data.reviewedUntil, parsed.data.reviewedUserId);
     refreshGalleryAdmin();
-    return { ok: true as const };
+    return { ok: true as const, label };
   } catch (error) {
     return { ok: false as const, error: actionError(error) };
   }

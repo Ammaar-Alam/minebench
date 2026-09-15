@@ -91,23 +91,6 @@ export function reservePackedVoxelBlocks(packed: PackedVoxelBlocks, capacity: nu
   ensurePackedCapacity(packed, Math.ceil(capacity), true);
 }
 
-export function appendCoalescedVoxelBox(boxes: VoxelBox[], box: VoxelBox): void {
-  const last = boxes.at(-1);
-  if (last?.type === box.type && box.x1 <= box.x2 && box.y1 <= box.y2 && box.z1 <= box.z2 && last.x1 <= last.x2 && last.y1 <= last.y2 && last.z1 <= last.z2) {
-    for (const axis of ["x", "y", "z"] as const) {
-      const min = `${axis}1` as const;
-      const max = `${axis}2` as const;
-      if (last[max] + 1 !== box[min] && box[max] + 1 !== last[min]) continue;
-      const others = axis === "x" ? ["y", "z"] as const : axis === "y" ? ["x", "z"] as const : ["x", "y"] as const;
-      if (others.some((other) => last[`${other}1`] !== box[`${other}1`] || last[`${other}2`] !== box[`${other}2`])) continue;
-      last[min] = Math.min(last[min], box[min]);
-      last[max] = Math.max(last[max], box[max]);
-      return;
-    }
-  }
-  boxes.push(box);
-}
-
 function boxFitsInt16(box: VoxelBox): boolean {
   return (
     box.x1 >= INT16_MIN && box.x1 <= INT16_MAX &&

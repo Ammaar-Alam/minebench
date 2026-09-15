@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import vm from "node:vm";
+import * as vm from "node:vm";
 
 import {
   DEFAULT_VOXEL_EXEC_TIMEOUT_MS,
@@ -13,37 +13,46 @@ import { unpackVoxelBlocks, unpackVoxelBoxes } from "../../../lib/voxel/packedBl
 
 const originalOutputDir = process.env.MINEBENCH_TOOL_OUTPUT_DIR;
 const originalTmpDir = process.env.TMPDIR;
+const originalTimeoutMs = process.env.MINEBENCH_TOOL_TIMEOUT_MS;
 const testRoot = mkdtempSync(join(tmpdir(), "minebench-voxel-exec-test-"));
 const artifactDir = join(testRoot, "artifacts");
+
+// capture the actual VM deadline since successful execution alone would miss a wrong timeout
+const originalRunInContext = vm.Script.prototype.runInContext;
+function captureTimeout(run: () => void): number | undefined {
+  let lastTimeout: number | undefined;
+  vm.Script.prototype.runInContext = function (
+    this: vm.Script,
+    ctx: vm.Context,
+    options?: { timeout?: number },
+  ) {
+    lastTimeout = options?.timeout;
+    return originalRunInContext.call(this, ctx, options);
+  };
+  try {
+    run();
+  } finally {
+    vm.Script.prototype.runInContext = originalRunInContext;
+  }
+  return lastTimeout;
+}
 
 try {
   delete process.env.MINEBENCH_TOOL_OUTPUT_DIR;
 
   assert.equal(DEFAULT_VOXEL_EXEC_TIMEOUT_MS, 30_000);
-  const originalRun = vm.Script.prototype.runInContext;
-  const originalTimeout = process.env.MINEBENCH_TOOL_TIMEOUT_MS;
-  const timeouts: Array<number | undefined> = [];
-  vm.Script.prototype.runInContext = function (context, options) {
-    timeouts.push(typeof options === "object" ? options.timeout : undefined);
-    return originalRun.call(this, context, options);
-  };
-  try {
+  for (const gridSize of [512, 8192] as const) {
     delete process.env.MINEBENCH_TOOL_TIMEOUT_MS;
-    for (const gridSize of [512, 8192] as const) {
+    assert.equal(captureTimeout(() => {
       const result = runVoxelExec({
         code: 'const Math = { floor: () => 7 }; block(Math.floor(), 0, 0, "stone");',
         gridSize, palette: "simple",
       });
       assert.equal((result.build.packed ? unpackVoxelBlocks(result.build.packed) : result.build.blocks)[0]?.x, 7);
-    }
-    process.env.MINEBENCH_TOOL_TIMEOUT_MS = "120000";
-    runVoxelExec({ code: "", gridSize: 8192, palette: "simple" });
-    assert.deepEqual(timeouts, [30_000, LARGE_WORLD_VOXEL_EXEC_TIMEOUT_MS, 120_000]);
-  } finally {
-    vm.Script.prototype.runInContext = originalRun;
-    if (originalTimeout === undefined) delete process.env.MINEBENCH_TOOL_TIMEOUT_MS;
-    else process.env.MINEBENCH_TOOL_TIMEOUT_MS = originalTimeout;
+    }), gridSize > 512 ? LARGE_WORLD_VOXEL_EXEC_TIMEOUT_MS : DEFAULT_VOXEL_EXEC_TIMEOUT_MS);
   }
+  process.env.MINEBENCH_TOOL_TIMEOUT_MS = "120000";
+  assert.equal(captureTimeout(() => runVoxelExec({ code: "", gridSize: 8192, palette: "simple" })), 120_000);
 
   for (const [name, code, countKey] of [
     ["MINEBENCH_TOOL_MAX_BLOCKS", 'block(0,0,0,"stone");', "blockCount"],
@@ -63,6 +72,26 @@ try {
       else process.env[name] = originalLimit;
     }
   }
+
+  const baseArgs = {
+    code: 'block(1, 2, 3, "stone");',
+    gridSize: 64,
+    palette: "simple",
+    seed: 123,
+  } as const;
+
+  for (const [configured, expected] of [
+    [undefined, DEFAULT_VOXEL_EXEC_TIMEOUT_MS], ["30s", DEFAULT_VOXEL_EXEC_TIMEOUT_MS],
+    ["", DEFAULT_VOXEL_EXEC_TIMEOUT_MS], ["-1", DEFAULT_VOXEL_EXEC_TIMEOUT_MS],
+    ["5000", 5000], ["1", 250], ["999999999", 60_000],
+  ] as const) {
+    if (configured === undefined) delete process.env.MINEBENCH_TOOL_TIMEOUT_MS;
+    else process.env.MINEBENCH_TOOL_TIMEOUT_MS = configured;
+    assert.equal(captureTimeout(() => runVoxelExec(baseArgs)), expected, `timeout setting: ${configured}`);
+  }
+
+  // Leave the env clean for the outputDir checks below.
+  delete process.env.MINEBENCH_TOOL_TIMEOUT_MS;
 
   const inMemoryRun = runVoxelExec({
     code: 'block(1, 2, 3, "stone");',
@@ -122,6 +151,11 @@ try {
 
   console.log("voxel exec runtime checks passed");
 } finally {
+  if (originalTimeoutMs === undefined) {
+    delete process.env.MINEBENCH_TOOL_TIMEOUT_MS;
+  } else {
+    process.env.MINEBENCH_TOOL_TIMEOUT_MS = originalTimeoutMs;
+  }
   if (originalOutputDir === undefined) {
     delete process.env.MINEBENCH_TOOL_OUTPUT_DIR;
   } else {

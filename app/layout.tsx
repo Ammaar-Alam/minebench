@@ -151,7 +151,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </div>
           </div>
           <Analytics />
-          <SpeedInsights />
+          <SpeedInsights sampleRate={0.1} />
           <PublicPresence />
         </VoxelExplorerProvider>
       </body>

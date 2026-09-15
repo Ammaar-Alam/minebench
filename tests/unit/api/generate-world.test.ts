@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { POST } from "../../../app/api/generate/route";
 import type { GenerateEvent } from "../../../lib/ai/types";
-import { createLocalVoxelWorldForTest } from "../../../lib/voxel/localWorld";
 
 async function main() {
   const originalFetch = globalThis.fetch;
@@ -9,6 +8,7 @@ async function main() {
   process.env.VERCEL_ENV = "preview";
   try {
     for (const gridSize of [256, 2048, 8192]) {
+      let providerRequests = 0;
       const call = {
         tool: "voxel.exec",
         input: {
@@ -16,10 +16,13 @@ async function main() {
           code: 'for(let i=0;i<12000;i++) block(i%120,Math.floor(i/120),0,"stone"); box(0,0,4,3,3,7,"glass");',
         },
       };
-      globalThis.fetch = async () => new Response(
+      globalThis.fetch = async () => {
+        providerRequests += 1;
+        return new Response(
         `data: ${JSON.stringify({ choices: [{ delta: { content: JSON.stringify(call) } }] })}\n\ndata: [DONE]\n\n`,
         { headers: { "Content-Type": "text/event-stream" } },
       );
+      };
       const response = await POST(new Request("http://localhost:3000/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -28,6 +31,11 @@ async function main() {
           modelKeys: ["qwen_qwen3_8_max"], providerKeys: { openrouter: "test-openrouter-key" },
         }),
       }));
+      if (gridSize > 512) {
+        assert.equal(response.status, 400);
+        assert.equal(providerRequests, 0, "oversized anonymous requests never call a provider");
+        continue;
+      }
       assert.equal(response.status, 200);
       const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line)) as GenerateEvent[];
       assert.deepEqual(events.filter((event) => event.type === "error"), []);
@@ -35,24 +43,15 @@ async function main() {
       assert.ok(result);
       assert.equal(result.modelKey, "qwen_qwen3_8_max");
       assert.equal(result.metrics.blockCount, 12_064);
-      if (gridSize <= 512) {
-        assert.equal(result.voxelBuild.blocks.length, 12_000);
-        assert.equal(result.voxelBuild.boxes?.length, 1);
-        continue;
-      }
-      const world = await createLocalVoxelWorldForTest(result.voxelBuild, { gridSize, palette: "simple" });
-      assert.equal(world.blockCount, result.metrics.blockCount);
       assert.equal(result.voxelBuild.blocks.length, 12_000);
       assert.equal(result.voxelBuild.boxes?.length, 1);
-      assert.equal(result.voxelBuild.packed, undefined);
-      assert.equal(result.voxelBuild.packedBoxes, undefined);
     }
   } finally {
     globalThis.fetch = originalFetch;
     if (originalVercelEnv === undefined) delete process.env.VERCEL_ENV;
     else process.env.VERCEL_ENV = originalVercelEnv;
   }
-  console.log("anonymous world generation serialization checks passed");
+  console.log("anonymous generation size boundary checks passed");
 }
 
 void main().catch((error) => { console.error(error); process.exitCode = 1; });

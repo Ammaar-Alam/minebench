@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { PrismaClient, type CustomBuildStatus } from "@prisma/client";
+import { sha256Hex } from "../../../lib/custom-builds/hash";
+import { voxelWorldPartSourceSha256 } from "../../../lib/custom-builds/worldArtifacts";
 
 async function main() {
   if (!process.env.MINEBENCH_TEST_SCHEMA) {
@@ -16,6 +18,8 @@ async function main() {
   const suspendedId = randomUUID();
   const now = new Date("2026-09-05T16:00:00.000Z");
   const userIds = [adminId, ownerId, nonAdminId, suspendedId];
+  const previousEncryptionSecret = process.env.CUSTOM_BUILD_KEY_ENCRYPTION_SECRET;
+  process.env.CUSTOM_BUILD_KEY_ENCRYPTION_SECRET = "admin-publish-test-encryption-secret";
 
   const {
     addGalleryExample,
@@ -25,9 +29,12 @@ async function main() {
     submitGalleryCandidate,
   } = await import("../../../lib/gallery/service");
   const {
+    createSavedGenerations,
+    getAdminGenerationArtifact,
     listAdminGenerations,
     publishAdminGeneration,
     removeSavedGeneration,
+    retrySavedGeneration,
   } = await import("../../../lib/generations/service");
 
   async function createBuild(
@@ -108,6 +115,29 @@ async function main() {
       ],
     });
 
+    for (const gridSize of [2048, 8192] as const) {
+      const input = {
+        ownerId, prompt: "A large observatory", gridSize, palette: "simple" as const,
+        models: [{ id: "large", kind: "catalog" as const, modelKey: "openai_gpt_5_4_mini" as const }],
+        providerKeys: { openai: "request-only-test-secret" },
+      };
+      await assert.rejects(() => createSavedGenerations(input), (error: unknown) =>
+        error instanceof GalleryServiceError && error.code === "forbidden");
+      assert.equal(await db.customBuild.count({ where: { ownerId } }), 0);
+      assert.equal((await db.user.findUniqueOrThrow({ where: { id: ownerId } })).totalGenerationCount, 0);
+      const [large] = await createSavedGenerations({ ...input, ownerId: adminId });
+      assert.equal(large!.gridSize, gridSize);
+      await db.customBuild.update({
+        where: { publicId: large!.id }, data: { status: "failed", errorRetryable: true, errorCode: "provider_error" },
+      });
+      await db.user.update({ where: { id: adminId }, data: { isMineBenchAdmin: false } });
+      await assert.rejects(() => retrySavedGeneration(adminId, large!.id, { providerKey: "retry-test-secret" }),
+        (error: unknown) => error instanceof GalleryServiceError && error.code === "forbidden");
+      assert.equal((await db.customBuild.findUniqueOrThrow({ where: { publicId: large!.id } })).status, "failed");
+      await db.user.update({ where: { id: adminId }, data: { isMineBenchAdmin: true } });
+      assert.equal((await retrySavedGeneration(adminId, large!.id, { providerKey: "retry-test-secret" })).status, "queued");
+    }
+
     const importedIds: string[] = [];
     for (const label of ["first_import", "second_import"]) {
       const imported = await createBuild(label);
@@ -122,11 +152,11 @@ async function main() {
       );
       await assert.rejects(
         () => publishAdminGeneration(adminId, imported.publicId),
-        (error: unknown) => error instanceof GalleryServiceError && error.code === "generation_not_available",
+        (error: unknown) => error instanceof GalleryServiceError && error.code === "invalid_prompt",
       );
       assert.equal(
         (await listAdminGenerations(adminId, { ownerId })).items.find((item) => item.id === imported.publicId)?.canPublish,
-        false,
+        true,
       );
     }
     assert.equal(await db.galleryCandidate.count({ where: { promptText: "Imported build" } }), 0);
@@ -136,9 +166,85 @@ async function main() {
         () => addGalleryExample(ownerId, importCandidate.candidate.id, { generationId, postAnonymously: true }),
         (error: unknown) => error instanceof GalleryServiceError && error.code === "generation_mismatch",
       );
+      await assert.rejects(
+        () => addGalleryExample(ownerId, importCandidate.candidate.id, { generationId, postAnonymously: true }, { adminId: nonAdminId, prompt: "Imported build" }),
+        (error: unknown) => error instanceof GalleryServiceError && error.code === "forbidden",
+      );
     }
     assert.equal(await db.galleryExample.count({ where: { candidate: { publicId: importCandidate.candidate.id } } }), 0);
     await db.galleryCandidate.delete({ where: { publicId: importCandidate.candidate.id } });
+
+    for (const prompt of ["Imported build", "  IMPORTED   BUILD  ", "x".repeat(801)]) {
+      await assert.rejects(() => publishAdminGeneration(adminId, importedIds[0]!, prompt),
+        (error: unknown) => error instanceof GalleryServiceError && error.code === "invalid_prompt");
+    }
+    const importedPublications = [];
+    for (const [index, publicId] of importedIds.entries()) {
+      const prompt = `A curated imported observatory ${index} ${suffix}`;
+      const published = await publishAdminGeneration(adminId, publicId, prompt);
+      importedPublications.push(published);
+      const row = await db.customBuild.findUniqueOrThrow({ where: { publicId } });
+      assert.equal(row.generationMode, "import");
+      assert.equal(row.modelKind, "import");
+      assert.equal(row.promptText, prompt);
+      assert.equal(row.promptSha256, sha256Hex(prompt));
+      const candidate = await getGalleryCandidate(published.candidateId);
+      assert.deepEqual(candidate?.cover?.model, { kind: "custom", label: "Imported build" });
+      assert.deepEqual(await publishAdminGeneration(adminId, publicId, "A changed description"), { ...published, created: false });
+      assert.equal((await db.customBuild.findUniqueOrThrow({ where: { publicId } })).promptText, prompt);
+    }
+    assert.notEqual(importedPublications[0]!.candidateId, importedPublications[1]!.candidateId);
+    const matchingImport = await createBuild("matching_import");
+    await db.customBuild.update({
+      where: { id: matchingImport.id }, data: { generationMode: "import", modelKind: "import", promptText: "Imported build" },
+    });
+    const matching = await publishAdminGeneration(adminId, matchingImport.publicId, `A CURATED imported observatory 1 ${suffix}`);
+    assert.equal(matching.candidateId, importedPublications[1]!.candidateId);
+    assert.equal((await getGalleryCandidate(matching.candidateId))?.exampleCount, 2);
+    const matchingRow = await db.customBuild.findUniqueOrThrow({ where: { id: matchingImport.id } });
+    assert.equal(matchingRow.promptText, `A curated imported observatory 1 ${suffix}`);
+    assert.equal(matchingRow.promptSha256, sha256Hex(matchingRow.promptText));
+    const concurrentImport = await createBuild("concurrent_import");
+    await db.customBuild.update({
+      where: { id: concurrentImport.id }, data: { generationMode: "import", modelKind: "import", promptText: "Imported build" },
+    });
+    const publications = await Promise.allSettled(Array.from({ length: 6 }, (_, index) =>
+      publishAdminGeneration(adminId, concurrentImport.publicId, `Concurrent imported landscape ${index} ${suffix}`)));
+    assert.ok(publications.some((result) => result.status === "fulfilled" && result.value.created));
+    for (const result of publications) {
+      if (result.status === "rejected") {
+        assert.ok(result.reason instanceof GalleryServiceError && result.reason.code === "generation_not_available");
+      }
+    }
+    const concurrent = await db.customBuild.findUniqueOrThrow({
+      where: { id: concurrentImport.id }, include: { galleryExamples: { include: { candidate: true } } },
+    });
+    assert.equal(concurrent.galleryExamples.length, 1, "concurrent publication must attach an import to only one prompt");
+    assert.equal(concurrent.promptText, concurrent.galleryExamples[0]!.candidate.promptText);
+    assert.equal(concurrent.promptSha256, sha256Hex(concurrent.promptText));
+    const importedPublicId = importedIds[0]!;
+    const sourceBuildSha256 = "b".repeat(64);
+    await db.customBuildArtifact.updateMany({
+      where: { customBuild: { publicId: importedPublicId }, kind: "viewer_mbv4" },
+      data: { kind: "viewer_world", format: "json", contentType: "application/json" },
+    });
+    await db.customBuildArtifact.create({
+      data: {
+        customBuild: { connect: { publicId: importedPublicId } }, kind: "world_part", format: "mbv4", bucket: "builds",
+        path: `admin-publish/${suffix}/part.mbv4`, contentType: "application/octet-stream", fileName: "part.mbv4",
+        sha256: "e".repeat(64), sourceBuildSha256: voxelWorldPartSourceSha256(sourceBuildSha256, "region-0"),
+        byteSize: 60, storedByteSize: 60,
+      },
+    });
+    assert.equal((await getAdminGenerationArtifact(adminId, importedPublicId, ["viewer_world"]))?.sourceBuildSha256, sourceBuildSha256);
+    assert.ok(await getAdminGenerationArtifact(adminId, importedPublicId, ["world_part"], { sourceBuildSha256, partKey: "region-0" }));
+    assert.equal(await getAdminGenerationArtifact(adminId, importedPublicId, ["world_part"], { sourceBuildSha256, partKey: "another-region" }), null);
+    await assert.rejects(() => getAdminGenerationArtifact(nonAdminId, importedPublicId, ["viewer_world"]),
+      (error: unknown) => error instanceof GalleryServiceError && error.code === "forbidden");
+    await removeSavedGeneration(ownerId, importedPublicId, { acknowledgePublicExamples: true });
+    assert.equal(await getAdminGenerationArtifact(adminId, importedPublicId, ["viewer_world"]), null);
+    assert.equal(await getAdminGenerationArtifact(adminId, importedPublicId, ["world_part"], { sourceBuildSha256, partKey: "region-0" }), null);
+    assert.equal((await getGalleryCandidate(importedPublications[0]!.candidateId))?.exampleCount, 0);
 
     const build = await createBuild("ready");
     assert.equal(
@@ -157,7 +263,7 @@ async function main() {
     assert.deepEqual(repeated, { ...published, created: false });
     assert.equal(await db.galleryExample.count({ where: { customBuildId: build.id } }), 1);
     assert.equal(await db.galleryModerationRecord.count({
-      where: { action: "generation_published", actorUserId: adminId, subjectUserId: ownerId },
+      where: { action: "generation_published", actorUserId: adminId, subjectUserId: ownerId, exampleId: published.exampleId },
     }), 1);
 
     const candidateRow = await db.galleryCandidate.findUniqueOrThrow({
@@ -268,6 +374,8 @@ async function main() {
 
     console.log("Admin generation publish checks passed");
   } finally {
+    if (previousEncryptionSecret === undefined) delete process.env.CUSTOM_BUILD_KEY_ENCRYPTION_SECRET;
+    else process.env.CUSTOM_BUILD_KEY_ENCRYPTION_SECRET = previousEncryptionSecret;
     await db.galleryModerationRecord.deleteMany({
       where: { OR: [{ actorUserId: { in: userIds } }, { subjectUserId: { in: userIds } }] },
     });

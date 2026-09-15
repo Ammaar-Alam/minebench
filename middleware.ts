@@ -451,12 +451,5 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|api/local/voxel-exec$).*)",
-    {
-      source: "/api/local/voxel-exec",
-      // next buffers middleware bodies so local source uploads stream directly to the route
-      missing: [{ type: "header", key: "content-type", value: "application/vnd.minebench.build\\+json" }],
-    },
-  ],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };

@@ -1,6 +1,6 @@
 "use client";
 
-import { GRID_SIZES, isGridSize, MAX_GENERATION_PROMPT_CHARS, type GridSize } from "@/lib/ai/limits";
+import { GRID_SIZES, PUBLIC_GRID_SIZES, isGridSize, MAX_GENERATION_PROMPT_CHARS, type GridSize } from "@/lib/ai/limits";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { MODEL_CATALOG, ModelKey } from "@/lib/ai/modelCatalog";
@@ -26,6 +26,7 @@ import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import { GenerationPreflightDialog } from "@/components/sandbox/GenerationPreflightDialog";
 import { GenerationGalleryButton } from "@/components/gallery/GenerationGalleryButton";
+import { isSavedGenerationRecovery } from "@/lib/generations/retry";
 import { readBuildVariantPayload } from "@/lib/arena/clientBuildResponse";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import {
@@ -577,7 +578,8 @@ function customBuildPalette(value: string, fallback: Palette): Palette {
   return value === "advanced" ? "advanced" : value === "simple" ? "simple" : fallback;
 }
 
-function customBuildRetryProvider(status: SavedGenerationPayload): keyof ProviderApiKeys {
+function customBuildRetryProvider(status: SavedGenerationPayload): keyof ProviderApiKeys | undefined {
+  if (isSavedGenerationRecovery(status.error?.code, status.imported)) return undefined;
   if (status.model.transport === "openrouter") return "openrouter";
   if (status.model.transport === "custom") return "custom";
   return status.model.provider as keyof ProviderApiKeys;
@@ -586,6 +588,7 @@ function customBuildRetryProvider(status: SavedGenerationPayload): keyof Provide
 export function SandboxLive({
   initialPrompt,
   signedIn,
+  allowLargeWorlds = false,
   anonymousServerKeysEnabled,
   hostedGeminiEnabled,
   hostedGeminiAvailable,
@@ -594,6 +597,7 @@ export function SandboxLive({
 }: {
   initialPrompt?: string;
   signedIn: boolean;
+  allowLargeWorlds?: boolean;
   anonymousServerKeysEnabled: boolean;
   hostedGeminiEnabled: boolean;
   hostedGeminiAvailable: boolean;
@@ -1239,7 +1243,7 @@ export function SandboxLive({
     setRunning(true);
     setRequestError(null);
     try {
-      const requestModel = customBuildRequestModel(model);
+      const requestModel = existing.retryProvider ? customBuildRequestModel(model) : undefined;
       const response = await fetch(
         `/api/generations/${encodeURIComponent(existing.customBuildId)}/retry`,
         {
@@ -1248,11 +1252,11 @@ export function SandboxLive({
           signal: abortController.signal,
           body: JSON.stringify({
             ...(providerKey ? { providerKey } : {}),
-            ...(requestModel.kind === "custom" && requestModel.provider === "custom"
+            ...(requestModel?.kind === "custom" && requestModel.provider === "custom"
               ? { customBaseUrl: requestModel.baseUrl }
               : {}),
-            customHeaders: requestModel.headers,
-            customBody: requestModel.body,
+            customHeaders: requestModel?.headers,
+            customBody: requestModel?.body,
           }),
         },
       );
@@ -1981,7 +1985,7 @@ export function SandboxLive({
                 value={gridSize}
                 onChange={(e) => setGridSize(Number(e.target.value) as GridSize)}
               >
-                {GRID_SIZES.map((size) => (
+                {(allowLargeWorlds ? GRID_SIZES : PUBLIC_GRID_SIZES).map((size) => (
                   <option key={size} value={size}>{size}³</option>
                 ))}
               </select>

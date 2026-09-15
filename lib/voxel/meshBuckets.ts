@@ -207,14 +207,3 @@ export function serializeBucket(bucket: MeshBucket): SerializedMeshBucket | null
 
   return { positions, normals, uvs, colors, indices };
 }
-
-export function bucketTransferables(bucket: SerializedMeshBucket | null): ArrayBuffer[] {
-  if (!bucket) return [];
-  return [
-    bucket.positions.buffer,
-    bucket.normals.buffer,
-    bucket.uvs.buffer,
-    bucket.colors.buffer,
-    bucket.indices.buffer,
-  ] as ArrayBuffer[];
-}

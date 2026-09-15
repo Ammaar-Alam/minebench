@@ -136,3 +136,19 @@ function getServerSnapshot(): Health {
 export function useSiteHealth(): Health {
   return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }
+
+/** @internal — test-only: reset module state between cases (each test file runs in its own process). */
+export function __resetApiHealth(): void {
+  failures.length = 0;
+  degradedSince = null;
+  health = { degraded: false, failureCount: 0, lastFailureAt: null };
+  if (recoveryTimer) {
+    clearTimeout(recoveryTimer);
+    recoveryTimer = null;
+  }
+}
+
+/** @internal — test-only: read the same snapshot useSiteHealth() feeds the banner. */
+export function __getHealthForTesting(): Health {
+  return health;
+}

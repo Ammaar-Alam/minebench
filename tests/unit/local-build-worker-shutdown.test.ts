@@ -64,7 +64,7 @@ function startWorker(createLocalVoxelWorld: (source: unknown, options: { signal:
 
 const flushWorker = () => new Promise<void>((resolve) => setImmediate(resolve));
 const parse = (requestId: number): Message => ({
-  type: "parse", requestId, rawText: "", file: { size: 10 },
+  type: "parse", requestId, allowLargeWorlds: true, rawText: "", file: { size: 10 },
   gridSize: 1024, palette: "simple", maxBlocksByGrid: { 1024: 100 },
 });
 

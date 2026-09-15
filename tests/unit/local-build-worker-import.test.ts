@@ -53,8 +53,8 @@ function startWorker(
     inputs,
     delays,
     get maxJsonParseChars() { return maxJsonParseChars; },
-    parse: (rawText: string) => scope.onmessage({ data: {
-      type: "parse", requestId: 1, rawText, gridSize: 2048, palette: "simple", maxBlocksByGrid: { 2048: Number.MAX_SAFE_INTEGER },
+    parse: (rawText: string, allowLargeWorlds = true, gridSize = 2048) => scope.onmessage({ data: {
+      type: "parse", requestId: 1, rawText, allowLargeWorlds, gridSize, palette: "simple", maxBlocksByGrid: { 2048: Number.MAX_SAFE_INTEGER },
     } }),
     cancel: () => scope.onmessage({ data: { type: "cancel", requestId: 1 } }),
   };
@@ -104,6 +104,12 @@ async function main() {
   }
 
   const tool = { tool: "voxel.exec", input: { code: "return build", gridSize: 8192, palette: "advanced" } };
+  for (const gridSize of [256, 2048]) {
+    const restricted = startWorker(undefined, async () => { throw new Error("must reject before execution"); });
+    await restricted.parse(JSON.stringify(tool), false, gridSize);
+    assert.match(restricted.messages.find((message) => message.type === "error")?.message ?? "", /admin access/);
+    assert.equal(restricted.inputs.length, 0, "denied imports never prepare a world");
+  }
   let executions = 0;
   const toolWorker: ReturnType<typeof startWorker> = startWorker(undefined, async (_input, init) => {
     executions += 1;

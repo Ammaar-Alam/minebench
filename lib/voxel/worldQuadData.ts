@@ -132,19 +132,6 @@ export function serializeWorldQuadBucket(bucket: WorldQuadBucket): Uint32Array |
   return words;
 }
 
-export function worldQuadAoLevel(value: number): 0 | 1 | 2 | 3 {
-  return Math.max(0, Math.min(3, Math.round((value - 0.58) / 0.14))) as 0 | 1 | 2 | 3;
-}
-
-export function packWorldQuadAo(ambientOcclusion?: readonly [number, number, number, number]): number {
-  let packed = 0;
-  for (let corner = 0; corner < 4; corner += 1) {
-    const level = ambientOcclusion ? worldQuadAoLevel(ambientOcclusion[corner]!) : 3;
-    packed |= level << (corner * 2);
-  }
-  return packed;
-}
-
 export function worldQuadFlipDiagonal(tintIndex: WorldQuadTintIndex, packedAoByte: number): 0 | 1 {
   const offset = tintIndex * WORLD_QUAD_AO_LEVELS.length;
   const l0 = WORLD_QUAD_LUMINANCE[offset + (packedAoByte & 0x3)]!;

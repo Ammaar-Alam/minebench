@@ -11,7 +11,6 @@ import { getModelByKey, ModelKey } from "@/lib/ai/modelCatalog";
 import { assertSafeCustomApiUrl } from "@/lib/ai/providers/customApiGuard";
 import type { GenerateEvent, GenerateModelRequest, GenerateRequest } from "@/lib/ai/types";
 import { publishGenerationError, publishGenerationSuccess } from "@/lib/observability/cloudwatch";
-import { voxelBuildSourceJsonChunks } from "@/lib/voxel/canonicalArtifact";
 
 export const runtime = "nodejs";
 
@@ -71,7 +70,7 @@ const modelRequestSchema = z.union([
 
 const reqSchema = z.object({
   prompt: z.string().min(1).max(MAX_GENERATION_PROMPT_CHARS, `Keep the prompt to ${MAX_GENERATION_PROMPT_CHARS} characters or fewer.`),
-  gridSize: z.custom<GridSize>(isGridSize),
+  gridSize: z.custom<GridSize>((value) => isGridSize(value) && value <= 512),
   palette: z.union([z.literal("simple"), z.literal("advanced")]),
   modelKeys: z.array(z.string()).min(1).max(8).optional(),
   models: z.array(modelRequestSchema).min(1).max(8).optional(),
@@ -187,14 +186,7 @@ export async function POST(req: Request) {
           console.log(`[ai debug] ${evt.modelKey} rawText:\n${evt.rawText}`);
         }
         try {
-          if (evt.type === "result" && body.gridSize > 512) {
-            const { voxelBuild, ...metadata } = evt;
-            controller.enqueue(encoder.encode(JSON.stringify(metadata).slice(0, -1) + ',"voxelBuild":'));
-            for (const chunk of voxelBuildSourceJsonChunks(voxelBuild)) controller.enqueue(chunk);
-            controller.enqueue(encoder.encode("}\n"));
-          } else {
-            controller.enqueue(encoder.encode(JSON.stringify(evt) + "\n"));
-          }
+          controller.enqueue(encoder.encode(JSON.stringify(evt) + "\n"));
         } catch {
           // client disconnected / stream already closed
           closed = true;

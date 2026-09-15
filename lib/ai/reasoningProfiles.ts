@@ -147,7 +147,7 @@ const EFFORT_LADDER_RULES: readonly EffortLadderRule[] = [
   },
   { ids: ["z-ai/glm-5.1", "z-ai/glm-5"], ladder: ["xhigh", "high", "medium", "low"] },
   {
-    ids: ["deepseek/deepseek-v4-flash-0731"],
+    ids: ["deepseek/deepseek-v4-flash-0731", "deepseek/deepseek-v4.1-flash"],
     ladder: ["max", "high", "low"],
     aliases: { xhigh: null },
     supported: "max, xhigh, high, low",
@@ -365,7 +365,7 @@ export function deepseekThinkingConfigForModel(
   override?: string,
 ): DeepSeekThinkingConfig | undefined {
   const normalized = normalizeReasoningOverride(override);
-  const isFlashModel = modelId === "deepseek-v4-flash";
+  const isFlashModel = modelId === "deepseek-v4-flash" || modelId === "deepseek-flash";
   const supportsThinking =
     modelId === "deepseek-v4-pro" ||
     isFlashModel ||
@@ -402,19 +402,25 @@ export function deepseekThinkingConfigForModel(
     return { type: "enabled", reasoningEffort: "high" };
   }
 
+  // Flash models are reachable via both the direct DeepSeek route and OpenRouter,
+  // and OpenRouter exposes no first-class reasoning disable for them (the
+  // effort ladder omits a disabling terminal, matching every other non-OpenAI
+  // reasoning family). Reject disabling tokens here so a dual-route flash model
+  // does not advertise/accept a capability the OpenRouter route hard-fails on.
   if (
-    normalized === "disabled" ||
-    normalized === "off" ||
-    normalized === "false" ||
-    normalized === "none" ||
-    normalized === "non-think" ||
-    normalized === "nonthinking"
+    !isFlashModel &&
+    (normalized === "disabled" ||
+      normalized === "off" ||
+      normalized === "false" ||
+      normalized === "none" ||
+      normalized === "non-think" ||
+      normalized === "nonthinking")
   ) {
     return { type: "disabled" };
   }
 
   throw new Error(
-    `DeepSeek model ${modelId} does not support reasoning '${override}'. Supported values: max, high${isFlashModel ? ", low" : ""}, disabled.`,
+    `DeepSeek model ${modelId} does not support reasoning '${override}'. Supported values: max, high${isFlashModel ? ", low" : ", disabled"}.`,
   );
 }
 

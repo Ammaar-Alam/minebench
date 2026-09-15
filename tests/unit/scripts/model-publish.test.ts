@@ -295,6 +295,61 @@ async function main() {
     delete process.env.SUPABASE_URL;
     delete process.env.SUPABASE_SERVICE_ROLE_KEY;
 
+    // The precompute uploads authenticate via getSupabaseSecretKey, which
+    // prefers SUPABASE_SECRET_KEY and falls back to SUPABASE_SERVICE_ROLE_KEY.
+    // The preflight must gate the storage-target comparison on that same
+    // resolution, so it runs whenever the precompute writes could authenticate
+    // — including the documented preferred-key configuration where the legacy
+    // key is unset. Otherwise a mismatched SUPABASE_URL would slip past the
+    // preflight and the precompute steps would overwrite another environment's
+    // storage before the later coverage probe halts the run.
+    process.env.SUPABASE_URL = "https://staleprojectref1234.supabase.co";
+    process.env.SUPABASE_SECRET_KEY = "test-secret-key";
+    await assert.rejects(
+      assertPublicationTargetsAgree("https://minebench.test"),
+      /Publication storage mismatch.*staleprojectref1234.*abcdefghijklmnop/,
+    );
+    delete process.env.SUPABASE_SECRET_KEY;
+
+    // A non-Supabase-parseable SUPABASE_URL (e.g. self-hosted Supabase behind a
+    // custom domain) must be refused in the preferred-key configuration too:
+    // the precompute writes can authenticate against it, so the preflight is
+    // the only guard positioned to refuse the unidentifiable target. With the
+    // legacy gate this case was silently skipped.
+    process.env.SUPABASE_URL = "https://storage.mycompany.io";
+    process.env.SUPABASE_SECRET_KEY = "test-secret-key";
+    await assert.rejects(
+      assertPublicationTargetsAgree("https://minebench.test"),
+      /could not be identified from SUPABASE_URL.*storage\.mycompany\.io/,
+    );
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_SECRET_KEY;
+
+    // Both key names set: the preferred SUPABASE_SECRET_KEY satisfies the gate,
+    // and a correctly targeted SUPABASE_URL must still pass. Opening the gate
+    // on the preferred key must not turn a correctly-targeted publish into a
+    // false refusal.
+    process.env.SUPABASE_URL = `https://${projectRef}.supabase.co`;
+    process.env.SUPABASE_SECRET_KEY = "test-secret-key";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role-key";
+    assert.deepEqual(await assertPublicationTargetsAgree("https://minebench.test"), {
+      matchupStateCacheTtlMs: 12_345,
+    });
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_SECRET_KEY;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+    // The legacy key alone still satisfies the fallback arm of the resolution,
+    // so a matching SUPABASE_URL with only SUPABASE_SERVICE_ROLE_KEY set must
+    // still pass — the fix must not regress operators on the legacy naming.
+    process.env.SUPABASE_URL = `https://${projectRef}.supabase.co`;
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role-key";
+    assert.deepEqual(await assertPublicationTargetsAgree("https://minebench.test"), {
+      matchupStateCacheTtlMs: 12_345,
+    });
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+
     globalThis.fetch = async () =>
       Response.json({
         db: deployedDb,
