@@ -215,7 +215,8 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
       type: toType(type),
     };
     boxCount += 1;
-    if (packedBoxes) appendPackedVoxelBox(packedBoxes, value);
+    // legacy canonical hashes depend on box insertion order
+    if (packedBoxes) appendPackedVoxelBox(packedBoxes, value, params.gridSize > 512);
     else boxes.push(value);
   };
   const line = (...args: unknown[]) => {

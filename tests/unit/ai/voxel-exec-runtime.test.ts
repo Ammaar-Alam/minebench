@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -10,6 +11,10 @@ import {
   runVoxelExec,
 } from "../../../lib/ai/tools/voxelExec";
 import { unpackVoxelBlocks, unpackVoxelBoxes } from "../../../lib/voxel/packedBlocks";
+
+import { getPalette } from "../../../lib/blocks/palettes";
+import { canonicalBuildJsonChunks } from "../../../lib/voxel/canonicalArtifact";
+import { validateOwnedVoxelBuild } from "../../../lib/voxel/validate";
 
 const originalOutputDir = process.env.MINEBENCH_TOOL_OUTPUT_DIR;
 const originalTmpDir = process.env.TMPDIR;
@@ -71,6 +76,24 @@ try {
       if (originalLimit === undefined) delete process.env[name];
       else process.env[name] = originalLimit;
     }
+  }
+
+  for (const gridSize of [32, 64, 256, 512] as const) {
+    const hashes = [false, true].map((packedOutput) => {
+      const executed = runVoxelExec({
+        code: 'box(0,0,0,1,0,0,"stone"); box(0,1,0,1,1,0,"stone");',
+        gridSize, palette: "simple", packedOutput,
+      });
+      const validated = validateOwnedVoxelBuild(executed.build, {
+        gridSize, palette: getPalette("simple"), maxBlocks: gridSize ** 3,
+        output: packedOutput ? "packed" : "objects",
+      });
+      assert.ok(validated.ok);
+      const hash = createHash("sha256");
+      for (const chunk of canonicalBuildJsonChunks(validated.value.build)) hash.update(chunk);
+      return hash.digest("hex");
+    });
+    assert.equal(hashes[1], hashes[0], `packed execution must preserve canonical insertion order for grid ${gridSize}`);
   }
 
   const baseArgs = {
