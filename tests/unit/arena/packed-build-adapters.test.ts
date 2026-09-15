@@ -11,6 +11,8 @@ import {
   type PreparedArenaBuild,
 } from "../../../lib/arena/buildArtifacts";
 import { ARENA_MESH_FACTS_MIN_BLOCKS } from "../../../lib/arena/types";
+import { getArenaArtifactMinBytes } from "../../../lib/arena/buildDeliveryPolicy";
+import { encodeArenaBuildStreamEvent, iterateArenaBuildStreamEvents } from "../../../lib/arena/buildStream";
 import { createVoxelMeshFacts } from "../../../lib/voxel/meshFacts";
 import {
   createPackedVoxelBlocks,
@@ -81,6 +83,55 @@ function preparedForTargets(fullBuild: RenderableVoxelBuild): PreparedArenaBuild
 }
 
 async function main() {
+  for (const count of [Math.ceil(getArenaArtifactMinBytes() / 34), 5, 0]) {
+    const blocks = Array.from({ length: count }, (_, index) => ({
+      x: index % 256,
+      y: Math.floor(index / 65_536),
+      z: Math.floor(index / 256) % 256,
+      type: index % 2 ? "stone" : "glass",
+    }));
+    const input = {
+      buildId: "packed-stream",
+      variant: "full" as const,
+      checksum: "c".repeat(64),
+      source: "artifact" as const,
+      serverValidated: true,
+      includePad: true,
+      durationMs: 12,
+    };
+    const objectEvents = iterateArenaBuildStreamEvents({
+      ...input,
+      build: { version: "1.0", blocks },
+    });
+    const packed = packedBuild(blocks);
+    const packedEvents = iterateArenaBuildStreamEvents({ ...input, build: packed });
+    const mixedEvents = iterateArenaBuildStreamEvents({
+      ...input,
+      build: { ...packed, blocks: [{ x: 1, y: 2, z: 3, type: "dirt" }] },
+    });
+    let received = 0;
+    let chunks = 0;
+    for (const expected of objectEvents) {
+      for (const events of [packedEvents, mixedEvents]) {
+        const actual = events.next();
+        assert.equal(actual.done, false);
+        if (actual.value.type === "hello") assert.equal(actual.value.totalBlocks, count);
+        assert.deepEqual(encodeArenaBuildStreamEvent(actual.value), encodeArenaBuildStreamEvent(expected));
+      }
+      if (expected.type === "chunk") {
+        received += expected.blocks.length;
+        chunks += 1;
+        assert.equal(expected.receivedBlocks, received);
+      } else if (expected.type === "hello" || expected.type === "complete") {
+        assert.equal(expected.totalBlocks, count);
+      }
+    }
+    assert.equal(received, count);
+    if (count * 34 >= getArenaArtifactMinBytes()) assert.ok(chunks > 1);
+    assert.equal(packedEvents.next().done, true);
+    assert.equal(mixedEvents.next().done, true);
+  }
+
   const cube: VoxelBuild = {
     version: "1.0",
     blocks: [],
