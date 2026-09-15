@@ -1,5 +1,6 @@
 "use client";
 
+import { isGridSize } from "@/lib/ai/limits";
 import Image from "next/image";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -17,6 +18,7 @@ import type { ProviderApiKeys } from "@/lib/ai/types";
 import { publishGenerationToGallery } from "@/lib/gallery/client";
 import { downloadSavedGenerationJson } from "@/lib/generations/download";
 import type { SavedGenerationPayload } from "@/lib/generations/service";
+import { isSavedGenerationRecovery } from "@/lib/generations/retry";
 import { formatBuildDuration, formatBuildJsonSize } from "@/lib/buildMetrics";
 
 const VoxelViewerCard = dynamic(
@@ -98,6 +100,7 @@ function GenerationActions({
   const [anonymous, setAnonymous] = useState(!hasNickname);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const canPublish = generation.status === "succeeded" && !suspended && !generation.imported;
 
   async function cancel() {
     setPending(true);
@@ -118,17 +121,15 @@ function GenerationActions({
     setPending(true);
     setMessage(null);
     try {
+      const recoveryOnly = isSavedGenerationRecovery(generation.error?.code, generation.imported, generation.hasSavedSource);
       const retryProvider = generation.model.transport === "openrouter"
         ? "openrouter"
         : generation.model.provider as keyof ProviderApiKeys;
-      if (generation.model.transport === "custom") {
-        throw new Error("Reconnect this model in Generate.");
-      }
-      const providerKey = loadProviderKeysFromStorage()[retryProvider]?.trim();
+      const providerKey = recoveryOnly ? undefined : loadProviderKeysFromStorage()[retryProvider]?.trim();
       const profileKey = generation.model.key
         ? `catalog:${generation.model.key}`
         : `openrouter:${generation.model.id}`;
-      const profile = loadModelRequestOverrideProfiles()[profileKey];
+      const profile = recoveryOnly ? undefined : loadModelRequestOverrideProfiles()[profileKey];
       const overrides = profile
         ? providerRequestOverridesFromEntries(profile.headers, profile.body)
         : {};
@@ -205,11 +206,11 @@ function GenerationActions({
         <div className="flex flex-wrap items-center gap-2">
           {(generation.status === "queued" || generation.status === "running") ? <button type="button" disabled={pending} className="mb-btn h-10" onClick={() => void cancel()}>Stop</button> : null}
           {generation.status === "failed" && generation.error?.retryable ? <button type="button" disabled={pending} className="mb-btn mb-btn-primary h-10" onClick={() => void retry()}>Retry</button> : null}
-          {generation.status === "succeeded" && !suspended ? <button type="button" disabled={pending || (!hasNickname && !anonymous)} className="mb-btn mb-btn-primary h-10" onClick={() => void submit()}>Add to Gallery</button> : null}
+          {canPublish ? <button type="button" disabled={pending || (!hasNickname && !anonymous)} className="mb-btn mb-btn-primary h-10" onClick={() => void submit()}>Add to Gallery</button> : null}
           <GenerationDownloadButton generation={generation} onError={setMessage} />
           <button type="button" disabled={pending} className="mb-btn h-10 text-muted hover:text-danger" onClick={() => void remove()}>Remove</button>
         </div>
-        {generation.status === "succeeded" && !suspended ? <label className="flex min-h-10 shrink-0 items-center gap-2 text-xs text-muted"><input type="checkbox" checked={anonymous} onChange={(event) => setAnonymous(event.target.checked)} />Post anonymously</label> : null}
+        {canPublish ? <label className="flex min-h-10 shrink-0 items-center gap-2 text-xs text-muted"><input type="checkbox" checked={anonymous} onChange={(event) => setAnonymous(event.target.checked)} />Post anonymously</label> : null}
       </div>
       {message ? <p role="status" className="text-sm text-muted">{message}</p> : null}
     </div>
@@ -291,7 +292,7 @@ export function SavedBuildDialog({
             title={generation.model.label}
             voxelBuild={build}
             expectedBlockCount={generation.blockCount ?? undefined}
-            gridSize={generation.gridSize === 64 || generation.gridSize === 512 ? generation.gridSize : 256}
+            gridSize={isGridSize(generation.gridSize) ? generation.gridSize : 256}
             palette={generation.palette === "advanced" ? "advanced" : "simple"}
             isLoading={loading}
             error={error ?? undefined}

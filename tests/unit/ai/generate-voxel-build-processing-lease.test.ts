@@ -41,6 +41,7 @@ async function main() {
 
   let acquired = 0;
   let released = 0;
+  let persistedResponse = false;
   let releaseSuccessfulBuild: (() => void) | undefined;
   const result = await generateVoxelBuild({
     modelKey: "qwen_qwen3_8_max",
@@ -51,8 +52,14 @@ async function main() {
     enableTools: true,
     providerKeys: { openrouter: "test-openrouter-key" },
     allowServerKeys: false,
-    returnExpandedBuild: true,
+    buildOutput: "objects",
+    onRawResponse: async () => {
+      persistedResponse = false;
+      await Promise.resolve();
+      persistedResponse = true;
+    },
     acquireBuildProcessing: async () => {
+      assert.equal(persistedResponse, true, "response persistence must finish before execution");
       acquired += 1;
       let didRelease = false;
       const release = () => {
@@ -76,6 +83,26 @@ async function main() {
 
   releaseSuccessfulBuild?.();
   assert.equal(released, 2, "the caller should release a successful build after artifact packaging");
+
+  const requestsBeforeFailure = requestCount;
+  const heapFailure = await generateVoxelBuild({
+    modelKey: "qwen_qwen3_8_max",
+    prompt: "stone tower",
+    gridSize: 64,
+    palette: "simple",
+    maxAttempts: 2,
+    providerKeys: { openrouter: "test-openrouter-key" },
+    allowServerKeys: false,
+    buildOutput: "packed",
+    processResponse: async () => { throw new Error("heap_limit_exceeded"); },
+    acquireBuildProcessing: async () => () => { released += 1; },
+  });
+  assert.equal(heapFailure.ok, false);
+  if (heapFailure.ok) throw new Error("expected a contained heap failure");
+  assert.equal(heapFailure.error, "heap_limit_exceeded");
+  assert.equal(requestCount, requestsBeforeFailure + 1, "heap failure must not buy another response");
+  assert.equal(released, 3, "isolated failure must release the finalization gate");
+  assert.equal(heapFailure.rawText, validToolCall);
 
   console.log("voxel build processing lease checks passed");
 }

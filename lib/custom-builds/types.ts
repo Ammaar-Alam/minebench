@@ -9,6 +9,8 @@ export type CustomBuildArtifactKind =
   | "preview_mbv4"
   | "viewer_mbv4"
   | "viewer_mbf1"
+  | "viewer_world"
+  | "world_part"
   | "preview_svg"
   | CustomBuildExportFormat;
 
@@ -20,6 +22,8 @@ export type CustomBuildArtifactFormat =
   | "txt"
   | "mbv4.gz"
   | "mbf1.gz"
+  | "world.json.gz"
+  | "world-part.gz"
   | "svg"
   | CustomBuildExportFormat;
 

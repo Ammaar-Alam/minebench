@@ -43,6 +43,8 @@ async function main() {
   const customBuildUpdates: Array<{ data: Record<string, unknown> }> = [];
   const secretDeletes: Array<{ where?: Record<string, unknown> }> = [];
   let queryCount = 0;
+  let artifactKind: string | undefined;
+  let parent = { status: "running", removedAt: null as Date | null };
   const txClient = {
     $queryRaw: async (...args: unknown[]) => {
       if (sqlText(args).includes('FROM "User"')) {
@@ -71,6 +73,16 @@ async function main() {
       }
       return [{ id: "failed-job", customBuildId: "custom-build-row", type: "generate" }];
     },
+    customBuildArtifact: {
+      findFirst: async (args: { where: {
+        kind: { in: string[] };
+        customBuild?: { removedAt: null; status: { in: string[] } };
+      } }) => {
+        const active = args.where.customBuild;
+        if (active && (parent.removedAt !== null || !active.status.in.includes(parent.status))) return null;
+        return artifactKind && args.where.kind.in.includes(artifactKind) ? { id: "saved-source" } : null;
+      },
+    },
     $executeRaw: async () => {
       operations.push("notificationDelivery.insert");
       return 0;
@@ -89,8 +101,13 @@ async function main() {
           completedAt: new Date(),
         };
       },
-      updateMany: async (args: { data: Record<string, unknown> }) => {
+      updateMany: async (args: {
+        where: { status: { in: string[] }; removedAt?: null };
+        data: Record<string, unknown>;
+      }) => {
         operations.push("customBuild.updateMany");
+        if (!args.where.status.in.includes(parent.status) ||
+          (args.where.removedAt === null && parent.removedAt !== null)) return { count: 0 };
         customBuildUpdates.push(args);
         return { count: 1 };
       },
@@ -118,7 +135,7 @@ async function main() {
   assert.equal(
     customBuildUpdates.every((update) => update.data.deletionPendingAt instanceof Date),
     true,
-    "terminal lease recovery should schedule cleanup for any partially persisted artifacts",
+    "expired jobs without reusable output should keep terminal cleanup",
   );
   assert.deepEqual(
     secretDeletes[0]?.where?.customBuildId,
@@ -156,8 +173,39 @@ async function main() {
     "$transaction.commit",
   ]);
 
+  for (const kind of ["preview_svg", "raw_text_debug", "build_json"]) {
+    artifactKind = kind;
+    queryCount = 0;
+    customBuildUpdates.length = 0;
+    operations.length = 0;
+    await recoverStaleCustomBuildJobLeases(rootClient as never);
+    const recoverable = kind !== "preview_svg";
+    assert.deepEqual(customBuildUpdates.map((update) => update.data.errorCode), ["provider_key_expired", "lease_expired"]);
+    for (const { data } of customBuildUpdates) {
+      assert.equal(data.status, "failed");
+      assert.equal(data.errorRetryable, recoverable, `${kind} recovery eligibility`);
+      assert.equal(data.deletionPendingAt === null, recoverable, `${kind} source retention`);
+    }
+    assert.equal(operations.filter((operation) => operation === "customBuildSecret.deleteMany").length, 3,
+      "retaining output must not retain expired provider credentials");
+    assert.equal(operations.filter((operation) => operation === "notificationDelivery.insert").length, 2,
+      "terminal expiry transitions notify even when saved output remains recoverable");
+  }
+  for (const state of [{ status: "canceled", removedAt: null }, { status: "running", removedAt: new Date() }]) {
+    parent = state;
+    queryCount = 0;
+    customBuildUpdates.length = 0;
+    operations.length = 0;
+    await recoverStaleCustomBuildJobLeases(rootClient as never);
+    assert.equal(customBuildUpdates.length, 0, "lease recovery must preserve cancellation and removal");
+    assert.equal(operations.includes("notificationDelivery.insert"), false, "unchanged builds must not notify");
+  }
+
   const terminalOperations: string[] = [];
   const parentFailures: Array<Record<string, unknown>> = [];
+  let attempts = 3;
+  artifactKind = undefined;
+  parent = { status: "running", removedAt: null };
   const terminalTx = {
     $queryRaw: async (...args: unknown[]) => {
       if (sqlText(args).includes('FROM "User"')) {
@@ -190,8 +238,13 @@ async function main() {
           completedAt: new Date(),
         };
       },
-      updateMany: async (args: { data: Record<string, unknown> }) => {
+      updateMany: async (args: {
+        where: { status: { in: string[] }; removedAt?: null };
+        data: Record<string, unknown>;
+      }) => {
         terminalOperations.push("customBuild.updateMany");
+        if (!args.where.status.in.includes(parent.status) ||
+          (args.where.removedAt === null && parent.removedAt !== null)) return { count: 0 };
         parentFailures.push(args.data);
         return { count: 1 };
       },
@@ -204,9 +257,11 @@ async function main() {
     },
   };
   const terminalRoot = {
+    customBuildArtifact: txClient.customBuildArtifact,
+    customBuildSecret: terminalTx.customBuildSecret,
     customBuildJob: {
       findFirst: async () => ({
-        attempts: 3,
+        attempts,
         maxAttempts: 3,
         customBuildId: "terminal-build-row",
         type: "generate",
@@ -246,6 +301,35 @@ async function main() {
   assert.equal(parentFailure?.status, "failed");
   assert.equal(parentFailure?.errorRetryable, false);
   assert.ok(parentFailure?.deletionPendingAt instanceof Date);
+
+  for (const kind of ["raw_text_debug", "build_json"]) {
+    artifactKind = kind;
+    terminalOperations.length = 0;
+    parentFailures.length = 0;
+    await failCustomBuildJob("terminal-job-row", "worker-row", { code: "worker_failed", message: "database write failed" }, terminalRoot as never);
+    assert.equal(parentFailures[0]?.errorCode, "artifact_bookkeeping_failed");
+    assert.equal(parentFailures[0]?.errorMessage, "database write failed", "the underlying failure must remain visible");
+    assert.equal(parentFailures[0]?.errorRetryable, true);
+    assert.equal(parentFailures[0]?.deletionPendingAt, null, `${kind} must survive a terminal worker failure`);
+    assert.equal(terminalOperations.filter((operation) => operation === "notificationDelivery.insert").length, 1,
+      "terminal source-backed worker failures must enqueue one notification");
+    attempts = 1;
+    terminalOperations.length = 0;
+    parentFailures.length = 0;
+    assert.deepEqual(await failCustomBuildJob("retry-job", "worker-row", { code: "worker_failed", message: "write failed" }, terminalRoot as never), { requeued: true });
+    assert.deepEqual(terminalOperations, ["customBuildSecret.deleteMany", "customBuildJob.updateMany.outsideTransaction"],
+      "automatic source recovery must discard credentials before queueing");
+    assert.equal(parentFailures.length, 0);
+    attempts = 3;
+  }
+  for (const state of [{ status: "canceled", removedAt: null }, { status: "running", removedAt: new Date() }]) {
+    parent = state;
+    parentFailures.length = 0;
+    terminalOperations.length = 0;
+    await failCustomBuildJob("terminal-job-row", "worker-row", { code: "worker_failed", message: "write failed" }, terminalRoot as never);
+    assert.equal(parentFailures.length, 0, "fallback failure handling must preserve cancellation and removal");
+    assert.equal(terminalOperations.includes("notificationDelivery.insert"), false, "canceled or removed builds must not notify");
+  }
 
   console.log("custom build stale job recovery checks passed");
 }

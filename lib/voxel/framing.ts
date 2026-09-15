@@ -1,3 +1,5 @@
+import type * as THREE from "three";
+
 const MIN_FIT_DISTANCE = 0.001;
 
 export type RotatingBoundsFraming = {
@@ -7,6 +9,20 @@ export type RotatingBoundsFraming = {
   verticalFovDegrees: number;
   cameraDirectionY: number;
 };
+
+export function minimumOrbitDistance(fitDistance: number, isWorld = false): number {
+  return isWorld ? 0.5 : Math.max(0.5, fitDistance * 0.12);
+}
+
+export function worldCameraClipping(
+  cameraPosition: THREE.Vector3,
+  bounds: { box: THREE.Box3; center: THREE.Vector3; radius: number },
+): { near: number; far: number } {
+  return {
+    near: Math.max(0.05, bounds.box.distanceToPoint(cameraPosition) / 250),
+    far: Math.max(1000, cameraPosition.distanceTo(bounds.center) + bounds.radius + 64),
+  };
+}
 
 export function fitDistanceToRotatingBounds(
   framing: RotatingBoundsFraming,

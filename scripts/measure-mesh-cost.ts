@@ -4,6 +4,7 @@ import "dotenv/config";
 import { getRenderKind } from "../lib/blocks/registry";
 import { hasAtlasKey } from "../lib/blocks/atlas";
 import { getTextureKey, type Face } from "../lib/blocks/textures";
+import { encodeVoxelPositionKey } from "../lib/voxel/coordinateKeys";
 import { isVoxelOccluder } from "../lib/voxel/renderVisibility";
 import { resolveBuildPayload } from "../lib/storage/buildPayload";
 import { validateVoxelBuild } from "../lib/voxel/validate";
@@ -29,11 +30,6 @@ const DIRS: ReadonlyArray<{ face: Face; dx: number; dy: number; dz: number }> = 
   { face: "up", dx: 0, dy: 1, dz: 0 },
   { face: "down", dx: 0, dy: -1, dz: 0 },
 ];
-
-// mesh.ts packs coordinates into 10 bits per axis
-function encodePosition(x: number, y: number, z: number): number {
-  return (x & 1023) | ((y & 1023) << 10) | ((z & 1023) << 20);
-}
 
 // float position, normalized Int8 normal, normalized Uint16 uv, normalized
 // Uint8 colour: 22 bytes per vertex, 4 vertices and 6 Uint32 indices per face
@@ -93,7 +89,7 @@ async function main() {
     const blocksByPos = new Map<number, string>();
     for (const block of blocks) {
       if (!allowed.has(block.type)) continue;
-      blocksByPos.set(encodePosition(block.x, block.y, block.z), block.type);
+      blocksByPos.set(encodeVoxelPositionKey(block.x, block.y, block.z), block.type);
     }
 
     let faces = 0;
@@ -103,7 +99,7 @@ async function main() {
       let emitted = 0;
       for (const d of DIRS) {
         const neighbor = blocksByPos.get(
-          encodePosition(block.x + d.dx, block.y + d.dy, block.z + d.dz),
+          encodeVoxelPositionKey(block.x + d.dx, block.y + d.dy, block.z + d.dz),
         );
         if (neighbor) {
           if (neighbor === block.type) continue;

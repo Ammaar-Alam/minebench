@@ -17,6 +17,16 @@ const ALIASES = {
   lava: "lava_still"
 };
 
+const FACE_TEXTURES = {
+  bookshelf: { up: "oak_planks", down: "oak_planks" },
+  podzol: { down: "dirt" },
+  mycelium: { down: "dirt" },
+  cut_sandstone: { up: "sandstone_top", down: "sandstone_bottom" },
+  chiseled_sandstone: { up: "sandstone_top", down: "sandstone_bottom" },
+  cut_red_sandstone: { up: "red_sandstone_top", down: "red_sandstone_bottom" },
+  chiseled_red_sandstone: { up: "red_sandstone_top", down: "red_sandstone_bottom" }
+};
+
 function canonicalBlockId(id) {
   return ALIASES[id] ?? id;
 }
@@ -31,7 +41,8 @@ function keysForBlockId(blockId, files) {
     base,
     `${base}_side`,
     `${base}_top`,
-    `${base}_bottom`
+    `${base}_bottom`,
+    ...Object.values(FACE_TEXTURES[blockId] ?? {})
   ];
 
   return candidates.filter((key) => files.has(`${key}.png`));

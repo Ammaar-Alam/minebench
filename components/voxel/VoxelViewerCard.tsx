@@ -19,7 +19,7 @@ import {
   useVoxelExplorerActive,
   type VoxelExplorerBuild,
 } from "@/components/voxel/VoxelExplorerLauncher";
-import { MAX_BLOCKS_BY_GRID } from "@/lib/ai/limits";
+import { MAX_BLOCKS_BY_GRID, type GridSize } from "@/lib/ai/limits";
 import { getPalette } from "@/lib/blocks/palettes";
 import { formatBuildDuration, formatBuildJsonSize } from "@/lib/buildMetrics";
 import type { VoxelMeshPayload } from "@/lib/voxel/mesh";
@@ -31,6 +31,7 @@ import {
   type RenderableVoxelBuild,
 } from "@/lib/voxel/packedBlocks";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
+import { parseVoxelWorldManifest } from "@/lib/voxel/world";
 
 export function VoxelViewerCard({
   title,
@@ -80,7 +81,7 @@ export function VoxelViewerCard({
   meshCacheKey?: string | null;
   getPremeshedPayloadPromise?: () => Promise<VoxelMeshPayload> | null;
   onPremeshedPayloadConsumed?: (promise: Promise<VoxelMeshPayload>) => void;
-  gridSize?: 64 | 256 | 512;
+  gridSize?: GridSize;
   autoRotate?: boolean;
   animateIn?: boolean;
   useFirstRenderReady?: boolean;
@@ -138,6 +139,14 @@ export function VoxelViewerCard({
         error: null as string | null,
       };
     }
+    if (isLikelyVoxelBuild(voxelBuild) && voxelBuild.world) {
+      const parsed = parseVoxelWorldManifest(voxelBuild.world.manifest, {
+        allowLocalBlobRefs: Boolean(voxelBuild.world.resolvePart),
+      });
+      return parsed.ok
+        ? { build: voxelBuild, warnings: [], error: null }
+        : { build: null, warnings: [], error: parsed.error };
+    }
     const paletteDefs = getPalette(palette);
     const maxBlocks = MAX_BLOCKS_BY_GRID[gridSize] ?? MAX_BLOCKS_BY_GRID[256];
     // Validation walks block objects, so a packed build is materialized for it.
@@ -154,7 +163,7 @@ export function VoxelViewerCard({
     return { build: validated.value.build, warnings: validated.value.warnings, error: null };
   }, [voxelBuild, gridSize, palette, skipValidation]);
 
-  const build = rendered.build;
+  const build: RenderableVoxelBuild | null = rendered.build;
   const buildBlocksRef = build ? voxelBuildBlocksRef(build) : null;
   const warnings = metrics?.warnings ?? rendered.warnings;
   const blockCount = metrics?.blockCount ?? voxelBuildBlockCount(build);
@@ -185,6 +194,11 @@ export function VoxelViewerCard({
   const buildJsonText = useMemo(() => {
     if (!enableBuildJsonToggle || !voxelBuild) return "";
     try {
+      if (isLikelyVoxelBuild(voxelBuild) && voxelBuild.world) {
+        if (!voxelBuild.boxes?.length && !voxelBuild.lines?.length && !voxelBuild.blocks.length) return "";
+        const { version, boxes, lines, blocks } = voxelBuild;
+        return JSON.stringify({ version, boxes, lines, blocks }, null, 2);
+      }
       return JSON.stringify(
         isLikelyVoxelBuild(voxelBuild) ? toObjectBackedVoxelBuild(voxelBuild) : voxelBuild,
         null,
@@ -273,24 +287,24 @@ export function VoxelViewerCard({
     (ready: boolean) => {
       setViewerReady(ready);
       if (ready) {
-        setPlacementProgress(null);
+        if (!build?.world) setPlacementProgress(null);
         setPlacementError(null);
       }
       onBuildReadyChange?.(ready);
     },
-    [onBuildReadyChange],
+    [build?.world, onBuildReadyChange],
   );
 
   const handleFirstRenderReadyChange = useCallback(
     (ready: boolean) => {
       setFirstRenderReady(ready);
       if (ready) {
-        setPlacementProgress(null);
+        if (!build?.world) setPlacementProgress(null);
         setPlacementError(null);
       }
       onFirstRenderReadyChange?.(ready);
     },
-    [onFirstRenderReadyChange],
+    [build?.world, onFirstRenderReadyChange],
   );
 
   const handleBuildProgressChange = useCallback(
@@ -453,6 +467,12 @@ export function VoxelViewerCard({
               attempt={attempt}
               retryReason={retryReason}
             />
+          ) : null}
+
+          {build?.world && placementProgress && viewerReady && showBuildView && !explorerActive && !combinedError && !showLoadingHud ? (
+            <div role="status" className="pointer-events-none absolute bottom-3 left-3 rounded-md bg-bg/75 px-3 py-2 text-xs text-muted backdrop-blur-sm">
+              {hudLabel}
+            </div>
           ) : null}
 
           {isLoading && showJsonView && showLoadingOverlay ? (

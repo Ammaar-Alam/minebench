@@ -4,6 +4,7 @@ import type {
   ArenaBuildVariant,
 } from "@/lib/arena/types";
 import type { VoxelBuild, VoxelBlock } from "@/lib/voxel/types";
+import { voxelBuildBlockAt, voxelBuildBlockCount } from "@/lib/voxel/packedBlocks";
 import {
   deleteSupabaseStorageObjects,
   getSupabaseStorageConfig,
@@ -199,7 +200,7 @@ export function* iterateArenaBuildChunks(
   chunkBlockCount: number,
 ): Generator<ArenaBuildChunk> {
   const safeChunkSize = Math.max(1, Math.floor(chunkBlockCount));
-  const totalBlocks = build.blocks.length;
+  const totalBlocks = voxelBuildBlockCount(build);
   const chunkCount = Math.ceil(totalBlocks / safeChunkSize);
 
   for (let index = 0; index < chunkCount; index += 1) {
@@ -210,7 +211,9 @@ export function* iterateArenaBuildChunks(
       chunkCount,
       receivedBlocks: end,
       totalBlocks,
-      blocks: build.blocks.slice(start, end),
+      blocks: build.packed
+        ? Array.from({ length: end - start }, (_, offset) => voxelBuildBlockAt(build, start + offset)!)
+        : build.blocks.slice(start, end),
     };
   }
 }
@@ -514,7 +517,7 @@ export function* iterateArenaBuildStreamEvents(
 ): Generator<ArenaBuildStreamEvent> {
   // artifacts and live streams use the same event shape
   const plan = planArenaBuildStream({
-    totalBlocks: input.build.blocks.length,
+    totalBlocks: voxelBuildBlockCount(input.build),
     hints: input.buildLoadHints,
     variant: input.variant,
   });

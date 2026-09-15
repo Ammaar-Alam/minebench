@@ -1,3 +1,4 @@
+import { type GridSize } from "@/lib/ai/limits";
 import type { ModelKey } from "@/lib/ai/modelCatalog";
 import type {
   CustomRequestBody,
@@ -77,7 +78,7 @@ export type GenerateModelRequest =
 
 export type GenerateRequest = {
   prompt: string;
-  gridSize: 64 | 256 | 512;
+  gridSize: GridSize;
   palette: PaletteMode;
   modelKeys?: ModelKey[];
   models?: GenerateModelRequest[];

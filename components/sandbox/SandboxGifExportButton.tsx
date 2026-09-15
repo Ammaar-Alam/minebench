@@ -831,13 +831,19 @@ async function buildGifBlob(
     resolveResult = resolve;
     rejectResult = (e) => reject(e);
   });
+  // worker errors can arrive before the result is awaited
+  void resultPromise.catch(() => {});
 
+  let workerError: Error | null = null;
   const failAll = (err: Error) => {
+    workerError = err;
+    worker.terminate();
     for (const waiter of ackWaiters.values()) waiter.reject(err);
     ackWaiters.clear();
     rejectReady?.(err);
     rejectResult?.(err);
   };
+  const onAbort = () => failAll(createAbortError());
 
   worker.onmessage = (event: MessageEvent<WorkerOut>) => {
     const msg = event.data;
@@ -870,27 +876,30 @@ async function buildGifBlob(
     failAll(new Error("GIF worker crashed"));
   };
 
-  worker.postMessage({ type: "start" });
-  await readyPromise;
-  throwIfAborted(signal);
-
-  const paletteSamples = await buildPaletteSamples(targets, format, profile, runtime, rotationBases, signal);
-  throwIfAborted(signal);
-  if (paletteSamples.length > 0) {
-    worker.postMessage({ type: "palette", samples: paletteSamples }, paletteSamples);
-  }
-
-  const layout = buildExportLayout(
-    frameCtx,
-    targets.length,
-    width,
-    height,
-    promptText,
-    format,
-    runtime.socialSafe ? "social-safe" : "full",
-  );
-
   try {
+    signal?.addEventListener("abort", onAbort, { once: true });
+    throwIfAborted(signal);
+    worker.postMessage({ type: "start" });
+    await readyPromise;
+    throwIfAborted(signal);
+
+    const paletteSamples = await buildPaletteSamples(targets, format, profile, runtime, rotationBases, signal);
+    throwIfAborted(signal);
+    if (workerError) throw workerError;
+    if (paletteSamples.length > 0) {
+      worker.postMessage({ type: "palette", samples: paletteSamples }, paletteSamples);
+    }
+
+    const layout = buildExportLayout(
+      frameCtx,
+      targets.length,
+      width,
+      height,
+      promptText,
+      format,
+      runtime.socialSafe ? "social-safe" : "full",
+    );
+
     const inFlight: Promise<void>[] = [];
     let completed = 0;
 
@@ -919,6 +928,7 @@ async function buildGifBlob(
         completed += 1;
         onProgress?.(completed, runtime.frameCount);
       });
+      void tracked.catch(() => {});
       inFlight.push(tracked);
 
       if (inFlight.length >= MAX_IN_FLIGHT_FRAMES) {
@@ -941,6 +951,7 @@ async function buildGifBlob(
     throwIfAborted(signal);
     return new Blob([bytes], { type: "image/gif" });
   } finally {
+    signal?.removeEventListener("abort", onAbort);
     worker.terminate();
   }
 }
@@ -1152,6 +1163,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, e
 
   useEffect(() => {
     exportAbortRef.current?.abort();
+    return () => exportAbortRef.current?.abort();
   }, [cancelKey]);
 
   async function handleExport() {

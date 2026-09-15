@@ -19,7 +19,7 @@ type Person = Awaited<ReturnType<typeof getGalleryAdminPerson>>;
 type PromptFilter = "latest" | "reported" | "hidden" | "selected";
 type PeopleFilter = "online" | "all" | "suspended";
 type Mutation =
-  | { type: "generation_published"; publicId: string }
+  | { type: "generation_published"; publicId: string; prompt?: string }
   | { type: "candidate_hidden"; publicId: string; hidden: boolean }
   | { type: "example_hidden"; exampleId: string }
   | { type: "candidate_selected"; publicId: string; selected: boolean }
@@ -505,7 +505,7 @@ export function GalleryAdminDashboard({ dashboard }: { dashboard: Dashboard }) {
         </div>
       </div>
       {view === "votes" ? <ArenaVoteReview refreshedAt={dashboard.refreshedAt} /> : <div className="grid items-start gap-8 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] xl:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
-        {view === "generations" ? <GalleryAdminGenerations ownerId={generationOwner?.id} refreshedAt={dashboard.refreshedAt} onPublish={(publicId) => mutate({ type: "generation_published", publicId })} /> : (
+        {view === "generations" ? <GalleryAdminGenerations ownerId={generationOwner?.id} refreshedAt={dashboard.refreshedAt} onPublish={(publicId, prompt) => mutate({ type: "generation_published", publicId, prompt })} /> : (
         <section className="min-w-0 lg:flex lg:h-full lg:min-h-0 lg:flex-col" aria-labelledby="admin-prompts-title">
           <div className="flex flex-wrap items-end justify-between gap-5 border-b border-border pb-4">
             <div>

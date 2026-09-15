@@ -1,11 +1,9 @@
-import type { BlockDefinition } from "@/lib/blocks/palettes";
 import { getPalette } from "@/lib/blocks/palettes";
 import {
   customProviderMaxOutputTokens,
   type CustomRequestBody,
   type CustomRequestHeaders,
 } from "@/lib/ai/customProviderConfig";
-import { extractBestVoxelBuildJson, extractFirstJsonObject } from "@/lib/ai/jsonExtract";
 import { modelOutputCeiling, modelUsesDefaultSampling } from "@/lib/ai/modelRequestProfiles";
 import { buildRepairPrompt, buildSystemPrompt, buildUserPrompt } from "@/lib/ai/prompts";
 import { getModelByKey, ModelKey, ModelCatalogEntry } from "@/lib/ai/modelCatalog";
@@ -17,7 +15,7 @@ import { minimaxGenerateText } from "@/lib/ai/providers/minimax";
 import { metaGenerateText } from "@/lib/ai/providers/meta";
 import { moonshotGenerateText } from "@/lib/ai/providers/moonshot";
 import { openAiCompatibleGenerateText } from "@/lib/ai/providers/openaiCompatible";
-import { openaiGenerateText } from "@/lib/ai/providers/openai";
+import { openaiGenerateText, OpenAIResponseCheckpointError, type OpenAIBackgroundResponseOptions } from "@/lib/ai/providers/openai";
 import { openrouterGenerateText } from "@/lib/ai/providers/openrouter";
 import { xaiGenerateText } from "@/lib/ai/providers/xai";
 import { zaiGenerateText } from "@/lib/ai/providers/zai";
@@ -39,13 +37,9 @@ import {
   xaiReasoningEffortAttempts,
   zaiReasoningEffortAttempts,
 } from "@/lib/ai/reasoningProfiles";
-import {
-  parseVoxelBuildSpec,
-  validateVoxelBuild,
-  validateVoxelBuildSpec,
-} from "@/lib/voxel/validate";
+import { isVoxelBuildResourceError, processVoxelBuildResponse, type ProcessVoxelBuildResponse } from "@/lib/ai/processVoxelBuildResponse";
 import type { VoxelBuild } from "@/lib/voxel/types";
-import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID } from "@/lib/ai/limits";
+import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID, type GridSize } from "@/lib/ai/limits";
 import type {
   AcceptedProviderRequestConfiguration,
   AcceptedRequestConfigurationRecord,
@@ -54,10 +48,8 @@ import type {
 } from "@/lib/ai/types";
 import { DEFAULT_MAX_OUTPUT_TOKENS } from "@/lib/ai/tokenBudgets";
 import {
-  runVoxelExec,
   VOXEL_EXEC_TOOL_NAME,
   voxelExecToolCallJsonSchema,
-  voxelExecToolCallSchema,
 } from "@/lib/ai/tools/voxelExec";
 import { getErrorMessage } from "@/lib/errorMessage";
 
@@ -78,7 +70,7 @@ function boundedExplicitMaxOutputTokens(value: number | undefined): number | und
 }
 
 function defaultMaxOutputTokens(
-  _gridSize: 64 | 256 | 512,
+  _gridSize: GridSize,
   modelId: string,
   explicitMaxOutputTokens?: number,
 ): number {
@@ -487,7 +479,7 @@ export type GenerateVoxelBuildParams = {
     requireStructuredOutput?: boolean;
   };
   prompt: string;
-  gridSize: 64 | 256 | 512;
+  gridSize: GridSize;
   palette: "simple" | "advanced";
   maxAttempts?: number;
   maxOutputTokens?: number;
@@ -501,12 +493,13 @@ export type GenerateVoxelBuildParams = {
   onProviderRequest?: (attempt: number) => void;
   onRetry?: (attempt: number, reason: string) => unknown;
   // Fired after response text returns and before parsing or execution
-  onRawResponse?: (attempt: number, rawText: string) => void;
+  onRawResponse?: (attempt: number, rawText: string) => void | Promise<void>;
   onDelta?: (delta: string) => void;
   onProviderTrace?: (message: string) => void;
   acquireBuildProcessing?: () => Promise<() => void>;
-  returnExpandedBuild?: boolean;
-};
+  buildOutput?: "source" | "objects" | "packed";
+  processResponse?: ProcessVoxelBuildResponse;
+} & OpenAIBackgroundResponseOptions;
 
 export type GenerateVoxelBuildResult =
   | {
@@ -567,7 +560,7 @@ async function callDirectProvider(args: {
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
-} & ProviderTelemetryCallbacks): Promise<{ text: string }> {
+} & ProviderTelemetryCallbacks & OpenAIBackgroundResponseOptions): Promise<{ text: string }> {
   if (args.provider === "openai") {
     return openaiGenerateText({
       modelId: args.modelId,
@@ -586,6 +579,8 @@ async function callDirectProvider(args: {
       onTrace: args.onTrace,
       onAcceptedOutputTokens: args.onAcceptedOutputTokens,
       onProviderRequest: args.onProviderRequest,
+      openaiResponseId: args.openaiResponseId,
+      onOpenAIResponseCreated: args.onOpenAIResponseCreated,
       onAcceptedRequestConfiguration: args.onAcceptedRequestConfiguration,
     });
   }
@@ -808,7 +803,7 @@ async function providerGenerateText(args: {
     configuration: AcceptedRequestConfigurationRecord,
   ) => void;
   onProviderRequest?: () => void;
-}): Promise<{ text: string }> {
+} & OpenAIBackgroundResponseOptions): Promise<{ text: string }> {
   const { model } = args;
   const forceOpenRouter = Boolean(model.forceOpenRouter);
   const preferOpenRouter = Boolean(args.preferOpenRouter);
@@ -826,6 +821,10 @@ async function providerGenerateText(args: {
   });
   const hasDirect = Boolean(directKey);
   const hasOpenRouter = Boolean(openRouterKey);
+
+  if (args.openaiResponseId && (model.provider !== "openai" || !hasDirect || forceOpenRouter || preferOpenRouter)) {
+    throw new Error("Stored OpenAI responses require the original direct provider route");
+  }
 
   if (preferOpenRouter && !model.openRouterModelId) {
     throw new Error(
@@ -953,6 +952,8 @@ async function providerGenerateText(args: {
         onTrace: args.onProviderTrace,
         onAcceptedOutputTokens: args.onAcceptedOutputTokens,
         onProviderRequest: args.onProviderRequest,
+        openaiResponseId: args.openaiResponseId,
+        onOpenAIResponseCreated: args.onOpenAIResponseCreated,
         onAcceptedRequestConfiguration: (configuration) => {
           args.onAcceptedRequestConfiguration?.(
             acceptedProviderRequestConfigurationLine(configuration),
@@ -1066,38 +1067,6 @@ async function providerGenerateText(args: {
   });
 }
 
-function validateParsedJson(json: unknown, palette: BlockDefinition[], gridSize: 64 | 256 | 512) {
-  return validateVoxelBuild(json, {
-    palette,
-    gridSize,
-    maxBlocks: MAX_BLOCKS_BY_GRID[gridSize],
-  });
-}
-
-function buildBounds(build: VoxelBuild) {
-  if (build.blocks.length === 0) return null;
-  let minX = Infinity;
-  let minY = Infinity;
-  let minZ = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  let maxZ = -Infinity;
-
-  for (const b of build.blocks) {
-    if (b.x < minX) minX = b.x;
-    if (b.y < minY) minY = b.y;
-    if (b.z < minZ) minZ = b.z;
-    if (b.x > maxX) maxX = b.x;
-    if (b.y > maxY) maxY = b.y;
-    if (b.z > maxZ) maxZ = b.z;
-  }
-
-  const spanX = maxX - minX + 1;
-  const spanY = maxY - minY + 1;
-  const spanZ = maxZ - minZ + 1;
-  return { minX, minY, minZ, maxX, maxY, maxZ, spanX, spanY, spanZ };
-}
-
 export async function generateVoxelBuild(
   params: GenerateVoxelBuildParams,
 ): Promise<GenerateVoxelBuildResult> {
@@ -1125,9 +1094,8 @@ export async function generateVoxelBuild(
       generationTimeMs: 0,
     };
   }
-  const paletteDefs = getPalette(params.palette);
   const enableTools = params.enableTools ?? true;
-  const maxAttempts = params.maxAttempts ?? (enableTools ? 8 : 3);
+  const maxAttempts = params.openaiResponseId ? 1 : (params.maxAttempts ?? (enableTools ? 8 : 3));
   const allowServerKeys = params.allowServerKeys ?? true;
 
   const minBlocks = MIN_BLOCKS_BY_GRID[params.gridSize] ?? 80;
@@ -1237,6 +1205,17 @@ export async function generateVoxelBuild(
         allowServerKeys,
         preferOpenRouter: params.preferOpenRouter,
         signal: params.abortSignal,
+        openaiResponseId: params.openaiResponseId,
+        onOpenAIResponseCreated: params.onOpenAIResponseCreated
+          ? async (responseId) => {
+              const callbackStartedAt = performance.now();
+              try {
+                await params.onOpenAIResponseCreated!(responseId);
+              } finally {
+                callbackDurationMs += performance.now() - callbackStartedAt;
+              }
+            }
+          : undefined,
         onDelta: params.onDelta
           ? (delta) => invokeCallback(params.onDelta, delta)
           : undefined,
@@ -1261,14 +1240,18 @@ export async function generateVoxelBuild(
         },
       });
       previousText = text;
+      const rawCallbackStartedAt = performance.now();
       try {
-        invokeCallback(params.onRawResponse, attempt, text);
+        await params.onRawResponse?.(attempt, text);
       } catch (err) {
         const message = getErrorMessage(err, String(err));
+        if (message.includes("custom_build_artifact_persistence_failed")) throw err;
         invokeCallback(
           params.onProviderTrace,
           `Raw response callback failed for attempt ${attempt}: ${message}`,
         );
+      } finally {
+        callbackDurationMs += performance.now() - rawCallbackStartedAt;
       }
       let releaseBuildProcessing: (() => void) | undefined;
       if (params.acquireBuildProcessing) {
@@ -1284,103 +1267,19 @@ export async function generateVoxelBuild(
       let keepBuildProcessingLease = false;
       try {
         params.abortSignal?.throwIfAborted();
-        const json = enableTools ? extractFirstJsonObject(text) : extractBestVoxelBuildJson(text);
-        if (!json) {
-          lastError = "Could not find a valid JSON object in the response";
+        const processed = params.processResponse
+          ? await params.processResponse(text, params, params.abortSignal)
+          : processVoxelBuildResponse(text, params);
+        if (!processed.ok) {
+          lastError = processed.error;
+          if (isVoxelBuildResourceError(lastError)) break;
           continue;
-        }
-
-        const buildJson: unknown = enableTools
-          ? (() => {
-              const parsedCall = voxelExecToolCallSchema.safeParse(json);
-              if (!parsedCall.success) {
-                lastError = parsedCall.error.message;
-                return null;
-              }
-
-              const call = parsedCall.data;
-              if (call.input.gridSize !== params.gridSize) {
-                lastError = `Tool call gridSize mismatch (${call.input.gridSize} vs ${params.gridSize})`;
-                return null;
-              }
-              if (call.input.palette !== params.palette) {
-                lastError = `Tool call palette mismatch (${call.input.palette} vs ${params.palette})`;
-                return null;
-              }
-
-              const run = runVoxelExec({
-                code: call.input.code,
-                gridSize: params.gridSize,
-                palette: params.palette,
-                seed: call.input.seed,
-              });
-
-              return run.build;
-            })()
-          : json;
-
-        if (!buildJson) continue;
-
-        const validated = enableTools
-          ? validateVoxelBuildSpec(buildJson as VoxelBuild, {
-              palette: paletteDefs,
-              gridSize: params.gridSize,
-              maxBlocks: MAX_BLOCKS_BY_GRID[params.gridSize],
-            })
-          : validateParsedJson(buildJson, paletteDefs, params.gridSize);
-        if (!validated.ok) {
-          lastError = validated.error;
-          continue;
-        }
-
-        const expandedBuild = validated.value.build;
-        const blockCount = expandedBuild.blocks.length;
-
-        if (blockCount === 0) {
-          lastError =
-            "No valid blocks after validation. Use ONLY in-bounds coordinates and ONLY block IDs from the available list.";
-          continue;
-        }
-
-        if (blockCount < minBlocks) {
-          lastError = `Build too small (${blockCount} blocks). Create at least ~${minBlocks} blocks so the result is recognizable.`;
-          continue;
-        }
-
-        const bounds = buildBounds(expandedBuild);
-        if (bounds) {
-          const minFootprint = Math.max(6, Math.floor(params.gridSize * 0.15));
-          const minHeight = Math.max(4, Math.floor(params.gridSize * 0.1));
-          const maxFootprintSpan = Math.max(bounds.spanX, bounds.spanZ);
-
-          if (maxFootprintSpan < minFootprint) {
-            lastError = `Build footprint too small (span ${maxFootprintSpan}). Expand the build to span at least ~${minFootprint} blocks across x or z for more detail.`;
-            continue;
-          }
-
-          if (bounds.spanY < minHeight) {
-            lastError = `Build height too small (span ${bounds.spanY}). Add more vertical structure (span at least ~${minHeight}) so it reads clearly.`;
-            continue;
-          }
-        }
-
-        let build = expandedBuild;
-        if (!params.returnExpandedBuild) {
-          const spec = parseVoxelBuildSpec(buildJson);
-          if (!spec.ok) {
-            lastError = spec.error;
-            continue;
-          }
-          build = spec.value;
         }
 
         const generationTimeMs = measuredInferenceTimeMs();
         keepBuildProcessingLease = true;
         return {
-          ok: true,
-          build,
-          warnings: validated.value.warnings,
-          blockCount,
+          ...processed,
           generationTimeMs,
           acceptedOutputTokens,
           providerRoute,
@@ -1393,7 +1292,11 @@ export async function generateVoxelBuild(
       }
     } catch (err) {
       lastError = getErrorMessage(err, "Provider request failed");
-      if (params.abortSignal?.aborted) break;
+      if (params.abortSignal?.aborted || err instanceof OpenAIResponseCheckpointError) break;
+      if (isVoxelBuildResourceError(lastError)) break;
+      if (lastError.includes("custom_build_artifact_persistence_failed")) break;
+      // preserve the response for execution recovery instead of buying another generation
+      if (err && typeof err === "object" && "code" in err && err.code === "ERR_SCRIPT_EXECUTION_TIMEOUT") break;
       // Retry transient work that failed safely before an outbound request
       if (
         !providerRequestStarted &&
@@ -1421,6 +1324,6 @@ export async function generateVoxelBuild(
   };
 }
 
-export function maxBlocksForGrid(gridSize: 64 | 256 | 512) {
+export function maxBlocksForGrid(gridSize: GridSize) {
   return MAX_BLOCKS_BY_GRID[gridSize];
 }
