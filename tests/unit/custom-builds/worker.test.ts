@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
 import { readFileSync } from "node:fs";
+import { setImmediate } from "node:timers/promises";
 
 const previousLeaseSeconds = process.env.CUSTOM_BUILD_JOB_LEASE_SECONDS;
 const previousWorkerId = process.env.CUSTOM_BUILD_WORKER_ID;
@@ -51,6 +53,36 @@ async function main() {
   const releaseSecond = await second;
   assert.equal(secondAcquired, true);
   releaseSecond();
+
+  const releaseActive = await processingGate.acquire();
+  const abort = new AbortController();
+  const abortReason = new Error("processing lease lost");
+  let abortedRejected = false;
+  const aborted = assert.rejects(processingGate.acquire(abort.signal), (error) => {
+    assert.equal(error, abortReason);
+    abortedRejected = true;
+    return true;
+  });
+  const nextAbort = new AbortController();
+  let nextAcquired = false;
+  const next = processingGate.acquire(nextAbort.signal).then((release) => {
+    nextAcquired = true;
+    return release;
+  });
+  abort.abort(abortReason);
+  await setImmediate();
+  assert.equal(abortedRejected, true, "queued cancellation must reject before the active job releases");
+  await aborted;
+  assert.equal(getEventListeners(abort.signal, "abort").length, 0);
+  assert.equal(nextAcquired, false, "an abandoned queue position must not bypass the active job");
+  releaseActive();
+  const releaseNext = await next;
+  assert.equal(getEventListeners(nextAbort.signal, "abort").length, 0);
+  releaseNext();
+  releaseNext();
+  await assert.rejects(processingGate.acquire(abort.signal), (error) => error === abortReason);
+  const releaseAfterAbort = await processingGate.acquire();
+  releaseAfterAbort();
 
   const defaultWorkerId = getCustomBuildWorkerId();
   assert.match(

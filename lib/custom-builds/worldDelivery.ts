@@ -1,5 +1,7 @@
 import {
   decodeAndVerifyCustomBuildArtifactText,
+  jsonBytes,
+  sha256Hex,
 } from "@/lib/custom-builds/artifacts";
 import {
   downloadCustomBuildArtifactBytes,
@@ -13,6 +15,8 @@ import {
   parseVoxelWorldRegionPage,
   toOpaqueVoxelWorldManifest,
   toOpaqueVoxelWorldRegionPage,
+  type VoxelWorldManifest,
+  type VoxelWorldRegionPageRef,
 } from "@/lib/voxel/world";
 
 type WorldArtifact = {
@@ -100,6 +104,24 @@ export async function customBuildWorldViewerResponse(args: {
     return manifestResult.value;
   };
 
+  const readPageBytes = async (manifest: VoxelWorldManifest, pageRef: VoxelWorldRegionPageRef, part?: WorldArtifact) => {
+    const artifact = part ?? await args.findPart(manifest.source.sha256, pageRef.data.key);
+    if (!artifact) throw new Error("Voxel world region page is missing");
+    const storedBytes = await downloadCustomBuildArtifactBytes(artifact);
+    if (storedBytes.byteLength !== pageRef.data.byteSize || artifact.sha256.toLowerCase() !== pageRef.data.sha256?.toLowerCase()) {
+      throw new Error("Voxel world region page metadata does not match");
+    }
+    const page = parseVoxelWorldRegionPage(JSON.parse(decodeAndVerifyCustomBuildArtifactText({
+      bytes: storedBytes, encoding: artifact.encoding, storedSha256: artifact.sha256,
+    })), { allowStoredRefs: true, gridSize: manifest.gridSize, worldBounds: manifest.bounds, pageRef });
+    if (!page.ok) throw new Error(page.error);
+    const bytes = jsonBytes(toOpaqueVoxelWorldRegionPage(page.value));
+    if (pageRef.delivery && (bytes.byteLength !== pageRef.delivery.byteSize || sha256Hex(bytes) !== pageRef.delivery.sha256.toLowerCase())) {
+      throw new Error("Voxel world region page delivery does not match");
+    }
+    return bytes;
+  };
+
   if (parsedPartKey) {
     const manifest = isVoxelWorldRegionPageKey(parsedPartKey) || !args.artifact.sourceBuildSha256
       ? await readManifest()
@@ -109,27 +131,12 @@ export async function customBuildWorldViewerResponse(args: {
     const part = await args.findPart(sourceSha, parsedPartKey);
     if (!part) return new Response("Artifact not found", { status: 404 });
     if (isVoxelWorldRegionPageKey(parsedPartKey)) {
-      const bytes = await downloadCustomBuildArtifactBytes(part);
       if (!manifest) throw new Error("Voxel world manifest is missing");
       const pageRef = manifest.regionPages?.find((page) => page.data.key === parsedPartKey);
-      const pageResult = parseVoxelWorldRegionPage(
-        JSON.parse(decodeAndVerifyCustomBuildArtifactText({
-          bytes,
-          encoding: part.encoding,
-          storedSha256: part.sha256,
-        })),
-        {
-          allowStoredRefs: true,
-          gridSize: manifest.gridSize,
-          worldBounds: manifest.bounds,
-          pageRef,
-        },
-      );
-      if (!pageResult.ok) throw new Error(pageResult.error);
-      return Response.json(toOpaqueVoxelWorldRegionPage(pageResult.value), {
-        headers: {
-          "Cache-Control": args.cacheControl,
-        },
+      if (!pageRef) return new Response("Artifact not found", { status: 404 });
+      const bytes = await readPageBytes(manifest, pageRef, part);
+      return new Response(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, {
+        headers: { "Cache-Control": args.cacheControl, "Content-Type": "application/json" },
       });
     }
     return new Response(streamedBytes(part, args.request.signal), {
@@ -141,6 +148,12 @@ export async function customBuildWorldViewerResponse(args: {
   }
 
   const manifest = await readManifest();
+  // older manifests lack the precomputed identity of the public page representation
+  for (const page of manifest.regionPages ?? []) {
+    if (page.delivery) continue;
+    const bytes = await readPageBytes(manifest, page);
+    page.delivery = { byteSize: bytes.byteLength, sha256: sha256Hex(bytes) };
+  }
   return Response.json({
     buildId: args.buildId,
     variant: "full",

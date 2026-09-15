@@ -49,6 +49,7 @@ const regionPageRefSchema = z.object({
   regionCount: positiveCountSchema.max(VOXEL_WORLD_REGION_PAGE_LIMIT),
   blockCount: positiveCountSchema,
   data: partRefSchema,
+  delivery: z.object({ byteSize: positiveCountSchema, sha256: sha256Schema }).strict().optional(),
 }).strict();
 const sourceSchema = z.object({ format: sourceFormatSchema, sha256: sha256Schema, evaluatorVersion: positiveCountSchema }).strict();
 const meshBatchRefSchema = z.object({
@@ -326,7 +327,10 @@ export function toOpaqueVoxelWorldManifest(manifest: VoxelWorldManifest): VoxelW
       batches: manifest.mesh.batches.map((batch) => ({ ...batch, bounds: cloneBounds(batch.bounds), data: toOpaquePartRef(batch.data) })),
     } } : {}),
     regions: manifest.regions?.map(toOpaqueRegion),
-    regionPages: manifest.regionPages?.map((page) => ({ ...page, bounds: cloneBounds(page.bounds), data: toOpaquePartRef(page.data) })),
+    regionPages: manifest.regionPages?.map(({ delivery, ...page }) => ({
+      ...page, bounds: cloneBounds(page.bounds),
+      data: delivery ? { ...toOpaquePartRef(page.data), encoding: "identity", ...delivery } : toOpaquePartRef(page.data),
+    })),
   };
 }
 

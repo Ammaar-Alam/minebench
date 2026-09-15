@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { gunzipSync } from "node:zlib";
+import { createHash } from "node:crypto";
 import { decodeBinaryArtifact, encodeBinaryArtifact } from "../../../lib/arena/binaryArtifact";
 import { buildGalleryPreviewSvg } from "../../../lib/gallery/preview";
 import {
@@ -7,7 +8,7 @@ import {
   type PersistVoxelWorldArtifact,
 } from "../../../lib/custom-builds/worldArtifacts";
 import type { VoxelBuild, VoxelBlock } from "../../../lib/voxel/types";
-import type { VoxelWorldRegionPage } from "../../../lib/voxel/world";
+import { parseVoxelWorldRegionPage, toOpaqueVoxelWorldRegionPage, type VoxelWorldRegionPage } from "../../../lib/voxel/world";
 
 const CUSTOM_BUILD_ID = "custom-build-row";
 const PUBLIC_ID = "cb_123456789012345678901234";
@@ -245,6 +246,14 @@ async function preserveOrderWithConcurrentUploads() {
   assert.ok(state.startedKeys.filter((key) => key.startsWith("mixed-")).length > 4);
   assert.equal(result.manifest.regionPages?.length, 2);
   assert.equal(state.pages.length, 2);
+  for (const [index, page] of state.pages.entries()) {
+    const parsed = parseVoxelWorldRegionPage(page, { allowStoredRefs: true });
+    assert.ok(parsed.ok);
+    const bytes = Buffer.from(JSON.stringify(toOpaqueVoxelWorldRegionPage(parsed.value)));
+    assert.deepEqual(result.manifest.regionPages![index]!.delivery, {
+      byteSize: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex"),
+    });
+  }
   assert.deepEqual(
     state.pages.flatMap((page) => page.regions.map((region) => region.key)),
     expectedRegionKeys,

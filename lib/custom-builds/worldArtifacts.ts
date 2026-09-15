@@ -24,6 +24,7 @@ import {
   VOXEL_WORLD_REGION_PAGE_REF_LIMIT,
   parseVoxelWorldManifest,
   parseVoxelWorldRegionPage,
+  toOpaqueVoxelWorldRegionPage,
   type StoredVoxelWorldPartRef,
   type VoxelWorldBounds,
   type VoxelWorldManifest,
@@ -270,12 +271,14 @@ export async function persistVoxelWorldArtifacts(args: {
       role: "region_page",
       index: pageIndex,
     });
+    const deliveryBytes = jsonBytes(toOpaqueVoxelWorldRegionPage(parsed.value));
     regionPages.push({
       index: pageIndex,
       bounds: page.bounds,
       regionCount: page.regionCount,
       blockCount: page.blockCount,
       data: storedPartRef(key, artifact),
+      delivery: { byteSize: deliveryBytes.byteLength, sha256: sha256Hex(deliveryBytes) },
     });
     pageRegions = [];
     pageBounds = null;

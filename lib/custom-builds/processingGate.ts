@@ -11,8 +11,8 @@ export function createCustomBuildProcessingGate(): {
         unlock = resolve;
       });
       const previous = tail;
+      // canceled waiters still wait their turn before advancing the queue
       tail = previous.then(() => current);
-      await previous;
 
       let released = false;
       const release = () => {
@@ -20,12 +20,23 @@ export function createCustomBuildProcessingGate(): {
         released = true;
         unlock();
       };
+      let cleanup = () => {};
       try {
+        await (signal ? Promise.race([
+          previous,
+          new Promise<never>((_, reject) => {
+            const abort = () => reject(signal.reason);
+            signal.addEventListener("abort", abort, { once: true });
+            cleanup = () => signal.removeEventListener("abort", abort);
+          }),
+        ]) : previous);
         signal?.throwIfAborted();
         return release;
       } catch (error) {
         release();
         throw error;
+      } finally {
+        cleanup();
       }
     },
   };
