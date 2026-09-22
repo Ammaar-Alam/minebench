@@ -93,7 +93,15 @@ for (const [direct, ...routed] of [
   }
 }
 
+// Every catalogued Anthropic model must be declared, so adding a model to the
+// catalog without recording its capabilities fails here instead of silently
+// inheriting an older release's request shape
 for (const model of MODEL_CATALOG.filter((entry) => entry.provider === "anthropic")) {
+  assert.notDeepEqual(
+    claudeCapabilities(model.modelId),
+    NOTHING_SUPPORTED,
+    `${model.modelId} is in the catalog but not declared in CLAUDE_RELEASES`,
+  );
   if (!model.openRouterModelId) continue;
   assert.deepEqual(
     claudeCapabilities(model.openRouterModelId),
