@@ -455,7 +455,7 @@ function looksLikeVerbosityConfigError(body: string): boolean {
 }
 
 function defaultTextVerbosity(modelId: string): TextVerbosity | undefined {
-  return modelId.startsWith("gpt-5") || modelId === "gpt-6-astra" ? "high" : undefined;
+  return modelId.startsWith("gpt-5") || modelId.startsWith("gpt-6-") ? "high" : undefined;
 }
 
 export async function openaiGenerateText(params: {
@@ -499,8 +499,8 @@ export async function openaiGenerateText(params: {
 
   const isGpt5Family = params.modelId.startsWith("gpt-5");
   const isGptOssFamily = params.modelId.startsWith("gpt-oss-");
-  const isGpt6Astra = params.modelId === "gpt-6-astra";
-  const usesProReasoning = params.modelId.startsWith("gpt-5.6") || isGpt6Astra;
+  const isGpt6Family = params.modelId.startsWith("gpt-6-");
+  const usesProReasoning = params.modelId.startsWith("gpt-5.6") || isGpt6Family;
   // Some models are Responses-only (or otherwise not supported in chat/completions).
   // For these, don't fall back to chat/completions because it hides the real failure cause.
   const isGpt55Pro = params.modelId.startsWith("gpt-5.5-pro");
@@ -513,7 +513,7 @@ export async function openaiGenerateText(params: {
     params.modelId === "gpt-5.2-codex" ||
     params.modelId === "gpt-5.3-codex";
   const defaultReasoningEffortAttempts: string[] =
-    isGpt5Family || isGpt6Astra || isGptOssFamily
+    isGpt5Family || isGpt6Family || isGptOssFamily
       ? openAiReasoningEffortAttempts(params.modelId) ?? []
       : [];
   const reasoningEffortAttempts =
@@ -524,9 +524,8 @@ export async function openaiGenerateText(params: {
     efforts: reasoningEffortAttempts,
     maxTokens: params.reasoningMaxTokens,
   });
-  // For GPT-5 family requests in MineBench we use reasoning mode, where sampling knobs
-  // are not broadly compatible. Omit temperature and let API defaults apply.
-  const temperature = isGpt5Family || isGpt6Astra ? undefined : (params.temperature ?? 0.2);
+  // GPT-5 and GPT-6 reasoning requests use provider-default sampling
+  const temperature = isGpt5Family || isGpt6Family ? undefined : (params.temperature ?? 0.2);
   const maxOutputTokens = params.maxOutputTokens ?? 32768;
   // Streaming is only useful when we have a live delta consumer.
   // For non-interactive callers (e.g. batch generation), use non-streaming
@@ -535,7 +534,7 @@ export async function openaiGenerateText(params: {
     !isGpt55Pro && Boolean(params.onDelta) && parseBooleanEnv("OPENAI_STREAM_RESPONSES", true);
   const useBackgroundMode =
     (isGpt55Pro || !params.onDelta) &&
-    parseBooleanEnv("OPENAI_USE_BACKGROUND_MODE", isGpt5Family || isGpt6Astra);
+    parseBooleanEnv("OPENAI_USE_BACKGROUND_MODE", isGpt5Family || isGpt6Family);
   const backgroundPollIntervalMs = parseIntEnv("OPENAI_BACKGROUND_POLL_MS", 15_000);
   const streamForRequest = useBackgroundMode ? false : streamResponses;
   const responsesApiMode = useBackgroundMode
