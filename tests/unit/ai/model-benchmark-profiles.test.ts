@@ -398,6 +398,15 @@ assert.deepEqual(
 );
 
 const catalogKeys = MODEL_CATALOG.map((model) => model.key);
+for (const key of ["openai_gpt_6_sol", "openai_gpt_6_luna", "anthropic_claude_opus_5_5"]) {
+  const profile = getModelBenchmarkProfile(key);
+  assert.ok(profile);
+  assert.equal(profile.parameters.find(({ label }) => label === "Reasoning effort")?.value, "Max");
+  assert.equal(profile.outputCap.kind, "unavailable");
+  for (const field of ["sourceRelease", "totalCost", "averageInference", "averageJsonSizeBytes", "totalAttempts", "buildCount"] as const) {
+    assert.equal(profile[field], undefined, `${key} must not publish unmeasured ${field}`);
+  }
+}
 assert.equal(
   new Set(catalogKeys).size,
   catalogKeys.length,

@@ -77,22 +77,18 @@ const OPENROUTER_XHIGH: ModelRunParameters = [
   { label: "Reasoning effort", value: "XHigh" },
 ];
 
+const OPENAI_PRO_MAX: ModelRunParameters = [
+  { label: "Reasoning mode", value: "Pro" },
+  { label: "Reasoning effort", value: "Max" },
+  { label: "Text verbosity", value: "High" },
+];
+
 const MODEL_RUN_PARAMETERS = {
-  openai_gpt_6_astra: [
-    { label: "Reasoning mode", value: "Pro" },
-    { label: "Reasoning effort", value: "Max" },
-    { label: "Text verbosity", value: "High" },
-  ],
-  openai_gpt_5_6_luna: [
-    { label: "Reasoning mode", value: "Pro" },
-    { label: "Reasoning effort", value: "Max" },
-    { label: "Text verbosity", value: "High" },
-  ],
-  openai_gpt_5_6_sol: [
-    { label: "Reasoning mode", value: "Pro" },
-    { label: "Reasoning effort", value: "Max" },
-    { label: "Text verbosity", value: "High" },
-  ],
+  openai_gpt_6_sol: OPENAI_PRO_MAX,
+  openai_gpt_6_luna: OPENAI_PRO_MAX,
+  openai_gpt_6_astra: OPENAI_PRO_MAX,
+  openai_gpt_5_6_luna: OPENAI_PRO_MAX,
+  openai_gpt_5_6_sol: OPENAI_PRO_MAX,
   openai_gpt_5_5: [
     { label: "Reasoning effort", value: "Max" },
     { label: "Text verbosity", value: "High" },
@@ -128,6 +124,11 @@ const MODEL_RUN_PARAMETERS = {
     { label: "Sampling", value: "Provider default" },
   ],
   anthropic_claude_opus_5: [
+    { label: "Thinking", value: "Adaptive" },
+    { label: "Reasoning effort", value: "Max" },
+    { label: "Sampling", value: "Provider default" },
+  ],
+  anthropic_claude_opus_5_5: [
     { label: "Thinking", value: "Adaptive" },
     { label: "Reasoning effort", value: "Max" },
     { label: "Sampling", value: "Provider default" },
