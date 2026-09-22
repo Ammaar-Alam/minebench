@@ -315,14 +315,6 @@ export type ArenaBuildStreamArtifactRef = {
   path: string;
 };
 
-type StorageListItem = {
-  name?: string | null;
-  updated_at?: string | null;
-  id?: string | null;
-  metadata?: unknown;
-};
-
-const legacyArtifactDiscoveryCache = new Map<string, ArenaBuildStreamArtifactRef | null>();
 // Repeated missing-artifact lookups are pure latency; cache misses briefly and fall back immediately.
 const artifactMissCache = new Map<string, number>();
 const artifactSignedUrlCache = new Map<string, { url: string; expiresAt: number }>();
@@ -418,83 +410,6 @@ export function getArenaBuildStreamArtifactFetchRefs(
   }
 
   return refs;
-}
-
-async function discoverLegacyArenaBuildStreamArtifactRef(
-  buildId: string,
-  variant: ArenaBuildVariant,
-  opts?: { signal?: AbortSignal },
-): Promise<ArenaBuildStreamArtifactRef | null> {
-  const cacheKey = `${buildId}:${variant}`;
-  if (legacyArtifactDiscoveryCache.has(cacheKey)) {
-    // old artifact names are a migration fallback, not a hot lookup
-    return legacyArtifactDiscoveryCache.get(cacheKey) ?? null;
-  }
-  if (!isArenaBuildStreamArtifactEnabled()) {
-    legacyArtifactDiscoveryCache.set(cacheKey, null);
-    return null;
-  }
-  const location = getArenaStreamArtifactLocation();
-  if (!location) {
-    legacyArtifactDiscoveryCache.set(cacheKey, null);
-    return null;
-  }
-
-  let config: ReturnType<typeof getSupabaseStorageConfig>;
-  try {
-    config = getSupabaseStorageConfig();
-  } catch {
-    legacyArtifactDiscoveryCache.set(cacheKey, null);
-    return null;
-  }
-
-  const prefix = `${location.prefix}/${buildId}`;
-  const resp = await fetch(
-    `${config.url}/storage/v1/object/list/${encodeURIComponent(location.bucket)}`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.serviceRoleKey}`,
-        apikey: config.serviceRoleKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        prefix,
-        limit: 200,
-        offset: 0,
-        sortBy: { column: "name", order: "asc" },
-      }),
-      cache: "no-store",
-      signal: opts?.signal,
-    },
-  );
-
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    throw new Error(`Legacy stream artifact list failed (${resp.status}): ${text || "empty response"}`);
-  }
-
-  const pattern = new RegExp(`^${variant}-[^/]+\\.ndjson$`);
-  const items = ((await resp.json()) as StorageListItem[])
-    .filter((item) => {
-      const name = item?.name?.trim();
-      return Boolean(name && pattern.test(name));
-    })
-    .sort((a, b) => {
-      const aTime = Date.parse(a.updated_at ?? "") || 0;
-      const bTime = Date.parse(b.updated_at ?? "") || 0;
-      return bTime - aTime;
-    });
-
-  const name = items[0]?.name?.trim();
-  const ref = name
-    ? {
-        bucket: location.bucket,
-        path: `${prefix}/${name}`,
-      }
-    : null;
-  legacyArtifactDiscoveryCache.set(cacheKey, ref);
-  return ref;
 }
 
 export type ArenaBuildStreamEventSequenceInput = {
