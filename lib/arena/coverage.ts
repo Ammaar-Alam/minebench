@@ -110,7 +110,6 @@ type CoverageVoteJobSnapshotRow = {
 let matchupStateCache: CachedValue<ArenaMatchupSamplingState> | null = null;
 let matchupStateInFlight: Promise<ArenaMatchupSamplingResult> | null = null;
 let matchupStateVersion = 0;
-let coverageSyncInFlight: Promise<void> | null = null;
 let pendingSamplingStateMutations: SamplingStateMutation[] = [];
 const pendingShownCountDeltas = new Map<string, { count: number; expiresAt: number }>();
 
@@ -214,7 +213,6 @@ export function invalidateArenaCoverageCache() {
   matchupStateVersion += 1;
   matchupStateCache = null;
   matchupStateInFlight = null;
-  coverageSyncInFlight = null;
   pendingSamplingStateMutations = [];
 }
 
@@ -261,32 +259,6 @@ export function recordArenaMatchupShown(modelIds: string[]) {
       }
     }
   });
-}
-
-function shownCountIncrementsForModels(modelIds: string[]): Map<string, number> {
-  const increments = new Map<string, number>();
-  for (const modelId of modelIds) {
-    if (!modelId) continue;
-    increments.set(modelId, (increments.get(modelId) ?? 0) + 1);
-  }
-  return increments;
-}
-
-export async function persistArenaMatchupShown(modelIds: string[], client: PrismaClient = prisma) {
-  const increments = shownCountIncrementsForModels(modelIds);
-  const rows = Array.from(increments.entries());
-  if (rows.length === 0) return;
-
-  // impressions persist outside vote jobs
-  await client.$executeRaw(Prisma.sql`
-    UPDATE "Model" AS model
-    SET "shownCount" = model."shownCount" + shown."count"
-    FROM (
-      VALUES ${Prisma.join(rows.map(([modelId, count]) => Prisma.sql`(${modelId}, ${count})`))}
-    ) AS shown("id", "count")
-    WHERE model."id" = shown."id"
-  `);
-  settleArenaMatchupShown(increments);
 }
 
 function getPendingShownCountDelta(modelId: string, now = Date.now()): number {
@@ -808,46 +780,6 @@ async function acquireArenaVoteJobDrainLock(tx: Prisma.TransactionClient) {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(${ARENA_VOTE_JOB_DRAIN_LOCK_KEY})`;
 }
 
-async function readCoverageDriftCounts(client: PrismaClient = prisma) {
-  const [decisiveVoteCount, pairAggregate] = await Promise.all([
-    client.$queryRaw<Array<{ count: NumberLike }>>`
-      SELECT COUNT(*)::int AS "count"
-      FROM "Vote" vote
-      LEFT JOIN "ArenaVoteJob" job ON job."voteId" = vote.id
-      WHERE vote.choice IN ('A', 'B')
-        -- pending jobs are not in coverage tables yet
-        AND (job.id IS NULL OR job."processedAt" IS NOT NULL)
-    `,
-    client.arenaCoveragePair.aggregate({
-      _sum: {
-        decisiveVotes: true,
-      },
-    }),
-  ]);
-
-  return {
-    decisiveVoteCount: toNumber(decisiveVoteCount[0]?.count),
-    derivedPairVoteCount: pairAggregate._sum.decisiveVotes ?? 0,
-  };
-}
-
-async function ensureArenaCoverageTablesCurrent(client: PrismaClient = prisma) {
-  if (coverageSyncInFlight) {
-    // drift checks are shared because rebuilds are expensive
-    return coverageSyncInFlight;
-  }
-
-  coverageSyncInFlight = (async () => {
-    const { decisiveVoteCount, derivedPairVoteCount } = await readCoverageDriftCounts(client);
-    if (decisiveVoteCount === derivedPairVoteCount) return;
-    await rebuildArenaCoverageTables(client);
-  })().finally(() => {
-    coverageSyncInFlight = null;
-  });
-
-  return coverageSyncInFlight;
-}
-
 export async function rebuildArenaCoverageTables(client: PrismaClient = prisma): Promise<{
   modelPromptRows: number;
   pairRows: number;
@@ -952,42 +884,4 @@ export async function rebuildArenaCoverageTables(client: PrismaClient = prisma):
       pairPromptRows: pairPromptData.length,
     };
   });
-}
-
-export async function applyDecisiveVoteCoverageUpdate(
-  tx: Prisma.TransactionClient | PrismaClient,
-  input: {
-    modelAId: string;
-    modelBId: string;
-    promptId: string;
-  },
-) {
-  const [modelLowId, modelHighId] = orderPairIds(input.modelAId, input.modelBId);
-  await tx.$executeRaw`
-    INSERT INTO "ArenaCoverageModelPrompt" ("modelId", "promptId", "decisiveVotes")
-    VALUES
-      (${modelLowId}, ${input.promptId}, 1),
-      (${modelHighId}, ${input.promptId}, 1)
-    ON CONFLICT ("modelId", "promptId")
-    DO UPDATE SET "decisiveVotes" = "ArenaCoverageModelPrompt"."decisiveVotes" + 1
-  `;
-
-  await tx.$executeRaw`
-    INSERT INTO "ArenaCoveragePair" ("modelLowId", "modelHighId", "decisiveVotes")
-    VALUES (${modelLowId}, ${modelHighId}, 1)
-    ON CONFLICT ("modelLowId", "modelHighId")
-    DO UPDATE SET "decisiveVotes" = "ArenaCoveragePair"."decisiveVotes" + 1
-  `;
-
-  await tx.$executeRaw`
-    INSERT INTO "ArenaCoveragePairPrompt" (
-      "modelLowId",
-      "modelHighId",
-      "promptId",
-      "decisiveVotes"
-    )
-    VALUES (${modelLowId}, ${modelHighId}, ${input.promptId}, 1)
-    ON CONFLICT ("modelLowId", "modelHighId", "promptId")
-    DO UPDATE SET "decisiveVotes" = "ArenaCoveragePairPrompt"."decisiveVotes" + 1
-  `;
 }
