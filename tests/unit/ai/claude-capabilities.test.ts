@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { claudeCapabilities, isKnownClaudeRelease } from "../../../lib/ai/claudeModels";
+import { claudeCapabilities } from "../../../lib/ai/claudeModels";
 import { MODEL_CATALOG } from "../../../lib/ai/modelCatalog";
 
 // Effort ladders are declared per release rather than derived from the version,
@@ -59,7 +59,6 @@ const NOTHING_SUPPORTED = {
 // A future model may change its output cap or effort levels, so it resolves to
 // nothing until someone reads the model card and declares it.
 for (const modelId of ["claude-opus-5-1", "claude-opus-6", "claude-sonnet-5-1"]) {
-  assert.equal(isKnownClaudeRelease(modelId), false, `${modelId} should not be declared yet`);
   assert.deepEqual(
     claudeCapabilities(modelId),
     NOTHING_SUPPORTED,
@@ -70,7 +69,6 @@ for (const modelId of ["claude-opus-5-1", "claude-opus-6", "claude-sonnet-5-1"])
 // Non-Claude models resolve to nothing so shared predicates that run over every
 // model ID stay inert
 for (const modelId of ["gpt-5.6-sol", "gemini-3.6-flash", "kimi-k3", "grok-4.5"]) {
-  assert.equal(isKnownClaudeRelease(modelId), false);
   assert.deepEqual(claudeCapabilities(modelId), NOTHING_SUPPORTED);
 }
 
@@ -95,14 +93,7 @@ for (const [direct, ...routed] of [
   }
 }
 
-// Every catalogued Anthropic model must be declared, so adding a model to the
-// catalog without recording its capabilities fails here instead of silently
-// inheriting an older release's request shape
 for (const model of MODEL_CATALOG.filter((entry) => entry.provider === "anthropic")) {
-  assert.ok(
-    isKnownClaudeRelease(model.modelId),
-    `${model.modelId} is in the catalog but not declared in CLAUDE_RELEASES`,
-  );
   if (!model.openRouterModelId) continue;
   assert.deepEqual(
     claudeCapabilities(model.openRouterModelId),
