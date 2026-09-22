@@ -161,10 +161,3 @@ export function claudeCapabilities(modelId: string): ClaudeCapabilities {
     effortEnvVar: release.effortEnvVar ?? null,
   };
 }
-
-// True when the release is declared above, so callers and tests can tell an
-// unlisted model apart from one that genuinely has no capabilities
-export function isKnownClaudeRelease(modelId: string): boolean {
-  const key = releaseKey(modelId);
-  return key !== null && key in CLAUDE_RELEASES;
-}
