@@ -72,6 +72,7 @@ const attemptCostSnapshots = [
   ["anthropic_claude_opus_5_5", "Claude Opus 5.5", "$111.53", "$1.77 per attempt"],
   ["openai_gpt_6_astra", "GPT 6 Astra Pro", "$34.71", "$2.31 per attempt"],
   ["openai_gpt_6_sol", "GPT 6 Sol Pro", "$7.91", "$0.53 per attempt"],
+  ["openai_gpt_6_luna", "GPT 6 Luna Pro", "$0.50", "$0.02 per attempt"],
   ["meta_muse_spark_1_3", "Muse Spark 1.3", "$6.57", "$0.23 per attempt"],
   ["openai_gpt_5_6_luna", "GPT 5.6 Luna Pro", "$1.15", "$0.05 per attempt"],
   ["anthropic_claude_fable_5_1", "Claude Fable 5.1", "$147.55", "$6.42 per attempt"],

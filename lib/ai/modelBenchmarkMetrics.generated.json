@@ -760,6 +760,28 @@
       "interruptedRunCount": 14,
       "providerCallTrackingJobCount": 15,
       "completedAttemptTrackingJobCount": 15
+    },
+    "openai_gpt_6_luna": {
+      "inferenceSampleCount": 15,
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "promptCohortId": "prompts-v1:bd8c28367f8a97f2",
+      "averageJsonSizeBytes": 25949793,
+      "configurationSampleCount": 15,
+      "configurationIsConsistent": true,
+      "outputCapSampleCount": 15,
+      "outputCapIsConsistent": true,
+      "averageInferenceMs": 1274578,
+      "finalizedAttemptCount": 33,
+      "outputCapTokens": 128000,
+      "providerCallCount": 33,
+      "completedAttemptCount": 33,
+      "rejectedResponseCount": 18,
+      "failedAttemptCount": 18,
+      "failedRunCount": 0,
+      "interruptedRunCount": 0,
+      "providerCallTrackingJobCount": 15,
+      "completedAttemptTrackingJobCount": 15
     }
   }
 }

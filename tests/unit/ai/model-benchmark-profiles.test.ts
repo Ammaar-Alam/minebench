@@ -420,15 +420,16 @@ assert.deepEqual(
 );
 
 const catalogKeys = MODEL_CATALOG.map((model) => model.key);
-for (const key of ["openai_gpt_6_luna"]) {
-  const profile = getModelBenchmarkProfile(key);
-  assert.ok(profile);
-  assert.equal(profile.parameters.find(({ label }) => label === "Reasoning effort")?.value, "Max");
-  assert.equal(profile.outputCap.kind, "unavailable");
-  for (const field of ["sourceRelease", "totalCost", "averageInference", "averageJsonSizeBytes", "totalAttempts", "buildCount"] as const) {
-    assert.equal(profile[field], undefined, `${key} must not publish unmeasured ${field}`);
-  }
-}
+const gpt6Luna = getModelBenchmarkProfile("openai_gpt_6_luna");
+assert.ok(gpt6Luna);
+assert.deepEqual(gpt6Luna.parameters, gpt6Sol.parameters);
+assert.deepEqual(gpt6Luna.totalCost, { usd: 0.50, attemptCount: 33 });
+assert.deepEqual(gpt6Luna.outputCap, { kind: "exact", tokens: 128_000 });
+assert.deepEqual(gpt6Luna.averageInference, { milliseconds: 1_274_578 });
+assert.equal(gpt6Luna.averageJsonSizeBytes, 25_949_793);
+assert.equal(gpt6Luna.totalAttempts, 33);
+assert.equal(gpt6Luna.buildCount, 15);
+assert.equal(gpt6Luna.sourceRelease, undefined);
 assert.equal(
   new Set(catalogKeys).size,
   catalogKeys.length,
