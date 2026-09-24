@@ -43,6 +43,7 @@ export type ModelBenchmarkProfile = {
   sourceRelease?: string;
   parameters: ModelRunParameters;
   outputCap: BenchmarkOutputCap;
+  taskBudget?: string;
   averageInference?: BenchmarkDuration;
   averageJsonSizeBytes?: number;
   totalCost?: BenchmarkCost;
@@ -333,6 +334,12 @@ export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
 const MODEL_BENCHMARK_METADATA: Partial<
   Record<ModelKey, Omit<ModelBenchmarkProfile, "outputCap" | "parameters">>
 > = {
+  anthropic_claude_opus_5_5: {
+    totalCost: { usd: 111.53, attemptCount: 63 },
+    totalAttempts: 63,
+    taskBudget: "128,000–156,000 tokens",
+    note: "Statistics cover max-effort runs with task budgets of 128k, 136k, 148k, and 156k tokens. Costs and attempts exclude xhigh runs and isolated diagnostics. The knight example uses an earlier xhigh build.",
+  },
   openai_gpt_6_sol: {
     totalCost: { usd: 7.91, attemptCount: 15 },
   },
@@ -619,9 +626,10 @@ export const MODEL_BENCHMARK_PROFILES = Object.fromEntries(
               : metadata?.averageInference,
           averageJsonSizeBytes:
             generatedIsComplete ? generated.averageJsonSizeBytes : undefined,
-          totalAttempts: generatedCompletedAttemptHistoryIsComplete
+          // Audited response counts can isolate a priced run cohort from lifetime counters
+          totalAttempts: metadata?.totalAttempts ?? (generatedCompletedAttemptHistoryIsComplete
             ? generated.completedAttemptCount
-            : undefined,
+            : undefined),
           buildCount:
             generatedIsComplete ? generated.finalizedBuildCount : metadata?.buildCount,
         },

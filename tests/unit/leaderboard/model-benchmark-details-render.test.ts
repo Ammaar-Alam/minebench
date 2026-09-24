@@ -69,6 +69,7 @@ assert.ok(
 );
 
 const attemptCostSnapshots = [
+  ["anthropic_claude_opus_5_5", "Claude Opus 5.5", "$111.53", "$1.77 per attempt"],
   ["openai_gpt_6_astra", "GPT 6 Astra Pro", "$34.71", "$2.31 per attempt"],
   ["openai_gpt_6_sol", "GPT 6 Sol Pro", "$7.91", "$0.53 per attempt"],
   ["meta_muse_spark_1_3", "Muse Spark 1.3", "$6.57", "$0.23 per attempt"],
@@ -108,6 +109,18 @@ const astraMarkup = renderToStaticMarkup(
 );
 assert.ok(!astraMarkup.includes("Estimated cost"));
 assert.ok(!astraMarkup.includes("$34.71*"));
+
+const opus55Markup = renderToStaticMarkup(
+  React.createElement(ModelBenchmarkDetailsInline, {
+    id: "opus55-details",
+    modelKey: "anthropic_claude_opus_5_5",
+    displayName: "Claude Opus 5.5",
+    open: true,
+  }),
+);
+assert.ok(opus55Markup.includes("128,000–156,000 tokens"));
+assert.ok(opus55Markup.indexOf("Task budget") > opus55Markup.indexOf("Output cap"));
+assert.ok(!astraMarkup.includes("Task budget"));
 
 const gemini30Markup = renderToStaticMarkup(
   React.createElement(ModelBenchmarkDetailsInline, {

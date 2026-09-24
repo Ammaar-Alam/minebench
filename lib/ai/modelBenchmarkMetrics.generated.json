@@ -740,6 +740,26 @@
       "interruptedRunCount": 0,
       "providerCallTrackingJobCount": 15,
       "completedAttemptTrackingJobCount": 15
+    },
+    "anthropic_claude_opus_5_5": {
+      "inferenceSampleCount": 15,
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "promptCohortId": "prompts-v1:bd8c28367f8a97f2",
+      "averageJsonSizeBytes": 39690530,
+      "configurationSampleCount": 15,
+      "configurationIsConsistent": false,
+      "outputCapSampleCount": 15,
+      "outputCapIsConsistent": true,
+      "outputCapTokens": 128000,
+      "providerCallCount": 403,
+      "completedAttemptCount": 92,
+      "rejectedResponseCount": 72,
+      "failedAttemptCount": 369,
+      "failedRunCount": 60,
+      "interruptedRunCount": 14,
+      "providerCallTrackingJobCount": 15,
+      "completedAttemptTrackingJobCount": 15
     }
   }
 }
