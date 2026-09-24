@@ -101,6 +101,14 @@ Copy `.env.example` to `.env` and set what you need.
 
 ### Optional Provider and Runtime Tuning
 
+`pnpm batch:generate --generate --model opus-5-5 --reasoning xhigh --task_budget 96000`
+sets an advisory task budget independently of reasoning effort and the output cap.
+Batch generation defaults to 96000 on supported native Anthropic models (Opus 4.7,
+4.8, 5, 5.5 and Fable 5, 5.1). Other models and OpenRouter routes retain their existing
+settings; an explicit budget on an unsupported Anthropic route fails before generation.
+The budget must be an integer of at least 20000. It is recorded in the accepted
+request configuration; no thinking/answer token split is guaranteed. See [task budgets](https://platform.claude.com/docs/en/build-with-claude/task-budgets).
+
 - `MINEBENCH_ALLOW_SERVER_KEYS=1` (production opt-in for server env keys in `/api/generate`)
 - `ANTHROPIC_FABLE_5_1_EFFORT=low|medium|high|xhigh|max`
 - `ANTHROPIC_FABLE_5_EFFORT=low|medium|high|xhigh|max`

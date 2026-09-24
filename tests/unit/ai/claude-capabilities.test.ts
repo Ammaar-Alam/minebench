@@ -51,6 +51,7 @@ const NOTHING_SUPPORTED = {
   defaultSamplingOnly: false,
   legacyManualThinking: false,
   context1mBeta: false,
+  taskBudgets: false,
   maxOutputTokens: null,
   effortEnvVar: null,
 };
