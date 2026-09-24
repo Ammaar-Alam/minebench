@@ -99,7 +99,9 @@ function streamingStructuredAnthropicResponse(text: string): Response {
         delta: { type: "input_json_delta", partial_json: partialJson },
       })}\n\n`,
   );
-  return new Response(events.join(""), {
+  return new Response(events.join("") +
+    'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n' +
+    'data: {"type":"message_stop"}\n\n', {
     status: 200,
     headers: { "Content-Type": "text/event-stream" },
   });
