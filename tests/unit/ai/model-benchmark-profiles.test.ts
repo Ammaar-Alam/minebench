@@ -42,6 +42,17 @@ assert.equal(gpt6Sol.averageJsonSizeBytes, 90_806_286);
 assert.equal(gpt6Sol.totalAttempts, 15);
 assert.equal(gpt6Sol.buildCount, 15);
 
+const opus55 = getModelBenchmarkProfile("anthropic_claude_opus_5_5");
+assert.ok(opus55);
+assert.deepEqual(opus55.totalCost, { usd: 111.53, attemptCount: 63 });
+assert.equal(opus55.totalAttempts, 63, "audited max attempts must override mixed-effort ledger totals");
+assert.equal(opus55.buildCount, 15);
+assert.deepEqual(opus55.outputCap, { kind: "exact", tokens: 128_000 });
+assert.equal(opus55.taskBudget, "128,000–156,000 tokens");
+assert.equal(opus55.averageInference, undefined, "mixed task budgets must not publish a uniform-configuration timing average");
+assert.equal(opus55.averageJsonSizeBytes, 39_690_530);
+assert.ok(opus55.note?.includes("knight example uses an earlier xhigh build"));
+
 const gpt56Luna = getModelBenchmarkProfile("openai_gpt_5_6_luna");
 assert.ok(gpt56Luna, "GPT 5.6 Luna Pro should have benchmark run details");
 assert.deepEqual(gpt56Luna.parameters, [
@@ -409,7 +420,7 @@ assert.deepEqual(
 );
 
 const catalogKeys = MODEL_CATALOG.map((model) => model.key);
-for (const key of ["openai_gpt_6_luna", "anthropic_claude_opus_5_5"]) {
+for (const key of ["openai_gpt_6_luna"]) {
   const profile = getModelBenchmarkProfile(key);
   assert.ok(profile);
   assert.equal(profile.parameters.find(({ label }) => label === "Reasoning effort")?.value, "Max");
