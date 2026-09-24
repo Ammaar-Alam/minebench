@@ -333,10 +333,12 @@ export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
 const MODEL_BENCHMARK_METADATA: Partial<
   Record<ModelKey, Omit<ModelBenchmarkProfile, "outputCap" | "parameters">>
 > = {
+  openai_gpt_6_sol: {
+    totalCost: { usd: 7.91, attemptCount: 15 },
+  },
   openai_gpt_6_astra: {
     sourceRelease: "4.3.0",
-    totalCost: { usd: 34.71, attemptCount: 15, estimated: true },
-    note: "* Estimated cost; the provider dashboard has not yet updated.",
+    totalCost: { usd: 34.71, attemptCount: 15 },
   },
   meta_muse_spark_1_3: {
     totalCost: { usd: 6.57, attemptCount: 28 },
