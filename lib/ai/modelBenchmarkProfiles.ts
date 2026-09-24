@@ -343,6 +343,9 @@ const MODEL_BENCHMARK_METADATA: Partial<
   openai_gpt_6_sol: {
     totalCost: { usd: 7.91, attemptCount: 15 },
   },
+  openai_gpt_6_luna: {
+    totalCost: { usd: 0.50, attemptCount: 33 },
+  },
   openai_gpt_6_astra: {
     sourceRelease: "4.3.0",
     totalCost: { usd: 34.71, attemptCount: 15 },
