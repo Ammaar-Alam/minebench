@@ -120,6 +120,8 @@ const opus55Markup = renderToStaticMarkup(
   }),
 );
 assert.ok(opus55Markup.includes("136,000 tokens"));
+assert.ok(opus55Markup.includes("15m 26.9s"));
+assert.ok(!opus55Markup.includes("Not tracked"));
 assert.ok(!opus55Markup.includes("Statistics cover max-effort runs"));
 assert.ok(opus55Markup.indexOf("Task budget") > opus55Markup.indexOf("Output cap"));
 assert.ok(!astraMarkup.includes("Task budget"));

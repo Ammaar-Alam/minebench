@@ -337,6 +337,7 @@ const MODEL_BENCHMARK_METADATA: Partial<
   anthropic_claude_opus_5_5: {
     totalCost: { usd: 111.53, attemptCount: 63 },
     totalAttempts: 63,
+    averageInference: { milliseconds: 926_908 },
     taskBudget: "136,000 tokens",
   },
   openai_gpt_6_sol: {
@@ -620,12 +621,11 @@ export const MODEL_BENCHMARK_PROFILES = Object.fromEntries(
           parameters,
           ...metadata,
           outputCap: resolveBenchmarkOutputCap(modelKey, generated),
-          averageInference:
-            generatedTimingCohortIsComplete
-              ? generated.averageInferenceMs === undefined
-                ? undefined
-                : { milliseconds: generated.averageInferenceMs }
-              : metadata?.averageInference,
+          averageInference: metadata?.averageInference ?? (
+            generatedTimingCohortIsComplete && generated.averageInferenceMs !== undefined
+              ? { milliseconds: generated.averageInferenceMs }
+              : undefined
+          ),
           averageJsonSizeBytes:
             generatedIsComplete ? generated.averageJsonSizeBytes : undefined,
           // Audited response counts can isolate a priced run cohort from lifetime counters
