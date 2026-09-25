@@ -29,6 +29,24 @@ type ModelCatalogEntryShape = {
 
 const CATALOG = [
   {
+    key: "openai_gpt_6_sol",
+    slug: "gpt-6-sol",
+    provider: "openai",
+    modelId: "gpt-6-sol",
+    displayName: "GPT 6 Sol Pro",
+    enabled: true,
+    openRouterModelId: "openai/gpt-6-sol-pro",
+  },
+  {
+    key: "openai_gpt_6_luna",
+    slug: "gpt-6-luna",
+    provider: "openai",
+    modelId: "gpt-6-luna",
+    displayName: "GPT 6 Luna Pro",
+    enabled: true,
+    openRouterModelId: "openai/gpt-6-luna-pro",
+  },
+  {
     key: "openai_gpt_6_astra",
     slug: "gpt-6-astra",
     provider: "openai",
@@ -216,6 +234,15 @@ const CATALOG = [
     displayName: "Claude Fable 5",
     enabled: true,
     openRouterModelId: "anthropic/claude-fable-5",
+  },
+  {
+    key: "anthropic_claude_opus_5_5",
+    slug: "opus-5-5",
+    provider: "anthropic",
+    modelId: "claude-opus-5-5",
+    displayName: "Claude Opus 5.5",
+    enabled: true,
+    openRouterModelId: "anthropic/claude-opus-5.5",
   },
   {
     key: "anthropic_claude_opus_5",

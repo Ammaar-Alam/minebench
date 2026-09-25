@@ -12,6 +12,13 @@ import {
 } from "@/lib/ai/customProviderConfig";
 
 type AnthropicMessageResponse = {
+  id?: string;
+  stop_reason?: string | null;
+  stop_details?: { category?: string | null; explanation?: string | null } | null;
+  usage?: {
+    output_tokens?: number;
+    output_tokens_details?: { thinking_tokens?: number };
+  };
   content?: {
     type?: string;
     text?: string;
@@ -22,7 +29,16 @@ type AnthropicMessageResponse = {
 
 type AnthropicStreamEvent = {
   type?: unknown;
-  delta?: { type?: unknown; text?: unknown; partial_json?: unknown } | unknown;
+  message?: AnthropicMessageResponse;
+  content_block?: { type?: string; text?: string };
+  delta?: {
+    text?: unknown;
+    partial_json?: unknown;
+    stop_reason?: string | null;
+    stop_details?: AnthropicMessageResponse["stop_details"];
+  };
+  usage?: AnthropicMessageResponse["usage"];
+  error?: { type?: string; message?: string };
 };
 
 type AnthropicEffort = ClaudeEffort;
@@ -361,6 +377,7 @@ export async function anthropicGenerateText(params: {
   }
 
   const acceptedOutputTokens = selectedTokenBudget ?? maxTokens;
+  const taskBudget = (params.customBody?.output_config as { task_budget?: unknown } | undefined)?.task_budget;
   params.onAcceptedOutputTokens?.(acceptedOutputTokens);
   const acceptedThinkingBudget =
     typeof thinkingBudget === "number"
@@ -372,11 +389,11 @@ export async function anthropicGenerateText(params: {
     ...(typeof acceptedThinkingBudget === "number" && acceptedThinkingBudget >= 1024
       ? { reasoningMaxTokens: acceptedThinkingBudget }
       : {}),
-    thinkingMode: usesAdaptiveThinking
+    thinkingMode: (usesAdaptiveThinking
       ? `adaptive_effort=${selectedAdaptiveEffort ?? "default"}`
       : typeof acceptedThinkingBudget === "number" && acceptedThinkingBudget >= 1024
         ? `thinking_budget=${acceptedThinkingBudget}`
-        : "default",
+        : "default") + (taskBudget ? `,task_budget=${JSON.stringify(taskBudget)}` : ""),
     temperature: capabilities.defaultSamplingOnly
       ? "default"
       : usesAdaptiveThinking || typeof acceptedThinkingBudget === "number"
@@ -399,48 +416,83 @@ export async function anthropicGenerateText(params: {
       ),
     );
   }
+  if (taskBudget) params.onTrace?.(`Anthropic task budget in use: ${JSON.stringify(taskBudget)}.`);
 
-  if (didUseStreaming) {
-    let text = "";
-    await consumeSseStream(res, (evt) => {
-      if (evt.data === "[DONE]") return;
-      let parsed: AnthropicStreamEvent | null = null;
-      try {
-        parsed = JSON.parse(evt.data) as AnthropicStreamEvent;
-      } catch {
-        return;
-      }
-      // message streaming sends incremental deltas on content_block_delta
-      if (parsed?.type === "content_block_delta") {
-        const deltaObj = parsed.delta as { text?: unknown; partial_json?: unknown } | undefined;
-        const chunk =
-          deltaObj && typeof deltaObj.text === "string"
-            ? deltaObj.text
-            : deltaObj && typeof deltaObj.partial_json === "string"
-              ? deltaObj.partial_json
-              : "";
-        if (chunk) {
+  let data: AnthropicMessageResponse = {};
+  let text = "";
+  let messageStopped = false;
+  const contentTypes = new Set<string>();
+  const diagnostics = () => [
+    `request_id=${res.headers.get("request-id") ?? "unknown"}`,
+    `message_id=${data.id ?? "unknown"}`,
+    `stop_reason=${data.stop_reason ?? "unknown"}`,
+    ...(data.stop_reason === "refusal" ? [
+      `refusal_category=${JSON.stringify(data.stop_details?.category) ?? "unknown"}`,
+      `refusal_explanation=${JSON.stringify(data.stop_details?.explanation) ?? "unknown"}`,
+    ] : []),
+    `output_tokens=${data.usage?.output_tokens ?? "unknown"}`,
+    `thinking_tokens=${data.usage?.output_tokens_details?.thinking_tokens ?? "unknown"}`,
+    `content_types=${[...contentTypes].join("|") || "none"}`,
+    `text_chars=${text.length}`,
+    ...(didUseStreaming ? [`message_stop=${messageStopped}`] : []),
+  ].join(", ");
+
+  try {
+    if (didUseStreaming) {
+      await consumeSseStream(res, (evt) => {
+        if (evt.data === "[DONE]") return;
+        let parsed: AnthropicStreamEvent;
+        try {
+          parsed = JSON.parse(evt.data) as AnthropicStreamEvent;
+          if (!parsed || typeof parsed !== "object") throw new Error();
+        } catch {
+          throw new Error("Anthropic malformed stream event");
+        }
+        if (parsed.type === "error") {
+          throw new Error(`Anthropic stream error: ${parsed.error?.type ?? "unknown"}: ${parsed.error?.message ?? "unknown"}`);
+        }
+        if (parsed.type === "message_start") data = parsed.message ?? {};
+        if (parsed.type === "message_delta") {
+          data.stop_reason = parsed.delta?.stop_reason ?? data.stop_reason;
+          if (parsed.delta?.stop_details !== undefined) data.stop_details = parsed.delta.stop_details;
+          data.usage = { ...data.usage, ...parsed.usage };
+        }
+        if (parsed.type === "message_stop") messageStopped = true;
+        if (parsed.type === "content_block_start" && parsed.content_block?.type) {
+          contentTypes.add(parsed.content_block.type);
+        }
+        const chunk = parsed.type === "content_block_start" && parsed.content_block?.type === "text"
+          ? parsed.content_block.text
+          : parsed.type === "content_block_delta"
+            ? parsed.delta?.text ?? parsed.delta?.partial_json
+            : undefined;
+        if (typeof chunk === "string" && chunk) {
           text += chunk;
           params.onDelta?.(chunk);
         }
+      });
+      if (!messageStopped) throw new Error("Anthropic stream ended before message_stop");
+    } else {
+      const payload: unknown = await res.json();
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        throw new Error("Anthropic invalid response body");
       }
-    });
-    return { text };
-  }
-
-  const data = (await res.json()) as AnthropicMessageResponse;
-  if (useStructuredOutputs && structuredMode === "forced_tool") {
-    const toolUse = data.content?.find(
-      (block) => block.type === "tool_use" && block.name === STRUCTURED_OUTPUT_TOOL_NAME,
-    );
-    if (toolUse && toolUse.input !== undefined) {
-      return { text: JSON.stringify(toolUse.input) };
+      data = payload as AnthropicMessageResponse;
+      for (const block of data.content ?? []) {
+        if (block.type) contentTypes.add(block.type);
+      }
+      const toolUse = useStructuredOutputs && structuredMode === "forced_tool"
+        ? data.content?.find((block) => block.type === "tool_use" && block.name === STRUCTURED_OUTPUT_TOOL_NAME)
+        : undefined;
+      text = toolUse?.input !== undefined
+        ? JSON.stringify(toolUse.input)
+        : data.content?.filter((block) => block.type === "text").map((block) => block.text ?? "").join("") ?? "";
     }
+    // Completed responses still reach the raw-artifact and attempt-accounting callbacks
+    return { text };
+  } catch (err) {
+    throw new Error(`${err instanceof Error ? err.message : String(err)} (${diagnostics()})`, { cause: err });
+  } finally {
+    params.onTrace?.(`Anthropic response${text.trim() ? "" : " returned no output text"}: ${diagnostics()}.`);
   }
-  const text =
-    data.content
-      ?.filter((c) => c.type === "text")
-      .map((c) => c.text ?? "")
-      .join("") ?? "";
-  return { text };
 }

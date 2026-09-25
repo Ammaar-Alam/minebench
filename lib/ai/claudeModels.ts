@@ -22,6 +22,7 @@ type ClaudeRelease = {
   legacyManualThinking?: boolean;
   // Long-context beta header is required to reach a 1M-token window
   context1mBeta?: boolean;
+  taskBudgets?: boolean;
   // Synchronous Messages API output ceiling, when the model caps below the
   // MineBench default request
   maxOutputTokens?: number;
@@ -47,13 +48,22 @@ const MESSAGES_API_OUTPUT_MAX = 128_000;
 // Keyed by family and version
 // A release named without a minor, such as claude-opus-5, keys at minor 0
 const CLAUDE_RELEASES: Record<string, ClaudeRelease> = {
+  "opus-5.5": {
+    taskBudgets: true,
+    effortLadder: FULL_EFFORT_LADDER,
+    defaultSamplingOnly: true,
+    maxOutputTokens: MESSAGES_API_OUTPUT_MAX,
+    effortEnvVar: "ANTHROPIC_OPUS_5_5_EFFORT",
+  },
   "fable-5.1": {
+    taskBudgets: true,
     effortLadder: FULL_EFFORT_LADDER,
     defaultSamplingOnly: true,
     maxOutputTokens: MESSAGES_API_OUTPUT_MAX,
     effortEnvVar: "ANTHROPIC_FABLE_5_1_EFFORT",
   },
   "opus-5.0": {
+    taskBudgets: true,
     effortLadder: FULL_EFFORT_LADDER,
     defaultSamplingOnly: true,
     maxOutputTokens: MESSAGES_API_OUTPUT_MAX,
@@ -66,24 +76,28 @@ const CLAUDE_RELEASES: Record<string, ClaudeRelease> = {
     effortEnvVar: "ANTHROPIC_SONNET_5_EFFORT",
   },
   "fable-5.0": {
+    taskBudgets: true,
     effortLadder: FULL_EFFORT_LADDER,
     defaultSamplingOnly: true,
     maxOutputTokens: MESSAGES_API_OUTPUT_MAX,
     effortEnvVar: "ANTHROPIC_FABLE_5_EFFORT",
   },
   "mythos-5.0": {
+    taskBudgets: true,
     effortLadder: FULL_EFFORT_LADDER,
     defaultSamplingOnly: true,
     maxOutputTokens: MESSAGES_API_OUTPUT_MAX,
     effortEnvVar: "ANTHROPIC_FABLE_5_EFFORT",
   },
   "opus-4.8": {
+    taskBudgets: true,
     effortLadder: FULL_EFFORT_LADDER,
     defaultSamplingOnly: true,
     maxOutputTokens: MESSAGES_API_OUTPUT_MAX,
     effortEnvVar: "ANTHROPIC_OPUS_4_8_EFFORT",
   },
   "opus-4.7": {
+    taskBudgets: true,
     effortLadder: FULL_EFFORT_LADDER,
     defaultSamplingOnly: true,
     maxOutputTokens: MESSAGES_API_OUTPUT_MAX,
@@ -120,6 +134,7 @@ const NO_CAPABILITIES: ClaudeCapabilities = {
   defaultSamplingOnly: false,
   legacyManualThinking: false,
   context1mBeta: false,
+  taskBudgets: false,
   maxOutputTokens: null,
   effortEnvVar: null,
 };
@@ -157,6 +172,7 @@ export function claudeCapabilities(modelId: string): ClaudeCapabilities {
     defaultSamplingOnly: release.defaultSamplingOnly,
     legacyManualThinking: release.legacyManualThinking ?? false,
     context1mBeta: release.context1mBeta ?? false,
+    taskBudgets: release.taskBudgets ?? false,
     maxOutputTokens: release.maxOutputTokens ?? null,
     effortEnvVar: release.effortEnvVar ?? null,
   };

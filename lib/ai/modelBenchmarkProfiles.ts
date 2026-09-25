@@ -43,6 +43,7 @@ export type ModelBenchmarkProfile = {
   sourceRelease?: string;
   parameters: ModelRunParameters;
   outputCap: BenchmarkOutputCap;
+  taskBudget?: string;
   averageInference?: BenchmarkDuration;
   averageJsonSizeBytes?: number;
   totalCost?: BenchmarkCost;
@@ -77,22 +78,18 @@ const OPENROUTER_XHIGH: ModelRunParameters = [
   { label: "Reasoning effort", value: "XHigh" },
 ];
 
+const OPENAI_PRO_MAX: ModelRunParameters = [
+  { label: "Reasoning mode", value: "Pro" },
+  { label: "Reasoning effort", value: "Max" },
+  { label: "Text verbosity", value: "High" },
+];
+
 const MODEL_RUN_PARAMETERS = {
-  openai_gpt_6_astra: [
-    { label: "Reasoning mode", value: "Pro" },
-    { label: "Reasoning effort", value: "Max" },
-    { label: "Text verbosity", value: "High" },
-  ],
-  openai_gpt_5_6_luna: [
-    { label: "Reasoning mode", value: "Pro" },
-    { label: "Reasoning effort", value: "Max" },
-    { label: "Text verbosity", value: "High" },
-  ],
-  openai_gpt_5_6_sol: [
-    { label: "Reasoning mode", value: "Pro" },
-    { label: "Reasoning effort", value: "Max" },
-    { label: "Text verbosity", value: "High" },
-  ],
+  openai_gpt_6_sol: OPENAI_PRO_MAX,
+  openai_gpt_6_luna: OPENAI_PRO_MAX,
+  openai_gpt_6_astra: OPENAI_PRO_MAX,
+  openai_gpt_5_6_luna: OPENAI_PRO_MAX,
+  openai_gpt_5_6_sol: OPENAI_PRO_MAX,
   openai_gpt_5_5: [
     { label: "Reasoning effort", value: "Max" },
     { label: "Text verbosity", value: "High" },
@@ -128,6 +125,11 @@ const MODEL_RUN_PARAMETERS = {
     { label: "Sampling", value: "Provider default" },
   ],
   anthropic_claude_opus_5: [
+    { label: "Thinking", value: "Adaptive" },
+    { label: "Reasoning effort", value: "Max" },
+    { label: "Sampling", value: "Provider default" },
+  ],
+  anthropic_claude_opus_5_5: [
     { label: "Thinking", value: "Adaptive" },
     { label: "Reasoning effort", value: "Max" },
     { label: "Sampling", value: "Provider default" },
@@ -332,10 +334,20 @@ export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
 const MODEL_BENCHMARK_METADATA: Partial<
   Record<ModelKey, Omit<ModelBenchmarkProfile, "outputCap" | "parameters">>
 > = {
+  anthropic_claude_opus_5_5: {
+    totalCost: { usd: 111.53, attemptCount: 63 },
+    totalAttempts: 63,
+    taskBudget: "136,000 tokens",
+  },
+  openai_gpt_6_sol: {
+    totalCost: { usd: 7.91, attemptCount: 15 },
+  },
+  openai_gpt_6_luna: {
+    totalCost: { usd: 0.50, attemptCount: 33 },
+  },
   openai_gpt_6_astra: {
     sourceRelease: "4.3.0",
-    totalCost: { usd: 34.71, attemptCount: 15, estimated: true },
-    note: "* Estimated cost; the provider dashboard has not yet updated.",
+    totalCost: { usd: 34.71, attemptCount: 15 },
   },
   meta_muse_spark_1_3: {
     totalCost: { usd: 6.57, attemptCount: 28 },
@@ -616,9 +628,10 @@ export const MODEL_BENCHMARK_PROFILES = Object.fromEntries(
               : metadata?.averageInference,
           averageJsonSizeBytes:
             generatedIsComplete ? generated.averageJsonSizeBytes : undefined,
-          totalAttempts: generatedCompletedAttemptHistoryIsComplete
+          // Audited response counts can isolate a priced run cohort from lifetime counters
+          totalAttempts: metadata?.totalAttempts ?? (generatedCompletedAttemptHistoryIsComplete
             ? generated.completedAttemptCount
-            : undefined,
+            : undefined),
           buildCount:
             generatedIsComplete ? generated.finalizedBuildCount : metadata?.buildCount,
         },

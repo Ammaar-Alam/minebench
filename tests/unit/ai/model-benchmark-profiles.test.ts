@@ -24,12 +24,34 @@ assert.deepEqual(astra.parameters, [
   { label: "Text verbosity", value: "High" },
 ]);
 assert.deepEqual(astra.outputCap, { kind: "exact", tokens: 128_000 });
-assert.deepEqual(astra.totalCost, { usd: 34.71, attemptCount: 15, estimated: true });
+assert.deepEqual(astra.totalCost, { usd: 34.71, attemptCount: 15 });
+assert.equal(astra.note, undefined);
 assert.equal(astra.sourceRelease, "4.3.0");
 assert.deepEqual(astra.averageInference, { milliseconds: 1_553_517 });
 assert.equal(astra.averageJsonSizeBytes, 134_777_521);
 assert.equal(astra.totalAttempts, 15);
 assert.equal(astra.buildCount, 15);
+
+const gpt6Sol = getModelBenchmarkProfile("openai_gpt_6_sol");
+assert.ok(gpt6Sol);
+assert.deepEqual(gpt6Sol.parameters, astra.parameters);
+assert.deepEqual(gpt6Sol.totalCost, { usd: 7.91, attemptCount: 15 });
+assert.deepEqual(gpt6Sol.outputCap, { kind: "exact", tokens: 128_000 });
+assert.deepEqual(gpt6Sol.averageInference, { milliseconds: 862_746 });
+assert.equal(gpt6Sol.averageJsonSizeBytes, 90_806_286);
+assert.equal(gpt6Sol.totalAttempts, 15);
+assert.equal(gpt6Sol.buildCount, 15);
+
+const opus55 = getModelBenchmarkProfile("anthropic_claude_opus_5_5");
+assert.ok(opus55);
+assert.deepEqual(opus55.totalCost, { usd: 111.53, attemptCount: 63 });
+assert.equal(opus55.totalAttempts, 63, "audited max attempts must override mixed-effort ledger totals");
+assert.equal(opus55.buildCount, 15);
+assert.deepEqual(opus55.outputCap, { kind: "exact", tokens: 128_000 });
+assert.equal(opus55.taskBudget, "136,000 tokens");
+assert.equal(opus55.averageInference, undefined, "mixed task budgets must not publish a uniform-configuration timing average");
+assert.equal(opus55.averageJsonSizeBytes, 39_690_530);
+assert.equal(opus55.note, undefined);
 
 const gpt56Luna = getModelBenchmarkProfile("openai_gpt_5_6_luna");
 assert.ok(gpt56Luna, "GPT 5.6 Luna Pro should have benchmark run details");
@@ -398,6 +420,16 @@ assert.deepEqual(
 );
 
 const catalogKeys = MODEL_CATALOG.map((model) => model.key);
+const gpt6Luna = getModelBenchmarkProfile("openai_gpt_6_luna");
+assert.ok(gpt6Luna);
+assert.deepEqual(gpt6Luna.parameters, gpt6Sol.parameters);
+assert.deepEqual(gpt6Luna.totalCost, { usd: 0.50, attemptCount: 33 });
+assert.deepEqual(gpt6Luna.outputCap, { kind: "exact", tokens: 128_000 });
+assert.deepEqual(gpt6Luna.averageInference, { milliseconds: 1_274_578 });
+assert.equal(gpt6Luna.averageJsonSizeBytes, 25_949_793);
+assert.equal(gpt6Luna.totalAttempts, 33);
+assert.equal(gpt6Luna.buildCount, 15);
+assert.equal(gpt6Luna.sourceRelease, undefined);
 assert.equal(
   new Set(catalogKeys).size,
   catalogKeys.length,
