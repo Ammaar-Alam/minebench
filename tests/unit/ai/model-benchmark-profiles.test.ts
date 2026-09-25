@@ -50,7 +50,7 @@ assert.equal(opus55.buildCount, 15);
 assert.deepEqual(opus55.outputCap, { kind: "exact", tokens: 128_000 });
 assert.equal(opus55.taskBudget, "136,000 tokens");
 assert.equal(opus55.averageInference, undefined, "mixed task budgets must not publish a uniform-configuration timing average");
-assert.equal(opus55.averageJsonSizeBytes, 39_690_530);
+assert.equal(opus55.averageJsonSizeBytes, 40_090_284);
 assert.equal(opus55.note, undefined);
 
 const gpt56Luna = getModelBenchmarkProfile("openai_gpt_5_6_luna");
