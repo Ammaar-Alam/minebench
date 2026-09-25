@@ -48,10 +48,10 @@ assert.deepEqual(opus55.totalCost, { usd: 111.53, attemptCount: 63 });
 assert.equal(opus55.totalAttempts, 63, "audited max attempts must override mixed-effort ledger totals");
 assert.equal(opus55.buildCount, 15);
 assert.deepEqual(opus55.outputCap, { kind: "exact", tokens: 128_000 });
-assert.equal(opus55.taskBudget, "128,000–156,000 tokens");
+assert.equal(opus55.taskBudget, "136,000 tokens");
 assert.equal(opus55.averageInference, undefined, "mixed task budgets must not publish a uniform-configuration timing average");
 assert.equal(opus55.averageJsonSizeBytes, 39_690_530);
-assert.ok(opus55.note?.includes("knight example uses an earlier xhigh build"));
+assert.equal(opus55.note, undefined);
 
 const gpt56Luna = getModelBenchmarkProfile("openai_gpt_5_6_luna");
 assert.ok(gpt56Luna, "GPT 5.6 Luna Pro should have benchmark run details");

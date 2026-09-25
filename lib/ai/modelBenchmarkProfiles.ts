@@ -337,8 +337,7 @@ const MODEL_BENCHMARK_METADATA: Partial<
   anthropic_claude_opus_5_5: {
     totalCost: { usd: 111.53, attemptCount: 63 },
     totalAttempts: 63,
-    taskBudget: "128,000–156,000 tokens",
-    note: "Statistics cover max-effort runs with task budgets of 128k, 136k, 148k, and 156k tokens. Costs and attempts exclude xhigh runs and isolated diagnostics. The knight example uses an earlier xhigh build.",
+    taskBudget: "136,000 tokens",
   },
   openai_gpt_6_sol: {
     totalCost: { usd: 7.91, attemptCount: 15 },
