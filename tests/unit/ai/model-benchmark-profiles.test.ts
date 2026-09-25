@@ -49,7 +49,8 @@ assert.equal(opus55.totalAttempts, 63, "audited max attempts must override mixed
 assert.equal(opus55.buildCount, 15);
 assert.deepEqual(opus55.outputCap, { kind: "exact", tokens: 128_000 });
 assert.equal(opus55.taskBudget, "136,000 tokens");
-assert.equal(opus55.averageInference, undefined, "mixed task budgets must not publish a uniform-configuration timing average");
+assert.deepEqual(opus55.averageInference, { milliseconds: 926_908 });
+assert.equal(getAverageBenchmarkInferenceTimeMs("anthropic_claude_opus_5_5"), 926_908);
 assert.equal(opus55.averageJsonSizeBytes, 40_090_284);
 assert.equal(opus55.note, undefined);
 
