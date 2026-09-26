@@ -957,12 +957,11 @@ export function SandboxLive({
         if (outputConfig !== undefined && (!outputConfig || typeof outputConfig !== "object" || Array.isArray(outputConfig))) {
           throw new Error("output_config must be an object.");
         }
-        const hasBetaHeader = Object.keys(overrides.headers ?? {}).some((name) => name.toLowerCase() === "anthropic-beta");
         return {
           id: model.id,
           kind: "catalog" as const,
           modelKey: model.modelKey,
-          headers: hasBetaHeader ? overrides.headers : { ...overrides.headers, "anthropic-beta": "task-budgets-2026-03-13" },
+          headers: overrides.headers,
           body: {
             ...overrides.body,
             output_config: {

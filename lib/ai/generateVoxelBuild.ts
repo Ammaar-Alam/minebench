@@ -501,7 +501,7 @@ export type GenerateVoxelBuildParams = {
   onProviderRequest?: (attempt: number) => void;
   onRetry?: (attempt: number, reason: string) => unknown;
   // Fired after response text returns and before parsing or execution
-  onRawResponse?: (attempt: number, rawText: string) => void;
+  onRawResponse?: (attempt: number, rawText: string) => unknown;
   onDelta?: (delta: string) => void;
   onProviderTrace?: (message: string) => void;
   acquireBuildProcessing?: () => Promise<() => void>;
@@ -1224,6 +1224,7 @@ export async function generateVoxelBuild(
     }
 
     let providerRequestStarted = false;
+    let rawResponseCallbackFailed = false;
     try {
       const { text } = await providerGenerateText({
         model,
@@ -1261,14 +1262,14 @@ export async function generateVoxelBuild(
         },
       });
       previousText = text;
+      const rawResponseCallbackStartedAt = performance.now();
       try {
-        invokeCallback(params.onRawResponse, attempt, text);
+        await params.onRawResponse?.(attempt, text);
       } catch (err) {
-        const message = getErrorMessage(err, String(err));
-        invokeCallback(
-          params.onProviderTrace,
-          `Raw response callback failed for attempt ${attempt}: ${message}`,
-        );
+        rawResponseCallbackFailed = true;
+        throw err;
+      } finally {
+        callbackDurationMs += performance.now() - rawResponseCallbackStartedAt;
       }
       let releaseBuildProcessing: (() => void) | undefined;
       if (params.acquireBuildProcessing) {
@@ -1392,6 +1393,7 @@ export async function generateVoxelBuild(
         if (!keepBuildProcessingLease) releaseBuildProcessing?.();
       }
     } catch (err) {
+      if (rawResponseCallbackFailed) throw err;
       lastError = getErrorMessage(err, "Provider request failed");
       if (params.abortSignal?.aborted) break;
       // Retry transient work that failed safely before an outbound request
