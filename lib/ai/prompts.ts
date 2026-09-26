@@ -84,7 +84,7 @@ You can write any valid JavaScript: variables, functions, loops, math. The tool 
 \`\`\`
 
 ## Your Task
-Before writing code, create a detailed build plan in \`<build_plan>\` tags in your thinking:
+Before writing code, create a detailed build plan internally:
 1. **Analyze the request**: What is being built? What characteristics make it instantly recognizable?
 2. **Decompose into 3D parts**: List every component with its geometry, how it connects to adjacent parts, approximate coordinate bounds, and material.
 3. **Plan the scene**: What environment, base, atmosphere, or supporting elements will elevate the build beyond the bare subject?
