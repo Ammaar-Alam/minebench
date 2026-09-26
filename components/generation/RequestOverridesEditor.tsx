@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import {
   isManagedRequestBodyField,
-  isManagedRequestHeader,
   MAX_CUSTOM_REQUEST_ENTRIES,
   type CustomRequestEntry,
 } from "@/lib/ai/customProviderConfig";
@@ -13,7 +12,6 @@ function RequestEntriesEditor({
   addLabel,
   entries,
   defaults = [],
-  managed = () => false,
   onChange,
   disabled,
 }: {
@@ -21,7 +19,6 @@ function RequestEntriesEditor({
   addLabel: string;
   entries: CustomRequestEntry[];
   defaults?: CustomRequestEntry[];
-  managed?: (entry: CustomRequestEntry) => boolean;
   onChange: (entries: CustomRequestEntry[]) => void;
   disabled: boolean;
 }) {
@@ -50,15 +47,14 @@ function RequestEntriesEditor({
         <div className="flex flex-col gap-2">
           {defaults.map((entry) => {
             const override = entries.find((item) => item.name.toLowerCase() === entry.name.toLowerCase());
-            const readOnly = managed(entry);
             return (
               <div key={entry.name} className="grid grid-cols-[minmax(0,1fr)_2.75rem] items-center gap-2 sm:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)_2.75rem]">
                 <input aria-label={`${label} ${entry.name} name`} className="mb-field col-start-1 row-start-1 h-10 min-w-0" value={entry.name} disabled />
                 <input
                   aria-label={`${label} ${entry.name} value`}
                   className="mb-field col-start-1 row-start-2 h-10 min-w-0 sm:col-start-2 sm:row-start-1"
-                  value={readOnly ? entry.value : override?.value ?? entry.value}
-                  disabled={disabled || readOnly}
+                  value={override?.value ?? entry.value}
+                  disabled={disabled}
                   maxLength={16_384}
                   spellCheck={false}
                   onChange={(event) => onChange([
@@ -146,16 +142,16 @@ export type RequestOverridesProfile = {
 };
 
 type RequestPreview = {
-  url: string;
-  method: string;
-  headers: Record<string, string>;
   body: Record<string, unknown>;
 };
 
+const HIDDEN_BODY_DEFAULTS = new Set(["background", "store", "provider"]);
+
 function previewValue(name: string, value: unknown): string {
-  if (name === "output_config" && value && typeof value === "object" && !Array.isArray(value)) {
+  if (["output_config", "text", "generationConfig"].includes(name) && value && typeof value === "object" && !Array.isArray(value)) {
+    const hidden = name === "generationConfig" ? ["responseMimeType", "responseJsonSchema"] : ["format"];
     return JSON.stringify(Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).filter(([key]) => key !== "format"),
+      Object.entries(value as Record<string, unknown>).filter(([key]) => !hidden.includes(key)),
     ));
   }
   return typeof value === "string" ? value : JSON.stringify(value);
@@ -199,6 +195,12 @@ export function RequestOverridesEditor({
   const count = [...profile.headers, ...profile.body].filter(
     (entry) => Boolean(entry.name.trim() || entry.value.trim()),
   ).length;
+  const bodyDefaults = preview
+    ? Object.entries(preview.body)
+        .filter(([name, value]) => value !== null && !isManagedRequestBodyField(name) && !HIDDEN_BODY_DEFAULTS.has(name))
+        .map(([name, value]) => ({ name, value: previewValue(name, value) }))
+        .filter((entry) => entry.value !== "{}")
+    : [];
 
   return (
     <div>
@@ -211,7 +213,7 @@ export function RequestOverridesEditor({
         <span className="flex min-w-0 items-baseline gap-2">
           <span className="text-xs font-medium text-fg">Headers &amp; body</span>
           <span className="truncate text-[11px] text-muted">
-            {preview ? `${Object.keys(preview.headers).length + Object.keys(preview.body).length} fields` : count ? `${count} set` : "Optional"}
+            {count ? `${count} set` : preview ? "Defaults" : "Optional"}
           </span>
         </span>
         <svg
@@ -231,17 +233,10 @@ export function RequestOverridesEditor({
       {open ? (
         <div className="mb-fade-in flex flex-col gap-5 pt-3">
           {previewError ? <p role="alert" className="text-xs text-danger">{previewError}</p> : null}
-          {preview ? <div className="text-[11px] text-muted">{preview.method} {preview.url}</div> : null}
           <RequestEntriesEditor
             label="Headers"
             addLabel="Add header"
             entries={profile.headers}
-            defaults={preview ? Object.entries(preview.headers).map(([name, value]) => ({ name, value })) : undefined}
-            managed={(entry) => isManagedRequestHeader(entry.name) || (
-              entry.value === "[hidden]" && !profile.headers.some(
-                (item) => item.name.toLowerCase() === entry.name.toLowerCase(),
-              )
-            )}
             onChange={(headers) => onChange({ ...profile, headers })}
             disabled={disabled}
           />
@@ -249,17 +244,10 @@ export function RequestOverridesEditor({
             label="Body parameters"
             addLabel="Add parameter"
             entries={profile.body}
-            defaults={preview ? Object.entries(preview.body).map(([name, value]) => ({ name, value: previewValue(name, value) })) : undefined}
-            managed={(entry) => isManagedRequestBodyField(entry.name)}
+            defaults={bodyDefaults}
             onChange={(body) => onChange({ ...profile, body })}
             disabled={disabled}
           />
-          {preview ? (
-            <details className="text-xs text-muted">
-              <summary className="cursor-pointer">Full request</summary>
-              <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-sm bg-fg/[0.04] p-3 text-[11px]">{JSON.stringify(preview, null, 2)}</pre>
-            </details>
-          ) : null}
         </div>
       ) : null}
     </div>
