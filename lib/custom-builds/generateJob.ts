@@ -394,7 +394,7 @@ async function generateBuild(
           sourceBuildSha256: sha256,
           exportStats: { attempt },
         });
-        await appendCustomBuildEvent(customBuild.id, "raw_response", {
+        emitCustomBuildEvent(customBuild.id, "raw_response", {
           attempt,
           sha256,
           textChars: text.length,
