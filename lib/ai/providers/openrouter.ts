@@ -1,4 +1,4 @@
-import { withMaxOutputTokens } from "@/lib/ai/providers/shared";
+import { isProviderRequestPreviewCaptured, providerFetch, withMaxOutputTokens } from "@/lib/ai/providers/shared";
 import {
   modelRecommendedTopP,
   modelUsesDefaultSampling,
@@ -172,7 +172,7 @@ async function fetchWithRetry(
     try {
       init.signal?.throwIfAborted();
       opts.onProviderRequest?.();
-      const res = await fetch(url, init);
+      const res = await providerFetch(url, init);
       if (res.status >= 500 || res.status === 429) {
         if (i === opts.tries - 1) return res;
         const delay = Math.min(opts.maxDelayMs, opts.minDelayMs * Math.pow(2, i));
@@ -181,6 +181,7 @@ async function fetchWithRetry(
       }
       return res;
     } catch (e) {
+      if (isProviderRequestPreviewCaptured(e)) throw e;
       lastErr = e;
       if (i === opts.tries - 1) throw e;
       const delay = Math.min(opts.maxDelayMs, opts.minDelayMs * Math.pow(2, i));
@@ -481,6 +482,7 @@ export async function openrouterGenerateText(params: {
     const data = (await res.json()) as OpenRouterChatResponse;
     return { text: extractTextFromChatCompletions(data) };
   } catch (err) {
+    if (isProviderRequestPreviewCaptured(err)) throw err;
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error("OpenRouter request timed out");
     }

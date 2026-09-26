@@ -2,6 +2,7 @@
 // Provider-specific variants (error vocabularies, content extraction, base URL
 // rules) stay in their own adapter files
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
 import {
   mergeCustomRequestBody,
@@ -12,6 +13,52 @@ import {
 
 const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 const FALSE_VALUES = new Set(["0", "false", "no", "off"]);
+
+export type ProviderRequestPreview = {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body: Record<string, unknown>;
+};
+
+const previewContext = new AsyncLocalStorage<{ request?: ProviderRequestPreview }>();
+const PREVIEW_CAPTURED = "Provider request preview captured";
+
+export function isProviderRequestPreviewCaptured(error: unknown): boolean {
+  return error instanceof Error && error.message === PREVIEW_CAPTURED;
+}
+
+export async function captureProviderRequest(
+  run: () => Promise<unknown>,
+): Promise<ProviderRequestPreview> {
+  const context: { request?: ProviderRequestPreview } = {};
+  try {
+    await previewContext.run(context, run);
+  } catch (error) {
+    if (!isProviderRequestPreviewCaptured(error)) throw error;
+  }
+  if (!context.request) throw new Error("No provider request could be prepared");
+  return context.request;
+}
+
+export async function providerFetch(url: string | URL, init: RequestInit): Promise<Response> {
+  const context = previewContext.getStore();
+  if (context) {
+    context.request = {
+      url: String(url),
+      method: init.method ?? "GET",
+      headers: Object.fromEntries(
+        [...new Headers(init.headers)].map(([name, value]) => [
+          name,
+          /authorization|api[-_]?key|cookie|secret|token/i.test(name) ? "[hidden]" : value,
+        ]),
+      ),
+      body: JSON.parse(String(init.body)) as Record<string, unknown>,
+    };
+    throw new Error(PREVIEW_CAPTURED);
+  }
+  return fetch(url, init);
+}
 
 export function parseBooleanEnv(name: string, defaultValue: boolean): boolean {
   const raw = process.env[name];
@@ -67,7 +114,7 @@ export async function postChatCompletionWithTokenBudgetRetry(params: {
       params.signal?.throwIfAborted();
       params.onProviderRequest?.();
       // Fetch keeps this signal attached to the returned response body
-      res = await fetch(params.url, {
+      res = await providerFetch(params.url, {
         method: "POST",
         headers: mergeCustomRequestHeaders({
           Authorization: `Bearer ${params.apiKey}`,
@@ -86,6 +133,7 @@ export async function postChatCompletionWithTokenBudgetRetry(params: {
       break;
     }
   } catch (err) {
+    if (isProviderRequestPreviewCaptured(err)) throw err;
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error(`${params.serviceLabel} request timed out`);
     }

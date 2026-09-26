@@ -1047,6 +1047,21 @@ export function SandboxLive({
     };
   }
 
+  function requestPreviewBody(model: SelectedLiveModel) {
+    try {
+      const requestModel = customBuildRequestModel(model);
+      const keys = selectGenerationProviderKeys([requestModel], providerKeys);
+      return {
+        prompt: prompt.trim(), gridSize, palette, models: [requestModel],
+        providerKeys: Object.fromEntries(
+          Object.entries(keys).filter(([, value]) => Boolean(value)).map(([name]) => [name, "request-preview"]),
+        ),
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
   function hasProviderKey(model: SelectedLiveModel): boolean {
     if (model.kind === "custom") {
       const provider = model.provider === "custom" ? "custom" : "openrouter";
@@ -2227,6 +2242,7 @@ export function SandboxLive({
               ) : null}
               <RequestOverridesEditor
                 profile={model.requestProfile}
+                previewBody={requestPreviewBody(model)}
                 onChange={(profile) => updateModelRequestProfile(model, profile)}
                 disabled={running}
               />

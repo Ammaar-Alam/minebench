@@ -63,6 +63,10 @@ const BLOCKED_BODY_FIELDS = new Set([
   "tool_choice",
   "tools",
 ]);
+
+export function isManagedRequestBodyField(name: string): boolean {
+  return BLOCKED_BODY_FIELDS.has(name.toLowerCase());
+}
 const TOKEN_FIELD_ALIASES = ["max_tokens", "max_completion_tokens", "max_output_tokens"] as const;
 
 export function emptyCustomProviderProfile(): CustomProviderProfile {
