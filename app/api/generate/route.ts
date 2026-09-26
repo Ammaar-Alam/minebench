@@ -10,6 +10,8 @@ import { generateVoxelBuild } from "@/lib/ai/generateVoxelBuild";
 import { captureProviderRequest } from "@/lib/ai/providers/shared";
 import { getModelByKey, ModelKey } from "@/lib/ai/modelCatalog";
 import { assertSafeCustomApiUrl } from "@/lib/ai/providers/customApiGuard";
+import { getAuthenticatedUserId } from "@/lib/auth/request";
+import { GalleryServiceError, requireMineBenchAdmin } from "@/lib/gallery/service";
 import type { GenerateEvent, GenerateModelRequest, GenerateRequest } from "@/lib/ai/types";
 import { publishGenerationError, publishGenerationSuccess } from "@/lib/observability/cloudwatch";
 
@@ -71,7 +73,7 @@ const modelRequestSchema = z.union([
 
 const reqSchema = z.object({
   prompt: z.string().max(MAX_GENERATION_PROMPT_CHARS, `Keep the prompt to ${MAX_GENERATION_PROMPT_CHARS} characters or fewer.`),
-  gridSize: z.custom<GridSize>((value) => isGridSize(value) && value <= 512),
+  gridSize: z.custom<GridSize>(isGridSize),
   palette: z.union([z.literal("simple"), z.literal("advanced")]),
   modelKeys: z.array(z.string()).min(1).max(8).optional(),
   models: z.array(modelRequestSchema).min(1).max(8).optional(),
@@ -109,6 +111,20 @@ export async function POST(req: Request) {
   }
 
   const body = parsed.data as GenerateRequest;
+  const preview = new URL(req.url).searchParams.get("preview") === "1";
+  if (body.gridSize > 512) {
+    if (!preview) return NextResponse.json({ error: "Large grids require saved generation." }, { status: 400 });
+    const ownerId = await getAuthenticatedUserId(req);
+    if (!ownerId) return NextResponse.json({ error: "Sign in to preview this size." }, { status: 401 });
+    try {
+      await requireMineBenchAdmin(ownerId);
+    } catch (error) {
+      if (error instanceof GalleryServiceError && error.code === "forbidden") {
+        return NextResponse.json({ error: error.message }, { status: 403 });
+      }
+      throw error;
+    }
+  }
   const requestedModels: GenerateModelRequest[] =
     body.models && body.models.length > 0
       ? body.models
@@ -162,7 +178,7 @@ export async function POST(req: Request) {
           },
   }));
 
-  if (new URL(req.url).searchParams.get("preview") === "1") {
+  if (preview) {
     if (generationModels.length !== 1) return NextResponse.json({ error: "Select one model." }, { status: 400 });
     const generationModel = generationModels[0].generationModel;
     const previewKeys = Object.fromEntries(
