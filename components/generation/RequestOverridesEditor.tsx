@@ -236,7 +236,9 @@ export function RequestOverridesEditor({
             addLabel="Add header"
             entries={profile.headers}
             defaults={preview ? Object.entries(preview.headers).map(([name, value]) => ({ name, value })) : undefined}
-            managed={(entry) => entry.value === "[hidden]"}
+            managed={(entry) => entry.value === "[hidden]" && !profile.headers.some(
+              (item) => item.name.toLowerCase() === entry.name.toLowerCase(),
+            )}
             onChange={(headers) => onChange({ ...profile, headers })}
             disabled={disabled}
           />
