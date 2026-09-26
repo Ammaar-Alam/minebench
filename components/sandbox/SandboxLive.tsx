@@ -952,6 +952,26 @@ export function SandboxLive({
         model.requestProfile.headers,
         model.requestProfile.body,
       );
+      if (model.modelKey === "anthropic_claude_opus_5_5" && providerKeys.anthropic?.trim()) {
+        const outputConfig = overrides.body?.output_config;
+        if (outputConfig !== undefined && (!outputConfig || typeof outputConfig !== "object" || Array.isArray(outputConfig))) {
+          throw new Error("output_config must be an object.");
+        }
+        const hasBetaHeader = Object.keys(overrides.headers ?? {}).some((name) => name.toLowerCase() === "anthropic-beta");
+        return {
+          id: model.id,
+          kind: "catalog" as const,
+          modelKey: model.modelKey,
+          headers: hasBetaHeader ? overrides.headers : { ...overrides.headers, "anthropic-beta": "task-budgets-2026-03-13" },
+          body: {
+            ...overrides.body,
+            output_config: {
+              task_budget: { type: "tokens", total: 96_000 },
+              ...(outputConfig as Record<string, unknown> | undefined),
+            },
+          },
+        };
+      }
       return {
         id: model.id,
         kind: "catalog" as const,
@@ -985,6 +1005,21 @@ export function SandboxLive({
         model.requestProfile.body,
       ),
     };
+  }
+
+  function requestPreviewBody(model: SelectedLiveModel) {
+    try {
+      const requestModel = customBuildRequestModel(model);
+      const keys = selectGenerationProviderKeys([requestModel], providerKeys);
+      return {
+        prompt: prompt.trim(), gridSize, palette, models: [requestModel],
+        providerKeys: Object.fromEntries(
+          Object.entries(keys).filter(([, value]) => Boolean(value)).map(([name]) => [name, "request-preview"]),
+        ),
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   function hasProviderKey(model: SelectedLiveModel): boolean {
@@ -2101,6 +2136,7 @@ export function SandboxLive({
               ) : null}
               <RequestOverridesEditor
                 profile={model.requestProfile}
+                previewBody={requestPreviewBody(model)}
                 onChange={(profile) => updateModelRequestProfile(model, profile)}
                 disabled={running}
               />

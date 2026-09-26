@@ -1,4 +1,4 @@
-import { parseBooleanEnv, withMaxOutputTokens } from "@/lib/ai/providers/shared";
+import { isProviderRequestPreviewCaptured, parseBooleanEnv, providerFetch, withMaxOutputTokens } from "@/lib/ai/providers/shared";
 import { claudeCapabilities, type ClaudeEffort } from "@/lib/ai/claudeModels";
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
@@ -285,7 +285,7 @@ export async function anthropicGenerateText(params: {
 
           controller.signal.throwIfAborted();
           params.onProviderRequest?.();
-          res = await fetch("https://api.anthropic.com/v1/messages", {
+          res = await providerFetch("https://api.anthropic.com/v1/messages", {
             method: "POST",
             headers: mergeCustomRequestHeaders({
               "Content-Type": "application/json",
@@ -358,6 +358,7 @@ export async function anthropicGenerateText(params: {
       if (res && !res.ok) break;
     }
   } catch (err) {
+    if (isProviderRequestPreviewCaptured(err)) throw err;
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error("Anthropic request timed out");
     }

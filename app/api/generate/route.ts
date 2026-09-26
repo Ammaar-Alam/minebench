@@ -6,6 +6,7 @@ import {
   normalizeProviderRequestOverrides,
 } from "@/lib/ai/customProviderConfig";
 import { generateVoxelBuild } from "@/lib/ai/generateVoxelBuild";
+import { captureProviderRequest } from "@/lib/ai/providers/shared";
 import { getModelByKey, ModelKey } from "@/lib/ai/modelCatalog";
 import { assertSafeCustomApiUrl } from "@/lib/ai/providers/customApiGuard";
 import type { GenerateEvent, GenerateModelRequest, GenerateRequest } from "@/lib/ai/types";
@@ -68,7 +69,7 @@ const modelRequestSchema = z.union([
 ]);
 
 const reqSchema = z.object({
-  prompt: z.string().min(1).max(800),
+  prompt: z.string().max(800),
   gridSize: z.union([z.literal(64), z.literal(256), z.literal(512)]),
   palette: z.union([z.literal("simple"), z.literal("advanced")]),
   modelKeys: z.array(z.string()).min(1).max(8).optional(),
@@ -143,6 +144,49 @@ export async function POST(req: Request) {
     }
   }
 
+  const generationModels = models.map((model) => ({
+    requestModelKey: model.id,
+    generationModel: model.kind === "catalog"
+      ? { ...getModelByKey(model.modelKey), customHeaders: model.headers, customBody: model.body }
+      : model.provider === "openrouter"
+        ? {
+            key: model.id, provider: "custom" as const, modelId: model.modelId,
+            displayName: model.displayName, openRouterModelId: model.modelId,
+            forceOpenRouter: true, customHeaders: model.headers, customBody: model.body,
+          }
+        : {
+            key: model.id, provider: "custom" as const, modelId: model.modelId,
+            displayName: model.displayName, baseUrl: model.baseUrl,
+            customHeaders: model.headers, customBody: model.body,
+          },
+  }));
+
+  if (new URL(req.url).searchParams.get("preview") === "1") {
+    if (generationModels.length !== 1) return NextResponse.json({ error: "Select one model." }, { status: 400 });
+    const generationModel = generationModels[0].generationModel;
+    const previewKeys = Object.fromEntries(
+      Object.entries(body.providerKeys ?? {}).filter(([, key]) => Boolean(key)).map(([name]) => [name, "request-preview"]),
+    );
+    if (Object.keys(previewKeys).length === 0) {
+      previewKeys[generationModel.forceOpenRouter ? "openrouter" : generationModel.provider] = "request-preview";
+    }
+    try {
+      const request = await captureProviderRequest(() => generateVoxelBuild({
+        model: generationModel,
+        prompt: body.prompt,
+        gridSize: body.gridSize,
+        palette: body.palette,
+        maxAttempts: 1,
+        providerKeys: previewKeys,
+        allowServerKeys: false,
+      }));
+      return NextResponse.json({ request });
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : "Request unavailable" }, { status: 400 });
+    }
+  }
+  if (!body.prompt.trim()) return NextResponse.json({ error: "Enter a prompt." }, { status: 400 });
+
   const providerKeys = body.providerKeys;
   const allowServerKeys =
     process.env.NODE_ENV !== "production" || process.env.MINEBENCH_ALLOW_SERVER_KEYS === "1";
@@ -212,35 +256,7 @@ export async function POST(req: Request) {
       send({ type: "hello", ts: Date.now(), pad: STREAM_PAD });
 
       let pending = models.length;
-      for (const model of models) {
-        const requestModelKey = model.id;
-        const generationModel =
-          model.kind === "catalog"
-            ? {
-                ...getModelByKey(model.modelKey),
-                customHeaders: model.headers,
-                customBody: model.body,
-              }
-            : model.provider === "openrouter"
-              ? {
-                  key: model.id,
-                  provider: "custom" as const,
-                  modelId: model.modelId,
-                  displayName: model.displayName,
-                  openRouterModelId: model.modelId,
-                  forceOpenRouter: true,
-                  customHeaders: model.headers,
-                  customBody: model.body,
-                }
-              : {
-                  key: model.id,
-                  provider: "custom" as const,
-                  modelId: model.modelId,
-                  displayName: model.displayName,
-                  baseUrl: model.baseUrl,
-                  customHeaders: model.headers,
-                  customBody: model.body,
-                };
+      for (const { requestModelKey, generationModel } of generationModels) {
         send({ type: "start", modelKey: requestModelKey });
 
         void generateVoxelBuild({
