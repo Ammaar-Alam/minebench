@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import {
   isManagedRequestBodyField,
+  isManagedRequestHeader,
   MAX_CUSTOM_REQUEST_ENTRIES,
   type CustomRequestEntry,
 } from "@/lib/ai/customProviderConfig";
@@ -236,8 +237,10 @@ export function RequestOverridesEditor({
             addLabel="Add header"
             entries={profile.headers}
             defaults={preview ? Object.entries(preview.headers).map(([name, value]) => ({ name, value })) : undefined}
-            managed={(entry) => entry.value === "[hidden]" && !profile.headers.some(
-              (item) => item.name.toLowerCase() === entry.name.toLowerCase(),
+            managed={(entry) => isManagedRequestHeader(entry.name) || (
+              entry.value === "[hidden]" && !profile.headers.some(
+                (item) => item.name.toLowerCase() === entry.name.toLowerCase(),
+              )
             )}
             onChange={(headers) => onChange({ ...profile, headers })}
             disabled={disabled}
