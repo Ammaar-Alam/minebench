@@ -1,4 +1,4 @@
-import { extractChatCompletionText, withMaxOutputTokens } from "@/lib/ai/providers/shared";
+import { capturePreparedProviderRequest, extractChatCompletionText, isProviderRequestPreviewCaptured, withMaxOutputTokens } from "@/lib/ai/providers/shared";
 import {
   customProviderMaxOutputTokens,
   normalizeCustomProviderRequestConfig,
@@ -160,6 +160,9 @@ async function postToResolvedApi(params: {
       path: `${params.target.url.pathname}${params.target.url.search}`,
       headers: Object.fromEntries(headers.entries()),
     };
+    capturePreparedProviderRequest(params.target.url, {
+      method: "POST", headers, body: params.body,
+    });
 
     const cleanup = (abort: () => void) => {
       params.signal.removeEventListener("abort", abort);
@@ -393,6 +396,7 @@ export async function openAiCompatibleGenerateText(params: {
       resultText = extractChatCompletionText(data);
     }
   } catch (err) {
+    if (isProviderRequestPreviewCaptured(err)) throw err;
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error(`${serviceLabel} request timed out`);
     }

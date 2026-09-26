@@ -5,8 +5,16 @@ import { enqueueGenerationNotification, lockNotificationAccounts } from "@/lib/n
 
 type PrismaTx = Prisma.TransactionClient;
 type OwnerScopedRow = { ownerId: string | null };
-type TerminalBuildJobRow = { id: string; customBuildId: string; type: string };
+type TerminalBuildJobRow = { id: string; customBuildId: string; type: string; payload?: Prisma.JsonValue };
 type TerminalBuildJobCandidate = TerminalBuildJobRow & OwnerScopedRow;
+
+function savedSourceFilter(jobId: string, payload: Prisma.JsonValue | undefined): Prisma.CustomBuildArtifactWhereInput {
+  const fresh = payload && typeof payload === "object" && !Array.isArray(payload) && payload.freshGeneration === true;
+  return { OR: [
+    { kind: "build_json" },
+    { kind: "raw_text_debug", ...(fresh ? { exportStats: { path: ["jobId"], equals: jobId } } : {}) },
+  ] };
+}
 
 function readIntEnv(name: string, fallback: number, min: number, max: number): number {
   const raw = process.env[name];
@@ -170,12 +178,12 @@ async function recoverStaleCustomBuildJobLeasesInTransaction(
         AND j.status = 'queued'::"CustomBuildJobStatus"
         AND j.type = 'generate'::"CustomBuildJobType"
         AND s."expiresAt" <= ${recoveryCutoff}::timestamp
-      RETURNING j.id, j."customBuildId", j.type::text
+      RETURNING j.id, j."customBuildId", j.type::text, j.payload
     `
     : [];
   for (const row of expiredQueuedRows) {
     const recoverable = Boolean(await client.customBuildArtifact.findFirst({
-      where: { customBuildId: row.customBuildId, kind: { in: ["build_json", "raw_text_debug"] } },
+      where: { customBuildId: row.customBuildId, ...savedSourceFilter(row.id, row.payload) },
       select: { id: true },
     }));
     const failed = await client.customBuild.updateMany({
@@ -231,13 +239,13 @@ async function recoverStaleCustomBuildJobLeasesInTransaction(
         AND j.status = 'running'::"CustomBuildJobStatus"
         AND j."leaseExpiresAt" < now()
         AND j.attempts >= j."maxAttempts"
-      RETURNING j.id, j."customBuildId", j.type::text
+      RETURNING j.id, j."customBuildId", j.type::text, j.payload
     `
     : [];
   for (const row of failedRows) {
     if (row.type !== "generate") continue;
     const recoverable = Boolean(await client.customBuildArtifact.findFirst({
-      where: { customBuildId: row.customBuildId, kind: { in: ["build_json", "raw_text_debug"] } },
+      where: { customBuildId: row.customBuildId, ...savedSourceFilter(row.id, row.payload) },
       select: { id: true },
     }));
     const failed = await client.customBuild.updateMany({
@@ -303,6 +311,7 @@ export async function failCustomBuildJob(
       maxAttempts: true,
       customBuildId: true,
       type: true,
+      payload: true,
       customBuild: { select: { ownerId: true } },
     },
   });
@@ -310,7 +319,7 @@ export async function failCustomBuildJob(
   const recoverable = job.type === "generate" && Boolean(await client.customBuildArtifact.findFirst({
     where: {
       customBuildId: job.customBuildId,
-      kind: { in: ["build_json", "raw_text_debug"] },
+      ...savedSourceFilter(jobId, job.payload),
       customBuild: { removedAt: null, status: { in: ["queued", "running"] } },
     },
     select: { id: true },

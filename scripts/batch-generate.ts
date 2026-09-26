@@ -28,10 +28,11 @@ import * as path from "path";
 import { createHash } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
-import { generateVoxelBuild } from "../lib/ai/generateVoxelBuild";
+import { generateVoxelBuild, type GenerateVoxelBuildParams } from "../lib/ai/generateVoxelBuild";
+import { claudeCapabilities } from "../lib/ai/claudeModels";
 import { maxBlocksForGrid } from "../lib/ai/limits";
 import { extractBestVoxelBuildJson } from "../lib/ai/jsonExtract";
-import { MODEL_CATALOG, ModelKey } from "../lib/ai/modelCatalog";
+import { getModelByKey, MODEL_CATALOG, ModelKey } from "../lib/ai/modelCatalog";
 import { getPalette } from "../lib/blocks/palettes";
 import {
   BENCHMARK_PROMPT_MAP,
@@ -273,9 +274,13 @@ function buildPromptFilterMatcher(promptSlugs: string[], promptFilters: string[]
   };
 }
 
-function parseArgs() {
-  const args = process.argv.slice(2);
+export function parseArgs(args = process.argv.slice(2)) {
   const reasoning = args.find((a, i) => args[i - 1] === "--reasoning") || null;
+  const taskBudgetIndex = args.indexOf("--task_budget");
+  const taskBudget = taskBudgetIndex < 0 ? undefined : Number(args[taskBudgetIndex + 1]);
+  if (taskBudget !== undefined && (!Number.isSafeInteger(taskBudget) || taskBudget < 20_000)) {
+    throw new Error("--task_budget requires an integer of at least 20000 tokens");
+  }
   const attemptsRaw = args.find((a, i) => args[i - 1] === "--attempts") || null;
   const attemptsNum = attemptsRaw ? Number(attemptsRaw) : NaN;
   const attempts = Number.isFinite(attemptsNum) ? Math.max(1, Math.floor(attemptsNum)) : 6;
@@ -294,6 +299,7 @@ function parseArgs() {
     overwrite: args.includes("--overwrite"),
     notools: args.includes("--notools") || args.includes("--no-tools"),
     reasoning,
+    taskBudget,
     attempts,
     concurrency,
     promptFilters,
@@ -324,6 +330,28 @@ export function getCandidateModels(modelFilters: string[]): ModelKey[] {
 
 function getModel(modelKey: ModelKey) {
   return MODEL_CATALOG.find((model) => model.key === modelKey);
+}
+
+export function getBatchGenerationModel(
+  modelKey: ModelKey,
+  preferOpenRouter: boolean,
+  taskBudget?: number,
+): NonNullable<GenerateVoxelBuildParams["model"]> {
+  const model = getModelByKey(modelKey);
+  if (model.provider !== "anthropic") return model;
+  const supportsBudget = claudeCapabilities(model.modelId).taskBudgets &&
+    !preferOpenRouter && !model.forceOpenRouter && Boolean(process.env.ANTHROPIC_API_KEY?.trim());
+  if (!supportsBudget) {
+    if (taskBudget !== undefined) {
+      throw new Error(`--task_budget requires a supported Claude model on the direct Anthropic route with ANTHROPIC_API_KEY (${model.modelId})`);
+    }
+    return model;
+  }
+  return {
+    ...model,
+    customHeaders: { "anthropic-beta": "task-budgets-2026-03-13" },
+    customBody: { output_config: { task_budget: { type: "tokens", total: taskBudget ?? 96_000 } } },
+  };
 }
 
 function exactImportOnlyModelKeys(modelFilters: string[]): Set<ModelKey> {
@@ -453,6 +481,7 @@ async function generateAndSave(
   reasoning: string | null,
   metricsStore: BenchmarkMetricsStore,
   signal: AbortSignal,
+  taskBudget?: number,
 ): Promise<{
   ok: boolean;
   error?: string;
@@ -472,7 +501,7 @@ async function generateAndSave(
   let attemptCount = 1;
   clearRawAttemptResponses(job);
   const result = await generateVoxelBuild({
-    modelKey: job.modelKey,
+    model: getBatchGenerationModel(job.modelKey, preferOpenRouter, taskBudget),
     prompt: job.promptText,
     gridSize: 256,
     palette: "simple",
@@ -930,6 +959,7 @@ Options:
   --notools         Disable voxel.exec tool usage (tools are on by default)
   --no-tools        Alias for --notools
   --reasoning <s>   Override model thinking/reasoning level when the selected route supports it
+  --task_budget <n> Anthropic advisory task budget (default 96000 on supported native models; minimum 20000)
   --attempts <n>    Max attempts per build (default 6)
   --concurrency <n> Number of concurrent generations (default 1)
   --prompt <str...> Filter prompts by slug (can specify multiple)
@@ -983,6 +1013,7 @@ Upload notes:
     allJobs,
     missingJobs: missing,
   });
+  for (const job of jobsToGenerate) getBatchGenerationModel(job.modelKey, opts.openrouter, opts.taskBudget);
   const selectedModelKeys = Array.from(new Set(allJobs.map((j) => j.modelKey)));
   const metricJobs = buildBenchmarkMetricJobs(selectedModelKeys);
   const metricsStore = new BenchmarkMetricsStore();
@@ -1114,6 +1145,7 @@ Upload notes:
                 opts.reasoning,
                 metricsStore,
                 controller.signal,
+                opts.taskBudget,
               );
               active.delete(jobLabel(job));
               const elapsed = formatDuration(result.generationTimeMs);

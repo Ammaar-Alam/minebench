@@ -329,6 +329,7 @@ export function isTerminalCustomBuildJobFailure(message: string): boolean {
     "artifact_persistence_failed",
     "artifact_bookkeeping_failed",
     "generation_failed",
+    "execution_failed",
     "provider_rejected",
   ].includes(message);
 }

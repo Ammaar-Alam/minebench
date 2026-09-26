@@ -118,6 +118,9 @@ export function VoxelViewerCard({
   embedded?: boolean;
 }) {
   type PlacementProgressState = VoxelLoadingProgress & { stageLabel?: string | null };
+  // let initial data requests start before warming empty WebGL viewers
+  const [viewerMounted, setViewerMounted] = useState(Boolean(voxelBuild));
+  useEffect(() => setViewerMounted(true), []);
 
   const isLikelyVoxelBuild = (value: unknown): value is RenderableVoxelBuild => {
     if (!value || typeof value !== "object") return false;
@@ -417,7 +420,7 @@ export function VoxelViewerCard({
         </div>
 
         <div className={viewerHeightClass}>
-          {showBuildView && !explorerActive ? (
+          {showBuildView && !explorerActive && viewerMounted ? (
             <VoxelViewer
               ref={viewerRef}
               voxelBuild={build}

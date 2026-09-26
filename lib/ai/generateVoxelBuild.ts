@@ -187,7 +187,7 @@ function describeRequestedThinkingMode(opts: {
   }
 
   if (opts.provider === "openai") {
-    const usesProReasoning = opts.modelId.startsWith("gpt-5.6") || opts.modelId === "gpt-6-astra";
+    const usesProReasoning = opts.modelId.startsWith("gpt-5.6") || opts.modelId.startsWith("gpt-6-");
     const reasoningMode = usesProReasoning
       ? "reasoning_mode=pro,"
       : "";
@@ -493,7 +493,7 @@ export type GenerateVoxelBuildParams = {
   onProviderRequest?: (attempt: number) => void;
   onRetry?: (attempt: number, reason: string) => unknown;
   // Fired after response text returns and before parsing or execution
-  onRawResponse?: (attempt: number, rawText: string) => void | Promise<void>;
+  onRawResponse?: (attempt: number, rawText: string) => unknown;
   onDelta?: (delta: string) => void;
   onProviderTrace?: (message: string) => void;
   acquireBuildProcessing?: () => Promise<() => void>;
@@ -1192,6 +1192,7 @@ export async function generateVoxelBuild(
     }
 
     let providerRequestStarted = false;
+    let rawResponseCallbackFailed = false;
     try {
       const { text } = await providerGenerateText({
         model,
@@ -1240,18 +1241,14 @@ export async function generateVoxelBuild(
         },
       });
       previousText = text;
-      const rawCallbackStartedAt = performance.now();
+      const rawResponseCallbackStartedAt = performance.now();
       try {
         await params.onRawResponse?.(attempt, text);
       } catch (err) {
-        const message = getErrorMessage(err, String(err));
-        if (message.includes("custom_build_artifact_persistence_failed")) throw err;
-        invokeCallback(
-          params.onProviderTrace,
-          `Raw response callback failed for attempt ${attempt}: ${message}`,
-        );
+        rawResponseCallbackFailed = true;
+        throw err;
       } finally {
-        callbackDurationMs += performance.now() - rawCallbackStartedAt;
+        callbackDurationMs += performance.now() - rawResponseCallbackStartedAt;
       }
       let releaseBuildProcessing: (() => void) | undefined;
       if (params.acquireBuildProcessing) {
@@ -1291,6 +1288,7 @@ export async function generateVoxelBuild(
         if (!keepBuildProcessingLease) releaseBuildProcessing?.();
       }
     } catch (err) {
+      if (rawResponseCallbackFailed) throw err;
       lastError = getErrorMessage(err, "Provider request failed");
       if (params.abortSignal?.aborted || err instanceof OpenAIResponseCheckpointError) break;
       if (isVoxelBuildResourceError(lastError)) break;

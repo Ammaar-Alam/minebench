@@ -579,7 +579,7 @@ function customBuildPalette(value: string, fallback: Palette): Palette {
 }
 
 function customBuildRetryProvider(status: SavedGenerationPayload): keyof ProviderApiKeys | undefined {
-  if (isSavedGenerationRecovery(status.error?.code, status.imported, status.hasSavedSource)) return undefined;
+  if (isSavedGenerationRecovery(status.error?.code, status.imported)) return undefined;
   if (status.model.transport === "openrouter") return "openrouter";
   if (status.model.transport === "custom") return "custom";
   return status.model.provider as keyof ProviderApiKeys;
@@ -1012,6 +1012,25 @@ export function SandboxLive({
         model.requestProfile.headers,
         model.requestProfile.body,
       );
+      if (model.modelKey === "anthropic_claude_opus_5_5" && providerKeys.anthropic?.trim()) {
+        const outputConfig = overrides.body?.output_config;
+        if (outputConfig !== undefined && (!outputConfig || typeof outputConfig !== "object" || Array.isArray(outputConfig))) {
+          throw new Error("output_config must be an object.");
+        }
+        return {
+          id: model.id,
+          kind: "catalog" as const,
+          modelKey: model.modelKey,
+          headers: overrides.headers,
+          body: {
+            ...overrides.body,
+            output_config: {
+              task_budget: { type: "tokens", total: 128_000 },
+              ...(outputConfig as Record<string, unknown> | undefined),
+            },
+          },
+        };
+      }
       return {
         id: model.id,
         kind: "catalog" as const,
@@ -1045,6 +1064,21 @@ export function SandboxLive({
         model.requestProfile.body,
       ),
     };
+  }
+
+  function requestPreviewBody(model: SelectedLiveModel) {
+    try {
+      const requestModel = customBuildRequestModel(model);
+      const keys = selectGenerationProviderKeys([requestModel], providerKeys);
+      return {
+        prompt: prompt.trim(), gridSize, palette, models: [requestModel],
+        providerKeys: Object.fromEntries(
+          Object.entries(keys).filter(([, value]) => Boolean(value)).map(([name]) => [name, "request-preview"]),
+        ),
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   function hasProviderKey(model: SelectedLiveModel): boolean {
@@ -2227,6 +2261,7 @@ export function SandboxLive({
               ) : null}
               <RequestOverridesEditor
                 profile={model.requestProfile}
+                previewBody={requestPreviewBody(model)}
                 onChange={(profile) => updateModelRequestProfile(model, profile)}
                 disabled={running}
               />

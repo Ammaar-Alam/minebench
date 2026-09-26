@@ -50,6 +50,7 @@ import { generationProviderSignal } from "@/lib/generation-worker/providerSignal
 type GenerateJobPayload = {
   stubBuild?: unknown;
   openaiResponseId?: string;
+  freshGeneration?: boolean;
 };
 
 type GenerateVoxelBuildModel = NonNullable<GenerateVoxelBuildParams["model"]>;
@@ -201,6 +202,9 @@ function safeGenerateFailure(error: unknown, message: string) {
   if (isTerminalCustomBuildGenerateError(message)) {
     return { code: "provider_rejected", message: "The provider rejected this generation request." };
   }
+  if (message.includes("Script execution timed out")) {
+    return { code: "execution_failed", message: "The saved response exceeded the execution time limit." };
+  }
   if (error instanceof CustomBuildGenerationFailedError) {
     return { code: "generation_failed", message: "No valid build was returned." };
   }
@@ -350,6 +354,7 @@ async function generateBuild(
     ...requestOverrideSecretValues(customConfig ?? {}),
   ];
   let providerAttempts = 0;
+  let responseDiagnostic: string | undefined;
   const providerSignal = customBuildProviderSignal(opts.signal);
 
   throwIfCustomBuildLeaseLost(opts.signal);
@@ -367,6 +372,10 @@ async function generateBuild(
       maxAttempts: CUSTOM_BUILD_MODEL_MAX_ATTEMPTS,
       onProviderRequest: (attempt) => {
         providerAttempts = Math.max(providerAttempts, attempt);
+        responseDiagnostic = undefined;
+      },
+      onProviderTrace: (message) => {
+        if (message.startsWith("Anthropic response")) responseDiagnostic = message;
       },
       openaiResponseId: payload.openaiResponseId,
       onOpenAIResponseCreated: async (responseId) => {
@@ -387,7 +396,13 @@ async function generateBuild(
           bytes,
           sha256,
           sourceBuildSha256: sha256,
-          exportStats: { attempt },
+          exportStats: { attempt, jobId: job.id },
+        });
+        emitCustomBuildEvent(customBuild.id, "raw_response", {
+          attempt,
+          sha256,
+          textChars: text.length,
+          ...(responseDiagnostic ? { diagnostic: responseDiagnostic } : {}),
         });
         await prisma.customBuild.updateMany({
           where: { id: customBuild.id, removedAt: null, status: "running" },
@@ -438,12 +453,17 @@ async function recoverStoredRawBuild(
   customBuild: CustomBuild,
   opts: {
     signal?: AbortSignal;
+    rawResponseJobId?: string;
     acquireBuildProcessing?: () => Promise<() => void>;
     processResponse?: ProcessVoxelBuildResponse;
   },
 ): Promise<GeneratedBuildResult | null> {
   const artifact = await prisma.customBuildArtifact.findFirst({
-    where: { customBuildId: customBuild.id, kind: "raw_text_debug" },
+    where: {
+      customBuildId: customBuild.id,
+      kind: "raw_text_debug",
+      ...(opts.rawResponseJobId ? { exportStats: { path: ["jobId"], equals: opts.rawResponseJobId } } : {}),
+    },
     select: {
       bucket: true,
       path: true,
@@ -528,6 +548,7 @@ async function recoverStoredBuild(
   customBuild: CustomBuild,
   opts: {
     signal?: AbortSignal;
+    rawResponseJobId?: string;
     acquireBuildProcessing?: () => Promise<() => void>;
     processResponse?: ProcessVoxelBuildResponse;
   } = {},
@@ -624,14 +645,16 @@ export async function runCustomBuildGenerateJob(
     stage: isImport ? "finalizing" : "generating",
   });
 
+  let rawResponseJobId: string | undefined;
   let artifactsPersisted = false;
   try {
+    rawResponseJobId = asGenerateJobPayload(job.payload).freshGeneration ? job.id : undefined;
     try {
       assertCustomBuildStorageConfigured();
     } catch (error) {
       throw new CustomBuildArtifactPersistenceError(error);
     }
-    const recovered = opts.importedBuild ? null : await recoverStoredBuild(customBuild, opts);
+    const recovered = opts.importedBuild ? null : await recoverStoredBuild(customBuild, { ...opts, rawResponseJobId });
     if (isImport && !opts.importedBuild && !recovered) throw new Error("import_source_missing");
     const generated: GeneratedBuildResult = opts.importedBuild ?? recovered ?? await generateBuild(customBuild, job, opts);
     if (recovered) {
@@ -845,7 +868,13 @@ export async function runCustomBuildGenerateJob(
     const resourceFailure = isVoxelBuildResourceError(redactSensitiveText(error));
     const retryFinalization = !resourceFailure && (artifactsPersisted || (infrastructureFailure && Boolean(
       await prisma.customBuildArtifact.findFirst({
-        where: { customBuildId: customBuild.id, kind: { in: ["build_json", "raw_text_debug"] } },
+        where: {
+          customBuildId: customBuild.id,
+          OR: [
+            { kind: "build_json" },
+            { kind: "raw_text_debug", ...(rawResponseJobId ? { exportStats: { path: ["jobId"], equals: rawResponseJobId } } : {}) },
+          ],
+        },
         select: { id: true },
       }),
     )));

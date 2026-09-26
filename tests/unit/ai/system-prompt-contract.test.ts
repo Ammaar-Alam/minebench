@@ -4,12 +4,12 @@ import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID } from "../../../lib/ai/limits";
 import { buildSystemPrompt } from "../../../lib/ai/prompts";
 import { getPalette } from "../../../lib/blocks/palettes";
 
-// captured from the original prompts before adding grid sizes and palette entries
+// captured from the master benchmark prompt with internal build planning
 // normalize only the palette variables so wording and existing numeric settings stay fixed
 const expected = {
-  64: "bb729aed54a4c3ec59c7b8fe09560da32f8187073f6d42e04cd51ebffe0523bb",
-  256: "81c193094f6245417262697e9cf60e6d47263dbe836c5d2ce5369a9612d45d6b",
-  512: "093c8cac027773fc75eab08730d6110f9c2c35afebdbd0c15e38b555f78f5dc4",
+  64: "60bcff42143a1cd2dc465da819a39ee7dbbc3258d2b96a9efb6c281ff8ef93a8",
+  256: "2730a7cb773972d7f83f3b477d98f4b2065c2ae22189704c88d6f2846b2bdc96",
+  512: "6383a01fb68ca45120d7dcb23284adb7485421753341ea46155aaa723fee882d",
 };
 
 for (const gridSize of [64, 256, 512] as const) {

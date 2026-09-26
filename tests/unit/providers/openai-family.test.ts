@@ -17,10 +17,26 @@ import {
 } from "../../helpers/providerConfigHarness";
 
 // OpenAI pro models use max effort and pro reasoning mode for benchmark runs
-const GPT_5_6_LADDER = ["max", "xhigh", "high", "medium", "low", "none"];
+const PRO_LADDER = ["max", "xhigh", "high", "medium", "low", "none"];
 const GPT_6_ASTRA_LADDER = ["max", "xhigh", "high", "medium", "low"];
 
 const PRO_EXPECTATIONS: ExpectedCatalogEntry[] = [
+  {
+    key: "openai_gpt_6_sol",
+    provider: "openai",
+    modelId: "gpt-6-sol",
+    displayName: "GPT 6 Sol Pro",
+    openRouterModelId: "openai/gpt-6-sol-pro",
+    slug: "gpt-6-sol",
+  },
+  {
+    key: "openai_gpt_6_luna",
+    provider: "openai",
+    modelId: "gpt-6-luna",
+    displayName: "GPT 6 Luna Pro",
+    openRouterModelId: "openai/gpt-6-luna-pro",
+    slug: "gpt-6-luna",
+  },
   {
     key: "openai_gpt_6_astra",
     provider: "openai",
@@ -71,7 +87,7 @@ runProviderConfigTest(
     for (const expected of PRO_EXPECTATIONS) {
       const model = assertCatalogEntry(expected);
 
-      const ladder = model.modelId === "gpt-6-astra" ? GPT_6_ASTRA_LADDER : GPT_5_6_LADDER;
+      const ladder = model.modelId === "gpt-6-astra" ? GPT_6_ASTRA_LADDER : PRO_LADDER;
       assert.deepEqual(openAiReasoningEffortAttempts(model.modelId), ladder);
       assert.deepEqual(openAiReasoningEffortAttempts(model.modelId, "max"), ladder);
       assert.deepEqual(openRouterReasoningEffortAttempts(expected.openRouterModelId!), ladder);

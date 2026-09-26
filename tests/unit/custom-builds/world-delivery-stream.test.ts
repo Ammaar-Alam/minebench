@@ -186,7 +186,7 @@ async function checkPageIdentity() {
   const parsed = parseVoxelWorldRegionPage(page, { allowStoredRefs: true });
   assert.ok(parsed.ok);
   const expectedBytes = new TextEncoder().encode(JSON.stringify(toOpaqueVoxelWorldRegionPage(parsed.value)));
-  for (const precomputed of [false, true]) {
+  for (const [precomputed, decoded] of [[false, false], [true, false], [false, true], [true, true]]) {
     const storedManifest = { ...manifest, regionPages: manifest.regionPages.map((ref) => ({
       ...ref, ...(precomputed ? { delivery: { byteSize: expectedBytes.length, sha256: sha256(expectedBytes) } } : {}),
     })) };
@@ -196,7 +196,7 @@ async function checkPageIdentity() {
       globalThis.fetch = async (input) => {
         if (String(input).endsWith("/manifest")) return new Response(manifestBytes);
         pageReads += 1;
-        return new Response(pageBytes);
+        return new Response(decoded ? JSON.stringify(page) : pageBytes);
       };
       const get = (part = "") => customBuildWorldViewerResponse({
         request: new Request(`http://localhost/api/generations/cb/artifacts/viewer${part ? `?part=${part}` : ""}`),
@@ -216,6 +216,12 @@ async function checkPageIdentity() {
       const text = new TextDecoder().decode(bytes);
       assert.equal(text.includes("private/region"), false);
       assert.equal(JSON.parse(text).regions[0].data.kind, "opaque");
+      if (!decoded) {
+        storedManifest.regionPages[0]!.data.byteSize += 1;
+        manifestBytes = gzipSync(JSON.stringify(storedManifest));
+        await assert.rejects(get("page-0"), /page metadata does not match/);
+        storedManifest.regionPages[0]!.data.byteSize -= 1;
+      }
       if (precomputed) {
         storedManifest.regionPages[0]!.delivery!.sha256 = "0".repeat(64);
         manifestBytes = gzipSync(JSON.stringify(storedManifest));

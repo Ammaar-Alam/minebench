@@ -101,10 +101,19 @@ Copy `.env.example` to `.env` and set what you need.
 
 ### Optional Provider and Runtime Tuning
 
+`pnpm batch:generate --generate --model opus-5-5 --reasoning xhigh --task_budget 96000`
+sets an advisory task budget independently of reasoning effort and the output cap.
+Batch generation defaults to 96000 on supported native Anthropic models (Opus 4.7,
+4.8, 5, 5.5 and Fable 5, 5.1). Other models and OpenRouter routes retain their existing
+settings; an explicit budget on an unsupported Anthropic route fails before generation.
+The budget must be an integer of at least 20000. It is recorded in the accepted
+request configuration; no thinking/answer token split is guaranteed. See [task budgets](https://platform.claude.com/docs/en/build-with-claude/task-budgets).
+
 - `MINEBENCH_ALLOW_SERVER_KEYS=1` (production opt-in for server env keys in `/api/generate`)
 - `ANTHROPIC_FABLE_5_1_EFFORT=low|medium|high|xhigh|max`
 - `ANTHROPIC_FABLE_5_EFFORT=low|medium|high|xhigh|max`
 - `ANTHROPIC_OPUS_5_EFFORT=low|medium|high|xhigh|max`
+- `ANTHROPIC_OPUS_5_5_EFFORT=low|medium|high|xhigh|max`
 - `ANTHROPIC_SONNET_5_EFFORT=low|medium|high|xhigh|max`
 - `ANTHROPIC_OPUS_4_8_EFFORT=low|medium|high|xhigh|max`
 - `ANTHROPIC_OPUS_4_7_EFFORT=low|medium|high|xhigh|max`
@@ -112,10 +121,12 @@ Copy `.env.example` to `.env` and set what you need.
 - `ANTHROPIC_SONNET_4_6_EFFORT=low|medium|high|max` (runtime falls back automatically if provider rejects `max`)
 - `ANTHROPIC_STREAM_RESPONSES=1`
 - `OPENAI_STREAM_RESPONSES=1` (applies to live-delta callers; batch generation uses non-streamed Responses JSON)
-- `OPENAI_USE_BACKGROUND_MODE=1` (recommended for long-running Responses jobs; defaults on for `gpt-5*` and `gpt-6-astra` when not streaming deltas)
+- `OPENAI_USE_BACKGROUND_MODE=1` (recommended for long-running Responses jobs; defaults on for `gpt-5*` and `gpt-6-*` when not streaming deltas)
 - `OPENAI_BACKGROUND_POLL_MS=2000` (poll interval for background mode)
 - `ANTHROPIC_ENABLE_1M_CONTEXT_BETA=1`
 - `ANTHROPIC_THINKING_BUDGET` (legacy/manual thinking models)
+- GPT 6 Sol Pro and Luna Pro use native IDs `gpt-6-sol` and `gpt-6-luna` through Responses with `reasoning.mode=pro`, `reasoning.effort=max`, high text verbosity, strict structured output, and provider-default sampling. Both have 1050000-token context and a 128000-token combined reasoning/output cap; accepted efforts are `max`, `xhigh`, `high`, `medium`, `low`, and `none`. OpenRouter routes are `openai/gpt-6-sol-pro` and `openai/gpt-6-luna-pro`. See the [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol), [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna), and [Pro mode](https://developers.openai.com/api/docs/guides/reasoning#reasoning-mode) contracts.
+- Claude Opus 5.5 uses `claude-opus-5-5` with always-on adaptive thinking, `output_config.effort=max`, provider-default sampling, strict structured output, and a 128000-token Messages output cap. It supports `max`, `xhigh`, `high`, `medium`, and `low`; forced tool choice and disabled thinking are unsupported. OpenRouter uses `anthropic/claude-opus-5.5`. See the [model contract](https://platform.claude.com/docs/en/models/opus-5-5/overview) and [effort levels](https://platform.claude.com/docs/en/build-with-claude/effort).
 - GPT 6 Astra Pro uses `gpt-6-astra` through the Responses API with `reasoning.mode=pro`, `reasoning.effort=max`, high text verbosity, strict structured output, and provider-default sampling. Its context window is 1050000 tokens and its combined reasoning/output cap is 128000 tokens. Supported efforts are `max`, `xhigh`, `high`, `medium`, and `low`; `none` and `minimal` are unsupported. Its OpenRouter fallback uses `openai/gpt-6-astra-pro` with max effort and strict structured output. See the [model contract](https://developers.openai.com/api/docs/models/gpt-6-astra) and [migration guide](https://developers.openai.com/api/docs/guides/latest-model).
 - GPT 5.6 Sol uses the native OpenAI model ID `gpt-5.6-sol` through the Responses API with `reasoning.mode=pro`, defaults to `reasoning.effort=max`, and uses the model's 128000-token combined reasoning and output cap. Its OpenRouter fallback uses `openai/gpt-5.6-sol-pro` with max effort and strict structured output.
 - GPT 5.6 Luna uses the native OpenAI model ID `gpt-5.6-luna` through the Responses API with `reasoning.mode=pro`, defaults to `reasoning.effort=max`, and uses its 1050000-token context window and 128000-token combined reasoning and output cap. Its OpenRouter fallback uses `openai/gpt-5.6-luna-pro` with max effort and strict structured output.

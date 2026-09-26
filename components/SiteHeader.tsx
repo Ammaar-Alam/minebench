@@ -200,6 +200,7 @@ function LabHeader() {
 
 function NavLink({ href, label }: { href: string; label: string }) {
   const pathname = usePathname();
+  const [prefetch, setPrefetch] = useState(false);
   const active = href === "/" ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
   return (
     <Link
@@ -208,6 +209,9 @@ function NavLink({ href, label }: { href: string; label: string }) {
         active ? "font-medium text-fg" : "text-muted hover:text-fg"
       }`}
       href={href}
+      prefetch={pathname === "/" && !prefetch ? false : undefined}
+      onPointerEnter={() => setPrefetch(true)}
+      onFocus={() => setPrefetch(true)}
     >
       <span>{label}</span>
       <span

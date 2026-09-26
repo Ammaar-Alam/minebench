@@ -108,7 +108,8 @@ export async function customBuildWorldViewerResponse(args: {
     const artifact = part ?? await args.findPart(manifest.source.sha256, pageRef.data.key);
     if (!artifact) throw new Error("Voxel world region page is missing");
     const storedBytes = await downloadCustomBuildArtifactBytes(artifact);
-    if (storedBytes.byteLength !== pageRef.data.byteSize || artifact.sha256.toLowerCase() !== pageRef.data.sha256?.toLowerCase()) {
+    const decodedGzip = artifact.encoding === "gzip" && !(storedBytes[0] === 0x1f && storedBytes[1] === 0x8b);
+    if ((!decodedGzip && storedBytes.byteLength !== pageRef.data.byteSize) || artifact.sha256.toLowerCase() !== pageRef.data.sha256?.toLowerCase()) {
       throw new Error("Voxel world region page metadata does not match");
     }
     const page = parseVoxelWorldRegionPage(JSON.parse(decodeAndVerifyCustomBuildArtifactText({

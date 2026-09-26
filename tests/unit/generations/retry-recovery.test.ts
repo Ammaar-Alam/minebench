@@ -51,7 +51,7 @@ async function main() {
   const codeIs = (code: string) => (error: unknown) =>
     error instanceof Error && "code" in error && error.code === code;
 
-  for (const errorCode of ["lease_expired", "provider_key_expired", "artifact_bookkeeping_failed", "processing_capacity_exceeded", "heap_limit_exceeded"]) {
+  for (const errorCode of ["execution_failed", "lease_expired", "provider_key_expired", "artifact_bookkeeping_failed", "processing_capacity_exceeded", "heap_limit_exceeded"]) {
     for (const kind of ["raw_text_debug", "build_json"]) {
       reset(errorCode, kind);
       current.modelKind = "custom";
@@ -62,6 +62,7 @@ async function main() {
       assert.equal(jobs.length, 1);
       assert.equal(jobs[0]!.type, "generate", "recovery uses the existing generation worker");
       assert.equal(jobs[0]!.maxAttempts, 2);
+      assert.deepEqual(jobs[0]!.payload, { freshGeneration: false });
       assert.equal(current.deletionPendingAt, null);
     }
     for (const kind of [undefined, "preview_svg"]) {
@@ -86,7 +87,7 @@ async function main() {
   }
 
   for (const kind of ["raw_text_debug", "build_json"]) {
-    reset("generation_failed", kind);
+    reset("execution_failed", kind);
     current.modelKind = "custom";
     current.modelProvider = "custom";
     const recovered = await retry({ customBaseUrl: "invalid" });
@@ -118,11 +119,12 @@ async function main() {
   process.env.CUSTOM_BUILD_KEY_ENCRYPTION_SECRET = "unit-retry-recovery-encryption-secret";
   process.env.MINEBENCH_FREE_OPENROUTER_API_KEY = "unit-hosted-retry-key";
   try {
-    for (const kind of [undefined, "preview_svg"]) {
+    for (const kind of [undefined, "preview_svg", "raw_text_debug"]) {
       reset("generation_failed", kind);
       assert.equal((await retry({ providerKey: "unit-provider-retry-key" })).status, "queued");
       assert.equal(credentials.length, 1, "ordinary manual retry still stores the supplied key");
       assert.notEqual(credentials[0]!.keyCiphertext, "unit-provider-retry-key");
+      assert.deepEqual(jobs[0]!.payload, { freshGeneration: true });
     }
     reset("generation_failed");
     Object.assign(current, { modelKey: "gemini_3_7_flash", modelProvider: "gemini", preferOpenRouter: true, usesHostedGeneration: true });

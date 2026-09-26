@@ -1,4 +1,4 @@
-import { withMaxOutputTokens } from "@/lib/ai/providers/shared";
+import { isProviderRequestPreviewCaptured, providerFetch, withMaxOutputTokens } from "@/lib/ai/providers/shared";
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
@@ -163,7 +163,7 @@ export async function geminiGenerateText(params: {
       if (params.onDelta) headers.Accept = "text/event-stream";
       controller.signal.throwIfAborted();
       params.onProviderRequest?.();
-      res = await fetch(url, {
+      res = await providerFetch(url, {
         method: "POST",
         headers,
         signal: controller.signal,
@@ -211,6 +211,7 @@ export async function geminiGenerateText(params: {
     });
     params.onTrace?.(withMaxOutputTokens(thinkingConfigLine, budget));
   } catch (err) {
+    if (isProviderRequestPreviewCaptured(err)) throw err;
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error("Gemini request timed out");
     }

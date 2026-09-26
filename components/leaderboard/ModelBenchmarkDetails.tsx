@@ -137,6 +137,7 @@ function parameterRows(profile: ModelBenchmarkProfile): ModelRunParameter[] {
       label: "Output cap",
       value: formatOutputCap(profile.outputCap),
     },
+    ...(profile.taskBudget ? [{ label: "Task budget", value: profile.taskBudget }] : []),
   ];
 }
 

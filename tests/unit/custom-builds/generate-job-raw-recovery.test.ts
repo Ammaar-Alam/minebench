@@ -30,7 +30,7 @@ const initial = {
   ownerId: "00000000-0000-4000-8000-000000000001",
   promptText: "A seeded stone tower", promptSha256: "raw-recovery-prompt",
   gridSize: 8192, palette: "simple", modelKind: "catalog", modelKey: "qwen_qwen3_8_max",
-  modelProvider: "openrouter", modelId: "qwen/qwen3.8-max", modelDisplayName: "Qwen 3.8 Max",
+  modelProvider: "qwen", modelId: "qwen/qwen3.8-max", modelDisplayName: "Qwen 3.8 Max",
   openRouterModelId: "qwen/qwen3.8-max", preferOpenRouter: true, reasoning: null,
   customBaseUrl: null, startedAt: null, generationTimeMs: 1234, warnings: ["stored warning"],
 };
@@ -52,16 +52,18 @@ const fakePrisma = {
     },
   },
   customBuildArtifact: {
-    findFirst: async (args: { where: { kind: string | { in: string[] } }; orderBy: unknown }) => {
-      if (typeof args.where.kind !== "string") {
-        const kinds = args.where.kind.in;
-        return artifacts.findLast((artifact) => kinds.includes(String(artifact.kind))) ?? null;
+    findFirst: async (args: { where: { kind?: string; exportStats?: { equals: string }; OR?: Array<{ kind: string; exportStats?: { equals: string } }> }; orderBy: unknown }) => {
+      const matches = (artifact: Record<string, unknown>, where: { kind?: string; exportStats?: { equals: string } }) =>
+        artifact.kind === where.kind && (!where.exportStats ||
+          (artifact.exportStats as { jobId?: string })?.jobId === where.exportStats.equals);
+      if (args.where.OR) {
+        return artifacts.findLast((artifact) => args.where.OR!.some((where) => matches(artifact, where))) ?? null;
       }
-      queries.push(args.where.kind);
+      queries.push(args.where.kind!);
       if (args.where.kind === "raw_text_debug") {
         assert.deepEqual(args.orderBy, [{ createdAt: "desc" }, { id: "desc" }]);
       }
-      return artifacts.findLast((artifact) => artifact.kind === args.where.kind) ?? null;
+      return artifacts.findLast((artifact) => matches(artifact, args.where)) ?? null;
     },
     findUnique: async () => null,
     upsert: async ({ create }: { create: Record<string, unknown> }) => {
@@ -315,7 +317,9 @@ async function main() {
     reset();
     await saveRaw(validText);
     const raw = await saveRaw(text);
-    await assert.rejects(runCustomBuildGenerateJob(job as never), /generation_failed/);
+    const expectedCode = text.includes("while (true)") ? "execution_failed" : "generation_failed";
+    await assert.rejects(runCustomBuildGenerateJob(job as never), new RegExp(expectedCode));
+    assert.equal(current.errorCode, expectedCode);
     assertNoProvider();
     assert.equal(current.status, "failed");
     assert.equal(current.errorRetryable, true);
@@ -385,10 +389,46 @@ async function main() {
   assert.equal(current.status, "failed");
   assert.deepEqual(notifications, ["generation_failed"]);
   reset();
+  process.env.CUSTOM_BUILD_KEY_ENCRYPTION_SECRET = "unit-fresh-retry-secret";
+  const { encryptProviderKey } = await import("../../../lib/custom-builds/secrets");
+  const invalidRaw = await saveRaw("invalid provider output");
+  const freshJob = { ...job, payload: { freshGeneration: true } };
+  await assert.rejects(runCustomBuildGenerateJob(freshJob as never), /provider_key_expired/);
+  assert.equal(current.errorCode, "provider_key_expired", "old invalid output must not turn a missing key into recovery");
+  current = { ...initial };
+  savedSecret = { ...encryptProviderKey("unit-fresh-retry-key", { provider: "openrouter", binding: customBuildId }),
+    expiresAt: new Date(Date.now() + 60_000) };
+  globalThis.fetch = async () => {
+    providerRequests += 1;
+    return Response.json({ choices: [{ message: { content: "invalid provider output" } }] });
+  };
+  await assert.rejects(runCustomBuildGenerateJob(freshJob as never), /generation_failed/);
+  assert.equal(providerRequests, 2, "invalid output must exhaust fresh inference attempts");
+  assert.equal(current.errorCode, "generation_failed");
+  assert.equal(current.errorRetryable, true);
+  assert.ok(artifacts.some((artifact) => artifact.sourceBuildSha256 === invalidRaw.sourceBuildSha256));
+  const nextJob = { ...freshJob, id: "next-fresh-retry-job" };
+  current = { ...current, status: "queued" };
+  savedSecret = { ...encryptProviderKey("unit-fresh-retry-key", { provider: "openrouter", binding: customBuildId }),
+    expiresAt: new Date(Date.now() + 60_000) };
+  globalThis.fetch = async () => {
+    providerRequests += 1;
+    return Response.json({ choices: [{ message: { content: validText } }] });
+  };
+  failArtifactKind = "build_json";
+  await assert.rejects(runCustomBuildGenerateJob(nextJob as never), /generation_retryable/);
+  assert.equal(providerRequests, 3, "manual retry must bypass the previous job's invalid response");
+  assert.equal(savedSecret, null);
+  failArtifactKind = null;
+  await runCustomBuildGenerateJob({ ...nextJob, attempts: 2 } as never);
+  assert.equal(providerRequests, 3, "reclaimed fresh retries must recover their own saved response");
+  assert.equal(current.status, "succeeded");
+  assert.equal(current.buildSha256, expectedSourceSha);
+
+  reset();
   process.env.CUSTOM_BUILD_KEY_ENCRYPTION_SECRET = "unit-background-response-recovery-secret";
   process.env.OPENAI_BACKGROUND_POLL_MS = "0";
   process.env.OPENAI_USE_BACKGROUND_MODE = "1";
-  const { encryptProviderKey } = await import("../../../lib/custom-builds/secrets");
   savedSecret = { ...encryptProviderKey("unit-openai-background-key", { provider: "openai", binding: customBuildId }),
     expiresAt: new Date(Date.now() + 60_000) };
   current = { ...initial, modelKey: "openai_gpt_6_astra", modelProvider: "openai",

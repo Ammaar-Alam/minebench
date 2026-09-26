@@ -29,6 +29,8 @@ async function main() {
     "a terminally failed build must not leave its job runnable",
   );
 
+  assert.equal(isTerminalCustomBuildJobFailure("execution_failed"), true);
+
   assert.equal(
     getCustomBuildWorkerConcurrency(),
     10,

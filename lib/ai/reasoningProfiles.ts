@@ -90,6 +90,7 @@ const EFFORT_LADDER_RULES: readonly EffortLadderRule[] = [
   },
   {
     prefixes: ["gpt-5.6", "openai/gpt-5.6"],
+    ids: ["gpt-6-sol", "openai/gpt-6-sol-pro", "gpt-6-luna", "openai/gpt-6-luna-pro"],
     ladder: ["max", "xhigh", "high", "medium", "low", "none"],
   },
   {

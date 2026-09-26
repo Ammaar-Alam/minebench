@@ -743,7 +743,7 @@ export async function retrySavedGeneration(
     where: { customBuildId: build.id, kind: { in: ["build_json", "raw_text_debug"] } },
     select: { id: true },
   });
-  const recoveryOnly = isSavedGenerationRecovery(build.errorCode, build.generationMode === "import", Boolean(savedSource));
+  const recoveryOnly = isSavedGenerationRecovery(build.errorCode, build.generationMode === "import");
   if (recoveryOnly && !savedSource) {
     throw new GenerationServiceError("not_retryable", "The saved generation output is no longer available.");
   }
@@ -834,6 +834,7 @@ export async function retrySavedGeneration(
         type: "generate",
         status: "queued",
         maxAttempts: GENERATE_JOB_MAX_ATTEMPTS,
+        payload: { freshGeneration: !recoveryOnly },
       },
     });
     const latest = await tx.customBuildEvent.aggregate({

@@ -44,6 +44,8 @@ async function main() {
   const secretDeletes: Array<{ where?: Record<string, unknown> }> = [];
   let queryCount = 0;
   let artifactKind: string | undefined;
+  let artifactJobId: string | undefined;
+  let jobPayload: { freshGeneration: boolean } | undefined;
   let parent = { status: "running", removedAt: null as Date | null };
   const txClient = {
     $queryRaw: async (...args: unknown[]) => {
@@ -66,21 +68,24 @@ async function main() {
         return [{ id: "failed-job", customBuildId: "custom-build-row", type: "generate", ownerId: "owner-row" }];
       }
       if (queryCount === 5) {
-        return [{ id: "expired-queued-job", customBuildId: "expired-custom-build-row", type: "generate" }];
+        assert.match(sqlText(args), /RETURNING[\s\S]*j\.payload/);
+        return [{ id: "expired-queued-job", customBuildId: "expired-custom-build-row", type: "generate", payload: jobPayload }];
       }
       if (queryCount === 6) {
         return [{ id: "requeued-job" }];
       }
-      return [{ id: "failed-job", customBuildId: "custom-build-row", type: "generate" }];
+      assert.match(sqlText(args), /RETURNING[\s\S]*j\.payload/);
+      return [{ id: "failed-job", customBuildId: "custom-build-row", type: "generate", payload: jobPayload }];
     },
     customBuildArtifact: {
       findFirst: async (args: { where: {
-        kind: { in: string[] };
+        OR: Array<{ kind: string; exportStats?: { path: string[]; equals: string } }>;
         customBuild?: { removedAt: null; status: { in: string[] } };
       } }) => {
         const active = args.where.customBuild;
         if (active && (parent.removedAt !== null || !active.status.in.includes(parent.status))) return null;
-        return artifactKind && args.where.kind.in.includes(artifactKind) ? { id: "saved-source" } : null;
+        return args.where.OR.some((filter) => artifactKind === filter.kind &&
+          (!filter.exportStats || filter.exportStats.equals === artifactJobId)) ? { id: "saved-source" } : null;
       },
     },
     $executeRaw: async () => {
@@ -191,6 +196,17 @@ async function main() {
     assert.equal(operations.filter((operation) => operation === "notificationDelivery.insert").length, 2,
       "terminal expiry transitions notify even when saved output remains recoverable");
   }
+  jobPayload = { freshGeneration: true };
+  artifactJobId = "previous-job";
+  for (const kind of ["raw_text_debug", "build_json"]) {
+    artifactKind = kind;
+    queryCount = 0;
+    customBuildUpdates.length = 0;
+    await recoverStaleCustomBuildJobLeases(rootClient as never);
+    assert.deepEqual(customBuildUpdates.map(({ data }) => data.errorRetryable), [kind === "build_json", kind === "build_json"],
+      "expired fresh retries must not offer recovery from a previous job's raw response");
+  }
+  jobPayload = undefined;
   for (const state of [{ status: "canceled", removedAt: null }, { status: "running", removedAt: new Date() }]) {
     parent = state;
     queryCount = 0;
@@ -265,6 +281,7 @@ async function main() {
         maxAttempts: 3,
         customBuildId: "terminal-build-row",
         type: "generate",
+        payload: jobPayload,
         customBuild: { ownerId: "terminal-owner-row" },
       }),
       updateMany: async () => {
@@ -322,6 +339,22 @@ async function main() {
     assert.equal(parentFailures.length, 0);
     attempts = 3;
   }
+  jobPayload = { freshGeneration: true };
+  artifactKind = "raw_text_debug";
+  for (const sourceJobId of ["previous-job", "fresh-job"]) {
+    artifactJobId = sourceJobId;
+    attempts = 1;
+    terminalOperations.length = 0;
+    await failCustomBuildJob("fresh-job", "worker-row", { code: "worker_failed", message: "database unavailable" }, terminalRoot as never);
+    assert.equal(terminalOperations.includes("customBuildSecret.deleteMany"), sourceJobId === "fresh-job",
+      "fresh retries must retain credentials until their own response is saved");
+    attempts = 3;
+    parentFailures.length = 0;
+    await failCustomBuildJob("fresh-job", "worker-row", { code: "worker_failed", message: "database unavailable" }, terminalRoot as never);
+    assert.equal(parentFailures[0]?.errorRetryable, sourceJobId === "fresh-job",
+      "terminal fresh retries must only recover their own raw response");
+  }
+  jobPayload = undefined;
   for (const state of [{ status: "canceled", removedAt: null }, { status: "running", removedAt: new Date() }]) {
     parent = state;
     parentFailures.length = 0;
