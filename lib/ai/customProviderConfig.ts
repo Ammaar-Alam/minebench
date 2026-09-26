@@ -64,6 +64,10 @@ const BLOCKED_BODY_FIELDS = new Set([
   "tools",
 ]);
 
+export function isManagedRequestHeader(name: string): boolean {
+  return BLOCKED_HEADERS.has(name.toLowerCase());
+}
+
 export function isManagedRequestBodyField(name: string): boolean {
   return BLOCKED_BODY_FIELDS.has(name.toLowerCase());
 }
@@ -213,7 +217,7 @@ function normalizeHeaders(headers: CustomRequestHeaders | undefined): CustomRequ
     if (!name || name.length > 128 || !HEADER_NAME.test(name)) {
       throw new Error("Use valid HTTP header names.");
     }
-    if (BLOCKED_HEADERS.has(lowerName)) {
+    if (isManagedRequestHeader(name)) {
       throw new Error(`${name} is managed by MineBench and cannot be customized.`);
     }
     if (seen.has(lowerName)) throw new Error("Header names must be unique.");
