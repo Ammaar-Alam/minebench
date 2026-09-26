@@ -41,7 +41,7 @@ export async function captureProviderRequest(
   return context.request;
 }
 
-export async function providerFetch(url: string | URL, init: RequestInit): Promise<Response> {
+export function capturePreparedProviderRequest(url: string | URL, init: RequestInit): void {
   const context = previewContext.getStore();
   if (context) {
     context.request = {
@@ -57,6 +57,10 @@ export async function providerFetch(url: string | URL, init: RequestInit): Promi
     };
     throw new Error(PREVIEW_CAPTURED);
   }
+}
+
+export async function providerFetch(url: string | URL, init: RequestInit): Promise<Response> {
+  capturePreparedProviderRequest(url, init);
   return fetch(url, init);
 }
 
