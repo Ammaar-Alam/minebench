@@ -303,6 +303,7 @@ async function generateBuild(
     ...requestOverrideSecretValues(customConfig ?? {}),
   ];
   let providerAttempts = 0;
+  let responseDiagnostic: string | undefined;
   const providerSignal = customBuildProviderSignal(opts.signal);
 
   throwIfCustomBuildLeaseLost(opts.signal);
@@ -320,6 +321,24 @@ async function generateBuild(
       maxAttempts: CUSTOM_BUILD_MODEL_MAX_ATTEMPTS,
       onProviderRequest: (attempt) => {
         providerAttempts = Math.max(providerAttempts, attempt);
+        responseDiagnostic = undefined;
+      },
+      onProviderTrace: (message) => {
+        if (message.startsWith("Anthropic response")) responseDiagnostic = message;
+      },
+      onRawResponse: async (attempt, text) => {
+        const artifact = await persistCustomBuildArtifact({
+          customBuildId: customBuild.id,
+          publicId: customBuild.publicId,
+          kind: "raw_text_debug",
+          bytes: new TextEncoder().encode(text),
+        });
+        await appendCustomBuildEvent(customBuild.id, "raw_response", {
+          attempt,
+          sha256: artifact.sha256,
+          textChars: text.length,
+          ...(responseDiagnostic ? { diagnostic: responseDiagnostic } : {}),
+        });
       },
       onRetry: async (attempt, reason) => {
         const safeReason = safeCustomBuildRetryReason(reason, configuredSecrets);

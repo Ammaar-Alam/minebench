@@ -44,6 +44,7 @@ type AnthropicStreamEvent = {
 type AnthropicEffort = ClaudeEffort;
 
 const CONTEXT_1M_BETA = "context-1m-2025-08-07";
+const TASK_BUDGET_BETA = "task-budgets-2026-03-13";
 const STRUCTURED_OUTPUT_TOOL_NAME = "emit_structured_json";
 function looksLikeTokenLimitError(body: string): boolean {
   const b = body.toLowerCase();
@@ -232,6 +233,7 @@ export async function anthropicGenerateText(params: {
     capabilities.context1mBeta && parseBooleanEnv("ANTHROPIC_ENABLE_1M_CONTEXT_BETA", true)
       ? [CONTEXT_1M_BETA, null]
       : [null];
+  const taskBudget = (params.customBody?.output_config as { task_budget?: unknown } | undefined)?.task_budget;
   const tools = useStructuredOutputs
     ? [
         {
@@ -285,15 +287,22 @@ export async function anthropicGenerateText(params: {
 
           controller.signal.throwIfAborted();
           params.onProviderRequest?.();
+          const headers = mergeCustomRequestHeaders({
+            "Content-Type": "application/json",
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+            ...(streamResponses ? { Accept: "text/event-stream" } : {}),
+            ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
+          }, params.customHeaders);
+          if (taskBudget) {
+            const name = Object.keys(headers).find((key) => key.toLowerCase() === "anthropic-beta") ?? "anthropic-beta";
+            if (!headers[name]?.split(",").some((beta) => beta.trim() === TASK_BUDGET_BETA)) {
+              headers[name] = [headers[name], TASK_BUDGET_BETA].filter(Boolean).join(",");
+            }
+          }
           res = await providerFetch("https://api.anthropic.com/v1/messages", {
             method: "POST",
-            headers: mergeCustomRequestHeaders({
-              "Content-Type": "application/json",
-              "x-api-key": apiKey,
-              "anthropic-version": "2023-06-01",
-              ...(streamResponses ? { Accept: "text/event-stream" } : {}),
-              ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
-            }, params.customHeaders),
+            headers,
             signal: controller.signal,
             body: JSON.stringify(mergeCustomRequestBody({
               model: params.modelId,
@@ -378,7 +387,6 @@ export async function anthropicGenerateText(params: {
   }
 
   const acceptedOutputTokens = selectedTokenBudget ?? maxTokens;
-  const taskBudget = (params.customBody?.output_config as { task_budget?: unknown } | undefined)?.task_budget;
   params.onAcceptedOutputTokens?.(acceptedOutputTokens);
   const acceptedThinkingBudget =
     typeof thinkingBudget === "number"
