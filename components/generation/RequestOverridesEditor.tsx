@@ -178,21 +178,22 @@ export function RequestOverridesEditor({
   useEffect(() => {
     if (!open || !previewKey) return;
     const controller = new AbortController();
-    setPreview(null);
     setPreviewError(null);
-    void fetch("/api/generate?preview=1", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: previewKey,
-      signal: controller.signal,
-    }).then(async (response) => {
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? "Request unavailable");
-      setPreview(data.request as RequestPreview);
-    }).catch((error) => {
-      if (!controller.signal.aborted) setPreviewError(error instanceof Error ? error.message : "Request unavailable");
-    });
-    return () => controller.abort();
+    const timeout = setTimeout(() => {
+      void fetch("/api/generate?preview=1", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: previewKey,
+        signal: controller.signal,
+      }).then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error ?? "Request unavailable");
+        if (!controller.signal.aborted) setPreview(data.request as RequestPreview);
+      }).catch((error) => {
+        if (!controller.signal.aborted) setPreviewError(error instanceof Error ? error.message : "Request unavailable");
+      });
+    }, 250);
+    return () => { clearTimeout(timeout); controller.abort(); };
   }, [open, previewKey]);
   const count = [...profile.headers, ...profile.body].filter(
     (entry) => Boolean(entry.name.trim() || entry.value.trim()),
