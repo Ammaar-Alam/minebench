@@ -1,4 +1,4 @@
-import { parseBooleanEnv, withMaxOutputTokens } from "@/lib/ai/providers/shared";
+import { isProviderRequestPreviewCaptured, parseBooleanEnv, providerFetch, withMaxOutputTokens } from "@/lib/ai/providers/shared";
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { openAiReasoningEffortAttempts } from "@/lib/ai/reasoningProfiles";
 import { VOXEL_BUILD_JSON_SCHEMA_NAME } from "@/lib/ai/voxelBuildJsonSchema";
@@ -235,7 +235,7 @@ async function fetchWithRetry(
     try {
       init.signal?.throwIfAborted();
       opts.onProviderRequest?.();
-      const res = await fetch(url, init);
+      const res = await providerFetch(url, init);
       if (res.status >= 500 || res.status === 429) {
         if (i === opts.tries - 1) return res;
         const delay = Math.min(opts.maxDelayMs, opts.minDelayMs * Math.pow(2, i));
@@ -244,6 +244,7 @@ async function fetchWithRetry(
       }
       return res;
     } catch (e) {
+      if (isProviderRequestPreviewCaptured(e)) throw e;
       lastErr = e;
       // A headers-timeout can still represent a billed upstream run; avoid
       // duplicating spend by retrying the same request automatically.
@@ -746,6 +747,7 @@ export async function openaiGenerateText(params: {
       }
     }
   } catch (err) {
+    if (isProviderRequestPreviewCaptured(err)) throw err;
     // If Responses fails (unsupported endpoint/model), try chat/completions below.
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error("OpenAI request timed out");
