@@ -966,7 +966,7 @@ export function SandboxLive({
           body: {
             ...overrides.body,
             output_config: {
-              task_budget: { type: "tokens", total: 136_000 },
+              task_budget: { type: "tokens", total: 128_000 },
               ...(outputConfig as Record<string, unknown> | undefined),
             },
           },
