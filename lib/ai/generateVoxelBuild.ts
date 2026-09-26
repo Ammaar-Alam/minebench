@@ -493,7 +493,7 @@ export type GenerateVoxelBuildParams = {
   onProviderRequest?: (attempt: number) => void;
   onRetry?: (attempt: number, reason: string) => unknown;
   // Fired after response text returns and before parsing or execution
-  onRawResponse?: (attempt: number, rawText: string) => void | Promise<void>;
+  onRawResponse?: (attempt: number, rawText: string) => unknown;
   onDelta?: (delta: string) => void;
   onProviderTrace?: (message: string) => void;
   acquireBuildProcessing?: () => Promise<() => void>;
