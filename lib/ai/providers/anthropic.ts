@@ -44,7 +44,6 @@ type AnthropicStreamEvent = {
 type AnthropicEffort = ClaudeEffort;
 
 const CONTEXT_1M_BETA = "context-1m-2025-08-07";
-const TASK_BUDGET_BETA = "task-budgets-2026-03-13";
 const STRUCTURED_OUTPUT_TOOL_NAME = "emit_structured_json";
 function looksLikeTokenLimitError(body: string): boolean {
   const b = body.toLowerCase();
@@ -212,12 +211,6 @@ export async function anthropicGenerateText(params: {
     ? (sanitizeAnthropicStructuredSchema(params.jsonSchema) as Record<string, unknown>)
     : undefined;
   const capabilities = claudeCapabilities(params.modelId);
-  const customOutputConfig = params.customBody?.output_config as { task_budget?: unknown } | undefined;
-  const taskBudget = customOutputConfig && Object.hasOwn(customOutputConfig, "task_budget")
-    ? customOutputConfig.task_budget
-    : params.modelId === "claude-opus-5-5"
-      ? { type: "tokens", total: 96_000 }
-      : undefined;
   const usesAdaptiveThinking = capabilities.adaptiveThinking;
   const adaptiveEffortAttempts =
     usesAdaptiveThinking && params.adaptiveEffortAttempts && params.adaptiveEffortAttempts.length > 0
@@ -259,8 +252,6 @@ export async function anthropicGenerateText(params: {
   try {
     requestLoop: for (const tok of tokenBudgetCandidates(maxTokens)) {
       betaLoop: for (const betaHeader of betaHeaders) {
-        const requestBetaHeader = [betaHeader, taskBudget ? TASK_BUDGET_BETA : null]
-          .filter(Boolean).join(",");
         const useForcedToolStructuredOutput =
           useStructuredOutputs && structuredMode === "forced_tool";
         const streamResponses = preferStreaming && !useForcedToolStructuredOutput;
@@ -283,14 +274,13 @@ export async function anthropicGenerateText(params: {
               ? undefined
               : {
                 ...(usesAdaptiveThinking && effort ? { effort } : {}),
-                ...(taskBudget ? { task_budget: taskBudget } : {}),
                 format: {
                   type: "json_schema",
                   schema: structuredSchema as Record<string, unknown>,
                 },
               }
             : usesAdaptiveThinking && effort
-              ? { effort, ...(taskBudget ? { task_budget: taskBudget } : {}) }
+              ? { effort }
               : undefined;
 
           controller.signal.throwIfAborted();
@@ -302,7 +292,7 @@ export async function anthropicGenerateText(params: {
               "x-api-key": apiKey,
               "anthropic-version": "2023-06-01",
               ...(streamResponses ? { Accept: "text/event-stream" } : {}),
-              ...(requestBetaHeader ? { "anthropic-beta": requestBetaHeader } : {}),
+              ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
             }, params.customHeaders),
             signal: controller.signal,
             body: JSON.stringify(mergeCustomRequestBody({
@@ -330,7 +320,7 @@ export async function anthropicGenerateText(params: {
 
           if (res.ok) {
             if (usesAdaptiveThinking) selectedAdaptiveEffort = effort ?? null;
-            selectedBetaHeader = requestBetaHeader || null;
+            selectedBetaHeader = betaHeader;
             selectedTokenBudget = tok;
             break requestLoop;
           }
@@ -388,6 +378,7 @@ export async function anthropicGenerateText(params: {
   }
 
   const acceptedOutputTokens = selectedTokenBudget ?? maxTokens;
+  const taskBudget = (params.customBody?.output_config as { task_budget?: unknown } | undefined)?.task_budget;
   params.onAcceptedOutputTokens?.(acceptedOutputTokens);
   const acceptedThinkingBudget =
     typeof thinkingBudget === "number"
