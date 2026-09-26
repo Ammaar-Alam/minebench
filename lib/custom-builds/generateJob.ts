@@ -333,7 +333,7 @@ async function generateBuild(
           kind: "raw_text_debug",
           bytes: new TextEncoder().encode(text),
         });
-        await appendCustomBuildEvent(customBuild.id, "raw_response", {
+        emitCustomBuildEvent(customBuild.id, "raw_response", {
           attempt,
           sha256: artifact.sha256,
           textChars: text.length,
