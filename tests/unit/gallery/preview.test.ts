@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { packVoxelBlocks } from "../../../lib/voxel/packedBlocks";
 import { buildGalleryPreviewSvg } from "../../../lib/gallery/preview";
 
 const build = {
@@ -13,6 +14,7 @@ const build = {
 const first = buildGalleryPreviewSvg(build);
 const second = buildGalleryPreviewSvg(build);
 assert.equal(first, second);
+assert.equal(first, buildGalleryPreviewSvg({ version: "1.0", blocks: [], packed: packVoxelBlocks(build.blocks) }));
 assert.match(first, /^<svg[^>]+viewBox="0 0 640 400"/);
 assert.match(first, /aria-hidden="true"/);
 assert.equal(first.includes("<script"), false);

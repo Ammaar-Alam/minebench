@@ -282,7 +282,14 @@ export async function middleware(req: NextRequest) {
   const isCustomBuildCreate =
     (pathname === "/api/custom-builds" || pathname === "/api/generations") && req.method === "POST";
   const isGalleryReport = pathname === "/api/gallery/reports" && req.method === "POST";
-  const maxPerWindow = pathname === "/api/local/voxel-exec" ? MAX_PER_WINDOW_LOCAL_EXEC : MAX_PER_WINDOW;
+  const isWorldPart = req.method === "GET" && req.nextUrl.searchParams.has("part") && (
+    pathname === "/api/local/voxel-exec" ||
+    /^\/api\/generations\/[^/]+\/artifacts\/viewer$/.test(pathname) ||
+    /^\/api\/gallery\/examples\/[^/]+\/viewer$/.test(pathname)
+  );
+  const maxPerWindow = isWorldPart
+    ? MAX_PER_WINDOW * ARENA_BUILD_IP_GUARDRAIL_MULTIPLIER
+    : pathname === "/api/local/voxel-exec" ? MAX_PER_WINDOW_LOCAL_EXEC : MAX_PER_WINDOW;
   const { value: ip, trusted: hasTrustedIp } = getIp(req);
   const modelAnonymousBucketId = isModelDetailApi && !hasTrustedIp
     ? getAnonymousBucketId(req, null)
@@ -290,7 +297,7 @@ export async function middleware(req: NextRequest) {
   const modelSession = modelAnonymousBucketId
     ? getRateLimitSession(req, modelAnonymousBucketId)
     : null;
-  const bucketPath = normalizeRateLimitPath(pathname);
+  const bucketPath = `${normalizeRateLimitPath(pathname)}${isWorldPart ? ":part" : ""}`;
   const ipBucket = ip ?? "unknown";
   const now = Date.now();
   maybePruneExpiredBuckets(now);

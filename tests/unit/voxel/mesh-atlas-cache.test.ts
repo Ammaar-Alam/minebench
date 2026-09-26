@@ -13,9 +13,9 @@ import {
 
 async function main() {
   {
-    assert.equal(CACHE_VERSION, "v3");
-    assert.equal(buildPersistentMeshCacheKey("test-hash-123"), "v3:test-hash-123");
-    assert.notEqual(buildPersistentMeshCacheKey("test-hash-123"), "v2:test-hash-123");
+    assert.equal(CACHE_VERSION, "v5");
+    assert.equal(buildPersistentMeshCacheKey("test-hash-123"), "v5:test-hash-123");
+    assert.notEqual(buildPersistentMeshCacheKey("test-hash-123"), "v4:test-hash-123");
   }
 
   {
@@ -54,8 +54,9 @@ async function main() {
       [100, 200, 300, 2],
       [512, 512, 512, 3],
       [100, 200, 750, 4],
-      [1023, 1023, 1023, 5],
-      [0, 0, 1023, 6],
+      [1024, 0, 0, 5],
+      [0, 1024, 0, 6],
+      [8191, 8191, 8191, 7],
     ];
 
     for (const [x, y, z, typeId] of testCoords) {
@@ -66,10 +67,10 @@ async function main() {
       assert.equal(table.get(x, y, z), typeId, `lookup failed for (${x}, ${y}, ${z})`);
     }
 
-    assert.equal(table.get(1023, 1023, 1022), -1);
+    assert.equal(table.get(8191, 8191, 8190), -1);
     assert.equal(table.get(0, 0, 513), -1);
     assert.equal(table.get(-1, 0, 0), -1);
-    assert.equal(table.get(1024, 0, 0), -1);
+    assert.equal(table.get(8192, 0, 0), -1);
   }
 
   {
@@ -94,6 +95,28 @@ async function main() {
     );
     assert.ok(stages.every((event) => event.strategy === "local"));
     assert.equal(stages.at(-1)?.cacheStatus, "not-used");
+    group.dispose();
+  }
+
+  {
+    const group = await createVoxelGroupAsync(
+      {
+        version: "1.0",
+        blocks: [
+          { x: 0, y: 0, z: 0, type: "water" },
+          { x: 0, y: 1024, z: 0, type: "water" },
+        ],
+      },
+      getPalette("simple"),
+      new THREE.Texture(),
+      { yieldAfterMs: Number.POSITIVE_INFINITY },
+    );
+    const waterMesh = group.group.children.find(
+      (child): child is THREE.Mesh => child instanceof THREE.Mesh && child.renderOrder === 1,
+    );
+    assert.ok(waterMesh, "high-coordinate water should create a water mesh");
+    assert.equal(waterMesh.geometry.getIndex()?.count, 72);
+    assert.equal(group.stats.blockCount, 2);
     group.dispose();
   }
 

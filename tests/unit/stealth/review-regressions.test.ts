@@ -112,7 +112,8 @@ assert.match(
 assert.match(generationRun, /promptCohortId !== BENCHMARK_PROMPT_COHORT_ID/);
 assert.match(generationRun, /abortSignal:/);
 assert.match(generationRun, /generationProviderSignal\(params\.signal\)/);
-assert.match(generationRun, /returnExpandedBuild: true/);
+assert.match(generationRun, /buildOutput: "packed"/);
+assert.match(generationRun, /processResponse: params\.processResponse/);
 assert.match(generationRun, /existing && run\.variant\.source !== "UPLOAD"/);
 assert.match(providerSignal, /90 \* 60 \* 1000/);
 for (const functionName of [
@@ -143,6 +144,7 @@ assert.match(
   generationSource,
   /writeCanonicalBuildArtifact\(params\.build\)/,
 );
+assert.match(generationSource, /toObjectBackedVoxelBuild\(params\.build\)/);
 assert.match(generationSource, /uploadSupabaseStorageFile\(/);
 assert.doesNotMatch(generationSource, /gzipSync\(|JSON\.stringify\(params\.build\)/);
 assert.match(generationRun, /isMissingStealthBuildPayload\(error\)/);

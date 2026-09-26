@@ -4,11 +4,13 @@ import {
   BinaryBuildFormatError,
   decodeBinaryVoxelBuild,
   encodeBinaryVoxelBuild,
+  encodeBinaryVoxelWorldRegion,
   isBinaryVoxelBuild,
   readBinaryVoxelBuildHeader,
 } from "../../../lib/voxel/binaryBuild";
 import { unpackVoxelBlocks } from "../../../lib/voxel/packedBlocks";
 import type { VoxelBlock } from "../../../lib/voxel/types";
+import type { MixedVoxelWorldRegion } from "../../../lib/voxel/worldRegions";
 
 const TYPES = ["stone", "oak_planks", "glass", "water", "oak_leaves", "gold_block"];
 
@@ -26,6 +28,23 @@ function expectFormatError(run: () => unknown, label: string) {
 }
 
 async function main() {
+  {
+    const region: MixedVoxelWorldRegion = {
+      kind: "mixed", origin: { x: 8190, y: 8190, z: 8190 }, size: { x: 2, y: 2, z: 2 },
+      materialIndexes: Uint8Array.of(2, 0, 1, 2, 3, 0, 2, 1), blockCount: 6,
+    };
+    const blocks = [
+      { x: 0, y: 0, z: 0, type: "glass" }, { x: 0, y: 1, z: 0, type: "stone" },
+      { x: 1, y: 1, z: 0, type: "glass" }, { x: 0, y: 0, z: 1, type: "bricks" },
+      { x: 0, y: 1, z: 1, type: "glass" }, { x: 1, y: 1, z: 1, type: "stone" },
+    ];
+    const palette = ["stone", "glass", "bricks"];
+    const sha = "a1b2c3d4" + "0".repeat(56);
+    assert.deepEqual(encodeBinaryVoxelWorldRegion(region, palette, sha), encodeBinaryVoxelBuild(blocks, sha));
+    assert.throws(() => encodeBinaryVoxelWorldRegion({ ...region, blockCount: 5 }, palette, sha), /count changed/);
+    assert.throws(() => encodeBinaryVoxelWorldRegion(region, ["stone"], sha), /unknown palette entry/);
+  }
+
   {
     const blocks = makeBlocks(5000);
     const encoded = encodeBinaryVoxelBuild(blocks, "a1b2c3d4" + "0".repeat(56));
@@ -50,7 +69,7 @@ async function main() {
     const edges: VoxelBlock[] = [
       { x: 0, y: 0, z: 0, type: "stone" },
       { x: 511, y: 511, z: 511, type: "water" },
-      { x: 1023, y: 0, z: 1023, type: "stone" },
+      { x: 8191, y: 8191, z: 8191, type: "stone" },
     ];
     assert.deepEqual(unpackVoxelBlocks(decodeBinaryVoxelBuild(encodeBinaryVoxelBuild(edges))), edges);
 
@@ -62,7 +81,7 @@ async function main() {
   {
     // a coordinate outside the grid must fail loudly rather than wrap silently
     expectFormatError(
-      () => encodeBinaryVoxelBuild([{ x: 1024, y: 0, z: 0, type: "stone" }]),
+      () => encodeBinaryVoxelBuild([{ x: 8192, y: 0, z: 0, type: "stone" }]),
       "coordinate above the grid",
     );
     expectFormatError(

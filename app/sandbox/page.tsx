@@ -65,6 +65,7 @@ export default async function SandboxPage({
       <Sandbox
         initialPrompt={prompt}
         signedIn={Boolean(account)}
+        allowLargeWorlds={Boolean(account?.isMineBenchAdmin)}
         anonymousServerKeysEnabled={anonymousServerKeysEnabled}
         hostedGeminiEnabled={hostedGeminiEnabled}
         hostedGeminiAvailable={Boolean(

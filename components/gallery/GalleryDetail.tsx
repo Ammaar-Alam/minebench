@@ -1,5 +1,6 @@
 "use client";
 
+import { isGridSize } from "@/lib/ai/limits";
 import Image from "next/image";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -373,7 +374,8 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
     for (const exampleId of selectedIds) {
       const example = examples.find((item) => item.id === exampleId);
       if (!example || viewerStatesRef.current[exampleId] || viewerControllers.current.has(exampleId)) continue;
-      if (!example.viewerUrl) {
+      const viewerUrl = example.worldViewerUrl ?? example.viewerUrl;
+      if (!viewerUrl) {
         updateViewerState(exampleId, { build: null, loading: false, error: "Viewer unavailable" });
         continue;
       }
@@ -381,7 +383,7 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
       const controller = new AbortController();
       viewerControllers.current.set(exampleId, controller);
       updateViewerState(exampleId, { build: null, loading: true, error: null });
-      void fetch(example.viewerUrl, { signal: controller.signal, cache: "no-store" })
+      void fetch(viewerUrl, { signal: controller.signal, cache: "no-store" })
         .then(async (response) => {
           if (!response.ok) throw new Error("Viewer unavailable");
           return readBuildVariantPayload(response, {
@@ -457,7 +459,7 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
   function renderViewerCard(example: GalleryExamplePayload, isComparison: boolean) {
     const state = viewerStates[example.id];
     const build = state?.build ?? null;
-    const loading = state?.loading ?? Boolean(example.viewerUrl);
+    const loading = state?.loading ?? Boolean(example.worldViewerUrl ?? example.viewerUrl);
     return (
       <VoxelViewerCard
         title={example.model.label}
@@ -465,7 +467,7 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
         voxelBuild={build}
         expectedBlockCount={example.blockCount ?? undefined}
         jsonBytes={example.jsonBytes}
-        gridSize={example.gridSize === 64 || example.gridSize === 512 ? example.gridSize : 256}
+        gridSize={isGridSize(example.gridSize) ? example.gridSize : 256}
         palette={example.palette}
         isLoading={loading}
         error={state?.error ?? undefined}

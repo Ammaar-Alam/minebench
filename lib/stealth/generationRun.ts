@@ -1,5 +1,6 @@
 import { Prisma, type StealthGenerationResultStatus } from "@prisma/client";
 import { generateVoxelBuild } from "@/lib/ai/generateVoxelBuild";
+import type { ProcessVoxelBuildResponse } from "@/lib/ai/processVoxelBuildResponse";
 import { BENCHMARK_PROMPT_COHORT_ID } from "@/lib/benchmark/prompts";
 import { getPalette } from "@/lib/blocks/palettes";
 import { prisma } from "@/lib/prisma";
@@ -494,6 +495,7 @@ export async function generateStealthPromptForRun(params: {
   workerId?: string;
   signal?: AbortSignal;
   acquireBuildProcessing?: () => Promise<() => void>;
+  processResponse?: ProcessVoxelBuildResponse;
 }): Promise<void> {
   const identity = await prisma.stealthGenerationRun.findUnique({
     where: { id: params.runId },
@@ -734,7 +736,8 @@ export async function generateStealthPromptForRun(params: {
         gridSize: GRID_SIZE,
         palette: PALETTE,
         maxAttempts,
-        returnExpandedBuild: true,
+        buildOutput: "packed",
+        processResponse: params.processResponse,
         abortSignal: generationProviderSignal(params.signal),
         acquireBuildProcessing: params.acquireBuildProcessing,
         onProviderRequest: (attempt) => {

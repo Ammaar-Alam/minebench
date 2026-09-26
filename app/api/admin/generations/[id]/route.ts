@@ -1,4 +1,5 @@
 import { getAuthenticatedUserId } from "@/lib/auth/request";
+import { customBuildWorldViewerResponse } from "@/lib/custom-builds/worldDelivery";
 import { createCustomBuildArtifactSignedUrl, downloadCustomBuildArtifactBytes } from "@/lib/custom-builds/storage";
 import { apiJson, apiServiceError } from "@/lib/gallery/api";
 import { GenerationServiceError, getAdminGenerationArtifact } from "@/lib/generations/service";
@@ -12,13 +13,26 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   const kind = new URL(request.url).searchParams.get("artifact");
   const kinds = kind === "preview" ? (["preview_mbv4"] as const)
     : kind === "thumbnail" ? (["preview_svg"] as const)
-      : kind === "viewer" ? (["viewer_mbf1", "viewer_mbv4"] as const)
+      : kind === "viewer" ? (["viewer_world", "viewer_mbf1", "viewer_mbv4"] as const)
         : kind === "download" ? (["build_json"] as const)
           : null;
   if (!kinds) return apiJson({ error: { code: "not_found", message: "Artifact not found." } }, 404);
   try {
     const artifact = await getAdminGenerationArtifact(adminId, id, [...kinds]);
     if (!artifact) throw new GenerationServiceError("not_found", "Artifact not found.");
+    if (kind === "viewer" && artifact.kind === "viewer_world") {
+      return await customBuildWorldViewerResponse({
+        request,
+        artifact,
+        buildId: id,
+        findPart: (sourceBuildSha256, partKey) =>
+          getAdminGenerationArtifact(adminId, id, ["world_part"], { sourceBuildSha256, partKey }),
+        cacheControl: "private, no-store",
+      });
+    }
+    if (kind === "viewer" && new URL(request.url).searchParams.has("part")) {
+      throw new GenerationServiceError("not_found", "Artifact not found.");
+    }
     const downloadFileName = kind === "download" ? `${id}.json` : undefined;
     const signedUrl = await createCustomBuildArtifactSignedUrl({ ...artifact, downloadFileName });
     if (signedUrl.startsWith("file:")) {

@@ -15,7 +15,7 @@ export function GalleryAdminGenerations({
 }: {
   ownerId?: string;
   refreshedAt?: string;
-  onPublish: (publicId: string) => Promise<boolean>;
+  onPublish: (publicId: string, prompt?: string) => Promise<boolean>;
 }) {
   const [page, setPage] = useState<Page>({ items: [], nextCursor: null });
   const [query, setQuery] = useState("");
@@ -26,6 +26,7 @@ export function GalleryAdminGenerations({
   const [selected, setSelected] = useState<Page["items"][number] | null>(null);
   const [previewedIds, setPreviewedIds] = useState<Set<string>>(() => new Set());
   const [publishingId, setPublishingId] = useState<string | null>(null);
+  const [importPrompts, setImportPrompts] = useState<Record<string, string>>({});
   const [publishMessage, setPublishMessage] = useState<{ id: string; text: string } | null>(null);
   const [reload, setReload] = useState(0);
   const params = new URLSearchParams({ query, active: String(active), ...(ownerId ? { ownerId } : {}) }).toString();
@@ -81,7 +82,7 @@ export function GalleryAdminGenerations({
     setPublishingId(generation.id);
     setPublishMessage(null);
     try {
-      const ok = await onPublish(generation.id);
+      const ok = await onPublish(generation.id, generation.imported ? importPrompts[generation.id]?.trim() : undefined);
       if (!ok) throw new Error("Build could not be published.");
       setPage((current) => ({
         ...current,
@@ -123,12 +124,18 @@ export function GalleryAdminGenerations({
               <div className="flex shrink-0 flex-wrap gap-2">
                 {generation.viewerUrl ? <button type="button" className="mb-btn h-9 text-xs" onClick={() => viewGeneration(generation)}>View build</button> : null}
                 {generation.canPublish && previewedIds.has(generation.id) ? (
-                  <button type="button" disabled={publishingId === generation.id} className="mb-btn mb-btn-primary h-9 text-xs" onClick={() => void publishGeneration(generation)}>
+                  <button type="button" disabled={publishingId === generation.id || (generation.imported && !importPrompts[generation.id]?.trim())} className="mb-btn mb-btn-primary h-9 text-xs" onClick={() => void publishGeneration(generation)}>
                     {publishingId === generation.id ? "Publishing…" : "Publish anonymously"}
                   </button>
                 ) : null}
               </div>
             </div>
+            {generation.imported && generation.canPublish && previewedIds.has(generation.id) ? (
+              <label className="block space-y-1 text-xs text-muted">
+                <span>Gallery prompt</span>
+                <textarea className="mb-field min-h-20" maxLength={800} value={importPrompts[generation.id] ?? ""} onChange={(event) => setImportPrompts((current) => ({ ...current, [generation.id]: event.target.value }))} />
+              </label>
+            ) : null}
             <p className="break-all text-xs text-muted">{generation.owner?.email ?? "Guest"}{generation.owner?.publicNickname ? ` · ${generation.owner.publicNickname}` : ""}</p>
             <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
               <span className="font-medium text-fg">{generation.model.label}</span>

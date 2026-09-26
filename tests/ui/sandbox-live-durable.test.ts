@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import ts from "typescript";
+import { MAX_GENERATION_PROMPT_CHARS } from "../../lib/ai/limits";
+import { isSavedGenerationRecovery } from "../../lib/generations/retry";
 
 const SOURCE_PATH = "components/sandbox/SandboxLive.tsx";
 const sourceText = readFileSync(SOURCE_PATH, "utf8");
@@ -281,4 +284,150 @@ assert.ok(
   "every selected model should expose browser-persisted request fields while custom provider identity stays flat",
 );
 
-console.log("sandbox saved-generation contract checks passed");
+type RuntimeResult = { modelKey: string; status: string; voxelBuild: unknown; error?: string };
+
+function createRuntime(fetchResponse: typeof fetch, signedIn = true) {
+  const state = { results: new Map<string, RuntimeResult>(), running: false, error: null as string | null };
+  const scope = {
+    prompt: "A detailed skyline", gridSize: signedIn ? 8192 : 256, palette: "advanced", signedIn,
+    MAX_GENERATION_PROMPT_CHARS,
+    selectedModels: ["model-a", "model-b"].map((id) => ({ id, kind: "catalog", modelKey: id })),
+    hostedGeminiAvailable: false, hostedGeminiEnabled: false, anonymousServerKeysEnabled: false,
+    inputSignature: "runtime-test", providerKeys: {},
+    durableRunSequenceRef: { current: 0 }, activeDurableRunRef: { current: null as number | null },
+    canceledDurableRunsRef: { current: new Set<number>() },
+    lastGenerateInputRef: { current: null as string | null },
+    generateAbortRef: { current: null as AbortController | null },
+    customBuildAbortRef: { current: null as AbortController | null },
+    customBuildRequestModel: (model: { id: string }) => ({ id: model.id }),
+    hasProviderKey: () => true,
+    selectGenerationProviderKeys: () => ({}),
+    forceRender() {}, releaseTransientWorld() {},
+    setRunning(value: boolean) { state.running = value; },
+    setRequestError(value: string | null) { state.error = value; },
+    setResults(update: (previous: Map<string, RuntimeResult>) => Map<string, RuntimeResult>) { state.results = update(state.results); },
+    fetch: fetchResponse, AbortController, Error, TextDecoder, Map, Set, Date, console,
+  };
+  const code = ts.transpileModule(`
+    async function runGenerate(continueTransient = false) ${runBody}
+    async function runGenerateDurable(args) ${durableBody}
+    function safeJsonParseObject(text) ${functionBodyText("safeJsonParseObject")}
+    function isAbortError(err) ${functionBodyText("isAbortError")}
+    runGenerate;
+  `, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  const run = runInNewContext(code, scope) as (continueTransient?: boolean) => Promise<void>;
+  return { state, scope, run };
+}
+
+async function requestFailureChecks() {
+  const retryScope = {
+    running: false, results: new Map(), providerKeys: {}, customBuildAbortRef: { current: null },
+    isSavedGenerationRecovery, AbortController, Date,
+    customBuildRequestModel() { throw new Error("Provider profile unavailable"); },
+    setRunning() {}, setResults() {}, applyCustomBuildStatus() {}, async watchCustomBuild() {},
+    customBuildStatusPath: (id: string) => `/api/generations/${id}`,
+    isAbortError: () => false,
+    error: null as string | null,
+    setRequestError(error: string | null) { retryScope.error = error; },
+    requests: 0,
+    async fetch(_url: string, init: RequestInit) {
+      retryScope.requests += 1;
+      assert.deepEqual(JSON.parse(String(init.body)), {}, "source recovery must omit credentials and overrides");
+      return Response.json({ generation: { id: "source-retry" } });
+    },
+  };
+  const retryCode = ts.transpileModule(`
+    function customBuildRetryProvider(status) ${functionBodyText("customBuildRetryProvider")}
+    async function retryCustomBuild(model) ${retryBody}
+    ({ customBuildRetryProvider, retryCustomBuild });
+  `, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  const recoveryRuntime = runInNewContext(retryCode, retryScope);
+  for (const code of ["lease_expired", "provider_key_expired", "artifact_bookkeeping_failed", "processing_capacity_exceeded", "heap_limit_exceeded", "generation_failed"]) {
+    const retryProvider = recoveryRuntime.customBuildRetryProvider({ hasSavedSource: true, model: { transport: "custom", provider: "custom" }, error: { code } });
+    assert.equal(retryProvider, undefined);
+    retryScope.results.set("model", { customBuildId: "source-retry", customBuildRetryable: true, retryProvider });
+    const before = retryScope.requests;
+    await recoveryRuntime.retryCustomBuild({ id: "model" });
+    assert.equal(retryScope.requests, before + 1);
+    assert.equal(retryScope.error, null, "recovery must bypass invalid provider profiles");
+  }
+  assert.equal(recoveryRuntime.customBuildRetryProvider({ imported: true, model: {}, error: null }), undefined);
+  assert.equal(recoveryRuntime.customBuildRetryProvider({ model: { transport: "custom" }, error: { code: "generation_failed" } }), "custom");
+
+  const message = "Check the generation settings.";
+  const failed = createRuntime(async (url) => {
+    assert.equal(url, "/api/generations");
+    return Response.json({ error: { message } }, { status: 400 });
+  });
+  await failed.run();
+  assert.equal(failed.state.error, message);
+  assert.equal(failed.state.running, false);
+  assert.equal(failed.state.results.size, 2);
+  for (const result of failed.state.results.values()) {
+    assert.equal(result.status, "error", "a rejected create request must not leave a loading model card");
+    assert.equal(result.error, message);
+  }
+
+  let boundaryRequests = 0;
+  const boundary = createRuntime(async () => {
+    boundaryRequests += 1;
+    return Response.json({ error: { message } }, { status: 400 });
+  });
+  boundary.scope.prompt = ` \n${"x".repeat(MAX_GENERATION_PROMPT_CHARS)} \n`;
+  await boundary.run();
+  assert.equal(boundaryRequests, 1, "the character limit must allow the exact trimmed boundary");
+
+  const oversized = createRuntime(async () => { throw new Error("oversized prompts must not reach fetch"); });
+  oversized.scope.prompt = "x".repeat(MAX_GENERATION_PROMPT_CHARS + 115);
+  await oversized.run();
+  assert.equal(oversized.state.error, `Keep the prompt to ${MAX_GENERATION_PROMPT_CHARS} characters or fewer.`);
+  assert.equal(oversized.state.running, false);
+  assert.equal(oversized.state.results.size, 0);
+  assert.equal(oversized.scope.prompt.length, MAX_GENERATION_PROMPT_CHARS + 115, "validation must retain the complete input");
+
+  let reads = 0;
+  const partialBuild = { version: "1.0", blocks: [{ x: 0, y: 0, z: 0, type: "stone" }] };
+  const partial = createRuntime(async () => ({
+    ok: true,
+    body: { getReader: () => ({ read: async () => {
+      if (reads++ > 0) throw new Error("Connection lost");
+      return { done: false, value: new TextEncoder().encode(JSON.stringify({
+        type: "result", modelKey: "model-a", voxelBuild: partialBuild,
+      }) + "\n") };
+    } }) },
+  }) as Response, false);
+  await partial.run(true);
+  assert.equal(partial.state.results.get("model-a")?.status, "success");
+  assert.deepEqual(structuredClone(partial.state.results.get("model-a")?.voxelBuild), partialBuild);
+  assert.equal(partial.state.results.get("model-b")?.status, "error");
+  assert.equal(partial.state.results.get("model-b")?.error, "Connection lost");
+
+  const responses: Array<(response: Response) => void> = [];
+  const stale = createRuntime(() => new Promise((resolve) => { responses.push(resolve); }));
+  const oldRun = stale.run();
+  const newRun = stale.run();
+  responses[0]!(Response.json({ error: { message: "Old request failed" } }, { status: 400 }));
+  await oldRun;
+  assert.equal(stale.state.error, null, "an older request failure must not replace the new run's state");
+  assert.equal(stale.state.running, true);
+  assert.ok([...stale.state.results.values()].every((result) => result.status === "loading"));
+  responses[1]!(Response.json({ error: { message } }, { status: 400 }));
+  await newRun;
+  assert.equal(stale.state.running, false);
+  assert.ok([...stale.state.results.values()].every((result) => result.status === "error"));
+
+  let stoppedResponse!: (response: Response) => void;
+  const stopped = createRuntime(() => new Promise((resolve) => { stoppedResponse = resolve; }));
+  const stoppedRun = stopped.run();
+  stopped.scope.canceledDurableRunsRef.current.add(stopped.scope.activeDurableRunRef.current!);
+  for (const [id, result] of stopped.state.results) {
+    stopped.state.results.set(id, { ...result, status: "error", error: "Generation stopped" });
+  }
+  stoppedResponse(Response.json({ error: { message } }, { status: 400 }));
+  await stoppedRun;
+  assert.equal(stopped.state.error, null);
+  assert.ok([...stopped.state.results.values()].every((result) => result.error === "Generation stopped"));
+  console.log("sandbox saved-generation contract checks passed");
+}
+
+void requestFailureChecks().catch((error) => { console.error(error); process.exitCode = 1; });

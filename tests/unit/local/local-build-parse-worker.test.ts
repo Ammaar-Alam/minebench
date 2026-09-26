@@ -13,7 +13,7 @@ type PostedMessage = {
 };
 
 const posted: PostedMessage[] = [];
-const selfStub: { onmessage: ((ev: MessageEvent) => void) | null } = { onmessage: null };
+const selfStub: { onmessage: ((ev: MessageEvent) => void) | null } = Object.assign(Object.create(globalThis), { onmessage: null });
 
 type GridSize = 64 | 256 | 512;
 

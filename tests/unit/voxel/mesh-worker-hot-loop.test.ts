@@ -120,6 +120,7 @@ function testGoldenFixtureParity() {
   assert.deepEqual(buildMeshPayloadFromFacts(createVoxelMeshFacts(packed), allowed), payload);
 
   // frozen from the preoptimization mesher so byte changes require deliberate review
+  // atlas rebuilds may change only the packed uv bytes
   assert.deepEqual(
     {
       filteredBlockCount: payload.filteredBlockCount,
@@ -138,11 +139,11 @@ function testGoldenFixtureParity() {
         center: [0, 1, 0],
         radius: 3.3166247903554,
       },
-      opaque: "a161a573a19eefa0150c3dde2c637617bbf49ff489824f6d147cb423025e06e7",
-      cutout: "c49e65f30520d9d6bb7f783b7e92b420d245882398fd3ddb9505007719456260",
-      transparent: "4fb0e12448099b81991af525fe97f5de562270c946f7cba51344f180db0d6586",
+      opaque: "df54ea03428a9106ba47c77937cf84e9ac78cc7eba2d5320be087be55892163f",
+      cutout: "4bf492b47cc53b30a21a3c2806d34c77be2d889a935e657522cf889a57702cea",
+      transparent: "5364da0fd150926b2784db69b4ee5d69515473a18b52a15cae81628da6bc86d7",
       water: "3837124069a5028ab0ced933f1191134f2d3de55cb9673a833940f06ce5323b2",
-      emissive: "f7111044e1120477b3eb69f210f93d251c42f4ba6323bbd0ba9703574adb29c5",
+      emissive: "658dc921a4324796a974235b0fde578b1ed9b79da841f9689c524a0ea62af6a3",
     },
   );
 

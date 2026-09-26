@@ -666,10 +666,12 @@ async function main() {
       }
 
       const blockCount = validated.value.build.blocks.length;
-      const specJson = JSON.stringify(spec.value);
+      const { packed, packedBoxes, ...jsonSpec } = spec.value;
+      if (packed || packedBoxes) throw new Error("Prompt imports require JSON build data");
+      const specJson = JSON.stringify(jsonSpec);
       const voxelByteSize = Buffer.byteLength(specJson);
       const voxelSha256 = createHash("sha256").update(specJson).digest("hex");
-      const persistence = persistBuildSpec(spec.value as Prisma.InputJsonValue, specJson, voxelSha256);
+      const persistence = persistBuildSpec(jsonSpec as Prisma.InputJsonValue, specJson, voxelSha256);
 
       const existing = existingBuildsForPrompt.get(model.id) ?? null;
 
