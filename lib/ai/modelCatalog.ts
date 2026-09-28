@@ -254,6 +254,15 @@ const CATALOG = [
     openRouterModelId: "anthropic/claude-opus-5",
   },
   {
+    key: "anthropic_claude_sonnet_5_5",
+    slug: "sonnet-5-5",
+    provider: "anthropic",
+    modelId: "claude-sonnet-5-5",
+    displayName: "Claude Sonnet 5.5",
+    enabled: true,
+    openRouterModelId: "anthropic/claude-sonnet-5.5",
+  },
+  {
     key: "anthropic_claude_sonnet_5",
     slug: "sonnet-5",
     provider: "anthropic",

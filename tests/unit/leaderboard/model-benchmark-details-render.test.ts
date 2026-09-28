@@ -70,6 +70,7 @@ assert.ok(
 
 const attemptCostSnapshots = [
   ["anthropic_claude_opus_5_5", "Claude Opus 5.5", "$111.53", "$1.77 per attempt"],
+  ["anthropic_claude_sonnet_5_5", "Claude Sonnet 5.5", "$10.06", "$0.63 per attempt"],
   ["openai_gpt_6_astra", "GPT 6 Astra Pro", "$34.71", "$2.31 per attempt"],
   ["openai_gpt_6_sol", "GPT 6 Sol Pro", "$7.91", "$0.53 per attempt"],
   ["openai_gpt_6_luna", "GPT 6 Luna Pro", "$0.50", "$0.02 per attempt"],

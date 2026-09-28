@@ -134,6 +134,11 @@ const MODEL_RUN_PARAMETERS = {
     { label: "Reasoning effort", value: "Max" },
     { label: "Sampling", value: "Provider default" },
   ],
+  anthropic_claude_sonnet_5_5: [
+    { label: "Thinking", value: "Adaptive" },
+    { label: "Reasoning effort", value: "Max" },
+    { label: "Sampling", value: "Provider default" },
+  ],
   anthropic_claude_sonnet_5: [
     { label: "Thinking", value: "Adaptive" },
     { label: "Reasoning effort", value: "XHigh" },
@@ -338,6 +343,10 @@ const MODEL_BENCHMARK_METADATA: Partial<
     totalCost: { usd: 111.53, attemptCount: 63 },
     totalAttempts: 63,
     averageInference: { milliseconds: 926_908 },
+    taskBudget: "136,000 tokens",
+  },
+  anthropic_claude_sonnet_5_5: {
+    totalCost: { usd: 10.06, attemptCount: 16 },
     taskBudget: "136,000 tokens",
   },
   openai_gpt_6_sol: {

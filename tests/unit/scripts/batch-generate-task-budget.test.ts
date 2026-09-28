@@ -37,7 +37,7 @@ runProviderConfigTest("batch task budget", {
     assert.equal(request.body.max_tokens, 128_000);
     const output = request.body.output_config as { effort: string; task_budget: unknown; format: { type: string } };
     assert.equal(output.effort, "xhigh");
-    assert.deepEqual(output.task_budget, { type: "tokens", total: taskBudget ?? 96_000 });
+    assert.deepEqual(output.task_budget, { type: "tokens", total: taskBudget ?? 136_000 });
     assert.equal(output.format.type, "json_schema");
     assert.equal(Object.hasOwn(request.body, "temperature"), false);
     assert.ok(traces.some((trace) => trace.includes(`Anthropic task budget in use: ${JSON.stringify(output.task_budget)}`)));
@@ -51,7 +51,7 @@ runProviderConfigTest("batch task budget", {
   assert.equal(capture.requests.length, 2);
   assert.notEqual(configurations[0], configurations[1], "different task budgets must have different benchmark fingerprints");
 
-  for (const key of ["anthropic_claude_fable_5_1", "anthropic_claude_fable_5", "anthropic_claude_opus_5", "anthropic_claude_4_8_opus", "anthropic_claude_4_7_opus"] as const) {
+  for (const key of ["anthropic_claude_sonnet_5_5", "anthropic_claude_fable_5_1", "anthropic_claude_fable_5", "anthropic_claude_opus_5", "anthropic_claude_4_8_opus", "anthropic_claude_4_7_opus"] as const) {
     assert.ok(getBatchGenerationModel(key, false).customBody);
   }
   for (const key of ["anthropic_claude_sonnet_5", "anthropic_claude_4_6_opus", "anthropic_claude_4_6_sonnet", "anthropic_claude_4_5_opus"] as const) {

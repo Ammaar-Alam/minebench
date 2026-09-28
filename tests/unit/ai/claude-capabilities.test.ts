@@ -26,6 +26,7 @@ assert.equal(claudeCapabilities("claude-opus-4-5").adaptiveThinking, false);
 assert.equal(claudeCapabilities("claude-sonnet-4-6").defaultSamplingOnly, false);
 assert.equal(claudeCapabilities("claude-opus-4-7").defaultSamplingOnly, true);
 assert.equal(claudeCapabilities("claude-sonnet-5").defaultSamplingOnly, true);
+assert.equal(claudeCapabilities("claude-sonnet-5-5").defaultSamplingOnly, true);
 
 // Only 4.5 still requests an explicit thinking budget
 assert.equal(claudeCapabilities("claude-opus-4-5").legacyManualThinking, true);
@@ -39,6 +40,9 @@ assert.equal(claudeCapabilities("claude-opus-5").context1mBeta, false);
 
 assert.equal(claudeCapabilities("claude-opus-5").maxOutputTokens, 128_000);
 assert.equal(claudeCapabilities("claude-fable-5").maxOutputTokens, 128_000);
+assert.equal(claudeCapabilities("claude-sonnet-5-5").maxOutputTokens, 128_000);
+assert.equal(claudeCapabilities("claude-sonnet-5-5").taskBudgets, true);
+assert.equal(claudeCapabilities("claude-sonnet-5").taskBudgets, false);
 assert.equal(claudeCapabilities("claude-opus-4-6").maxOutputTokens, null);
 
 assert.equal(claudeCapabilities("claude-opus-5").effortEnvVar, "ANTHROPIC_OPUS_5_EFFORT");
@@ -59,7 +63,7 @@ const NOTHING_SUPPORTED = {
 // An undeclared Claude release must not inherit its predecessor's capabilities.
 // A future model may change its output cap or effort levels, so it resolves to
 // nothing until someone reads the model card and declares it.
-for (const modelId of ["claude-opus-5-1", "claude-opus-6", "claude-sonnet-5-1"]) {
+for (const modelId of ["claude-opus-5-1", "claude-opus-6", "claude-sonnet-5-1", "claude-sonnet-5-6"]) {
   assert.deepEqual(
     claudeCapabilities(modelId),
     NOTHING_SUPPORTED,
