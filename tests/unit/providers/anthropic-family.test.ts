@@ -21,6 +21,14 @@ const FULL_LADDER = ["max", "xhigh", "high", "medium", "low"];
 
 const EXPECTATIONS: ExpectedCatalogEntry[] = [
   {
+    key: "anthropic_claude_sonnet_5_5",
+    provider: "anthropic",
+    modelId: "claude-sonnet-5-5",
+    displayName: "Claude Sonnet 5.5",
+    openRouterModelId: "anthropic/claude-sonnet-5.5",
+    slug: "sonnet-5-5",
+  },
+  {
     key: "anthropic_claude_opus_5_5",
     provider: "anthropic",
     modelId: "claude-opus-5-5",
@@ -113,6 +121,7 @@ runProviderConfigTest(
     ANTHROPIC_STREAM_RESPONSES: "0",
     ANTHROPIC_FABLE_5_1_EFFORT: "max",
     ANTHROPIC_OPUS_5_5_EFFORT: "max",
+    ANTHROPIC_SONNET_5_5_EFFORT: "max",
     ANTHROPIC_OPUS_5_EFFORT: "max",
     ANTHROPIC_SONNET_5_EFFORT: "max",
   },

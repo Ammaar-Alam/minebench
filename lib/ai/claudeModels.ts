@@ -55,6 +55,13 @@ const CLAUDE_RELEASES: Record<string, ClaudeRelease> = {
     maxOutputTokens: MESSAGES_API_OUTPUT_MAX,
     effortEnvVar: "ANTHROPIC_OPUS_5_5_EFFORT",
   },
+  "sonnet-5.5": {
+    taskBudgets: true,
+    effortLadder: FULL_EFFORT_LADDER,
+    defaultSamplingOnly: true,
+    maxOutputTokens: MESSAGES_API_OUTPUT_MAX,
+    effortEnvVar: "ANTHROPIC_SONNET_5_5_EFFORT",
+  },
   "fable-5.1": {
     taskBudgets: true,
     effortLadder: FULL_EFFORT_LADDER,
