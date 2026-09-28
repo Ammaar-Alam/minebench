@@ -345,6 +345,10 @@ const MODEL_BENCHMARK_METADATA: Partial<
     averageInference: { milliseconds: 926_908 },
     taskBudget: "136,000 tokens",
   },
+  anthropic_claude_sonnet_5_5: {
+    totalCost: { usd: 10.06, attemptCount: 16 },
+    taskBudget: "136,000 tokens",
+  },
   openai_gpt_6_sol: {
     totalCost: { usd: 7.91, attemptCount: 15 },
   },

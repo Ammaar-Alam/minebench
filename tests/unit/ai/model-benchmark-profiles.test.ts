@@ -54,6 +54,16 @@ assert.equal(getAverageBenchmarkInferenceTimeMs("anthropic_claude_opus_5_5"), 92
 assert.equal(opus55.averageJsonSizeBytes, 40_090_284);
 assert.equal(opus55.note, undefined);
 
+const sonnet55 = getModelBenchmarkProfile("anthropic_claude_sonnet_5_5");
+assert.ok(sonnet55);
+assert.deepEqual(sonnet55.totalCost, { usd: 10.06, attemptCount: 16 });
+assert.equal(sonnet55.totalAttempts, 16);
+assert.equal(sonnet55.buildCount, 15);
+assert.deepEqual(sonnet55.outputCap, { kind: "exact", tokens: 128_000 });
+assert.equal(sonnet55.taskBudget, "136,000 tokens");
+assert.deepEqual(sonnet55.averageInference, { milliseconds: 463_959 });
+assert.equal(sonnet55.averageJsonSizeBytes, 36_650_720);
+
 const gpt56Luna = getModelBenchmarkProfile("openai_gpt_5_6_luna");
 assert.ok(gpt56Luna, "GPT 5.6 Luna Pro should have benchmark run details");
 assert.deepEqual(gpt56Luna.parameters, [

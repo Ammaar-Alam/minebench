@@ -782,6 +782,28 @@
       "interruptedRunCount": 0,
       "providerCallTrackingJobCount": 15,
       "completedAttemptTrackingJobCount": 15
+    },
+    "anthropic_claude_sonnet_5_5": {
+      "inferenceSampleCount": 15,
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "promptCohortId": "prompts-v1:bd8c28367f8a97f2",
+      "averageJsonSizeBytes": 36650720,
+      "configurationSampleCount": 15,
+      "configurationIsConsistent": true,
+      "outputCapSampleCount": 15,
+      "outputCapIsConsistent": true,
+      "averageInferenceMs": 463959,
+      "finalizedAttemptCount": 17,
+      "outputCapTokens": 128000,
+      "providerCallCount": 17,
+      "completedAttemptCount": 16,
+      "rejectedResponseCount": 1,
+      "failedAttemptCount": 2,
+      "failedRunCount": 15,
+      "interruptedRunCount": 0,
+      "providerCallTrackingJobCount": 15,
+      "completedAttemptTrackingJobCount": 15
     }
   }
 }
