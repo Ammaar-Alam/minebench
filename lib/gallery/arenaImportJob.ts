@@ -16,9 +16,9 @@ export async function runGalleryArenaImportJob(
 ): Promise<void> {
   const promptId = readPromptId(job.payload);
   if (!promptId) throw new Error("Arena import job is missing its prompt");
-  // unselected prompts stay out of the arena
+  // unselected or hidden prompts stay out of the arena
   const selected = await prisma.galleryCandidate.findFirst({
-    where: { officialPromptId: promptId, selectedAt: { not: null } },
+    where: { officialPromptId: promptId, selectedAt: { not: null }, removedAt: null, adminHiddenAt: null },
     select: { id: true },
   });
   if (!selected) return;
@@ -51,7 +51,8 @@ export async function runGalleryArenaImportJob(
     mode: ARENA_BUILD_MODE,
   };
   const bucket = getBuildStorageBucketFromEnv();
-  const path = `gallery/${promptId}/${source.modelKey}-g256-simple-precise.json.gz`;
+  // source-specific so a reused path always carries the same payload
+  const path = `gallery/${promptId}/${source.modelKey}-${job.customBuildId}-g256-simple-precise.json.gz`;
   const existing = await prisma.build.findFirst({ where: buildKey });
   // never replace a build this import did not create, retries resume their own
   if (!existing || existing.voxelStoragePath === path) {

@@ -1394,7 +1394,7 @@ export async function setGalleryCandidateHidden(
     const candidate = locked[0]
       ? await tx.galleryCandidate.findUnique({
           where: { id: locked[0].id },
-          select: { id: true, promptText: true, uploaderId: true, adminHiddenAt: true },
+          select: { id: true, promptText: true, uploaderId: true, adminHiddenAt: true, selectedAt: true, officialPromptId: true },
         })
       : null;
     if (!candidate) throw new GalleryServiceError("not_found", "Gallery prompt not found.");
@@ -1406,6 +1406,10 @@ export async function setGalleryCandidateHidden(
         ? { adminHiddenAt: now, purgeAt: new Date(now.getTime() + RETENTION_MS) }
         : { adminHiddenAt: null, purgeAt: null },
     });
+    // hidden community prompts leave the arena until restored
+    if (candidate.selectedAt && candidate.officialPromptId && isCommunityArenaPrompt(candidate.promptText)) {
+      await tx.prompt.update({ where: { id: candidate.officialPromptId }, data: { active: !hidden } });
+    }
     await tx.galleryModerationRecord.create({
       data: {
         kind: "ADMIN_ACTION",
