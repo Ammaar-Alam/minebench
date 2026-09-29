@@ -29,6 +29,15 @@ type ModelCatalogEntryShape = {
 
 const CATALOG = [
   {
+    key: "openai_gpt_6_1_sol",
+    slug: "gpt-6-1-sol",
+    provider: "openai",
+    modelId: "gpt-6.1-sol",
+    displayName: "GPT 6.1 Sol Pro",
+    enabled: true,
+    openRouterModelId: "openai/gpt-6.1-sol-pro",
+  },
+  {
     key: "openai_gpt_6_sol",
     slug: "gpt-6-sol",
     provider: "openai",

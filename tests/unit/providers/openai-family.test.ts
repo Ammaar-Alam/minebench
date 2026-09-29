@@ -18,9 +18,18 @@ import {
 
 // OpenAI pro models use max effort and pro reasoning mode for benchmark runs
 const PRO_LADDER = ["max", "xhigh", "high", "medium", "low", "none"];
-const GPT_6_ASTRA_LADDER = ["max", "xhigh", "high", "medium", "low"];
+const REASONING_REQUIRED_LADDER = ["max", "xhigh", "high", "medium", "low"];
+const REASONING_REQUIRED_IDS = new Set(["gpt-6.1-sol", "gpt-6-astra"]);
 
 const PRO_EXPECTATIONS: ExpectedCatalogEntry[] = [
+  {
+    key: "openai_gpt_6_1_sol",
+    provider: "openai",
+    modelId: "gpt-6.1-sol",
+    displayName: "GPT 6.1 Sol Pro",
+    openRouterModelId: "openai/gpt-6.1-sol-pro",
+    slug: "gpt-6-1-sol",
+  },
   {
     key: "openai_gpt_6_sol",
     provider: "openai",
@@ -87,7 +96,8 @@ runProviderConfigTest(
     for (const expected of PRO_EXPECTATIONS) {
       const model = assertCatalogEntry(expected);
 
-      const ladder = model.modelId === "gpt-6-astra" ? GPT_6_ASTRA_LADDER : PRO_LADDER;
+      const requiresReasoning = REASONING_REQUIRED_IDS.has(model.modelId);
+      const ladder = requiresReasoning ? REASONING_REQUIRED_LADDER : PRO_LADDER;
       assert.deepEqual(openAiReasoningEffortAttempts(model.modelId), ladder);
       assert.deepEqual(openAiReasoningEffortAttempts(model.modelId, "max"), ladder);
       assert.deepEqual(openRouterReasoningEffortAttempts(expected.openRouterModelId!), ladder);
@@ -160,18 +170,23 @@ runProviderConfigTest(
         [
           `Routing via OpenRouter (${expected.openRouterModelId})`,
           "max_output_tokens=128000",
-          `effort_fallback=${ladder.join("->")}${model.modelId === "gpt-6-astra" ? "" : "->disabled"}`,
+          `effort_fallback=${ladder.join("->")}${requiresReasoning ? "" : "->disabled"}`,
           "temperature=default",
         ],
         `OpenRouter trace should report ${model.displayName}, its cap, and the max reasoning fallback`,
       );
     }
 
-    for (const effort of ["none", "minimal"]) {
-      assert.throws(() => openAiReasoningEffortAttempts("gpt-6-astra", effort), /does not support/);
-      assert.throws(() => openRouterReasoningEffortAttempts("openai/gpt-6-astra-pro", effort), /does not support/);
+    for (const [direct, routed] of [
+      ["gpt-6.1-sol", "openai/gpt-6.1-sol-pro"],
+      ["gpt-6-astra", "openai/gpt-6-astra-pro"],
+    ]) {
+      for (const effort of ["none", "minimal"]) {
+        assert.throws(() => openAiReasoningEffortAttempts(direct, effort), /does not support/);
+        assert.throws(() => openRouterReasoningEffortAttempts(routed, effort), /does not support/);
+      }
+      assert.equal(modelRequiresReasoning(routed), true);
     }
-    assert.equal(modelRequiresReasoning("openai/gpt-6-astra-pro"), true);
     const rejectedStart = capture.requests.length;
     capture.respondWith(() => jsonResponse({ error: { message: "Model access denied" } }, 403));
     const rejectedAstra = await runGeneration(capture, {
