@@ -19,17 +19,18 @@ const mock = (path: string, exports: unknown) => {
 };
 const db = {
   galleryCandidate: { findFirst: async () => ({ id: "candidate" }) },
-  customBuild: { findUnique: async () => sourceVisible ? {
+  customBuild: { findUnique: async () => ({
+    removedAt: sourceVisible ? null : new Date(0),
     modelKey: "model", buildSha256: "checksum", blockCount: 1, generationTimeMs: 1,
-    artifacts: [{ bucket: "builds", path: "source.json.gz", byteSize: 1 }],
-  } : null },
+    artifacts: sourceVisible ? [{ bucket: "builds", path: "source.json.gz", byteSize: 1 }] : [],
+  }) },
   model: { findUnique: async () => ({ id: "model", isBaseline: false }) },
   galleryExample: { findFirst: async ({ where }: { where: { customBuild: { removedAt: null } } }) => {
     assert.equal(where.customBuild.removedAt, null);
     return sourceVisible ? { id: "example" } : null;
   } },
   build: {
-    findFirst: async ({ where }: { where: { active?: boolean } }) => where.active ? active ? build : null : existingOwned ? build : null,
+    findFirst: async ({ where }: { where: { active?: boolean } }) => where.active ? active ? build : null : existingOwned ? { ...build, active } : null,
     create: async () => { creates++; return build; },
   },
   prompt: { updateMany: async () => { activations++; } },
@@ -61,13 +62,28 @@ async function main() {
   sourceVisible = true;
   active = true;
   existingOwned = true;
-  hideDuringCopy = true;
+  sourceVisible = false;
   const deletionCount = deleted.length;
   await runGalleryArenaImportJob(job, { beforeArtifactPreparation: async () => {} });
   assert.equal(creates, 1);
   assert.equal(prepared, 2);
   assert.equal(deleted.length, deletionCount, "ordinary source removal preserves the existing Arena copy");
-  console.log("gallery arena import moderation race checks passed");
+  const copyCount = copies;
+  await runGalleryArenaImportJob(job, { beforeArtifactPreparation: async () => {} });
+  assert.equal(prepared, 3, "retry prepares the owned Arena copy after the source artifact is deleted");
+  assert.equal(activations, 3, "retry activates the selected prompt after preparation");
+  assert.equal(copies, copyCount, "retry never recopies a removed source");
+  assert.equal(creates, 1, "retry keeps the original Arena build identity");
+  assert.equal(deleted.length, deletionCount);
+  for (const state of [{ existing: false, active: true }, { existing: true, active: false }]) {
+    existingOwned = state.existing;
+    active = state.active;
+    await runGalleryArenaImportJob(job, { beforeArtifactPreparation: async () => assert.fail("ineligible import prepared") });
+    assert.equal(prepared, 3);
+    assert.equal(activations, 3);
+    assert.equal(copies, copyCount);
+  }
+  console.log("gallery arena import moderation and retry checks passed");
 }
 
 main().catch((error) => { console.error(error); process.exit(1); });

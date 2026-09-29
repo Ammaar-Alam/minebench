@@ -26,8 +26,9 @@ export async function runGalleryArenaImportJob(
   if (!selected) return;
 
   const source = await prisma.customBuild.findUnique({
-    where: { id: job.customBuildId, removedAt: null, galleryExamples: { some: { candidateId: selected.id, removedAt: null, adminHiddenAt: null } } },
+    where: { id: job.customBuildId },
     select: {
+      removedAt: true,
       modelKey: true,
       blockCount: true,
       buildSha256: true,
@@ -43,7 +44,7 @@ export async function runGalleryArenaImportJob(
   const model = source?.modelKey
     ? await prisma.model.findUnique({ where: { key: source.modelKey }, select: { id: true, isBaseline: true } })
     : null;
-  if (!source || !artifact || !model || model.isBaseline) return;
+  if (!source || !model || model.isBaseline) return;
 
   const buildKey = {
     promptId,
@@ -59,36 +60,39 @@ export async function runGalleryArenaImportJob(
   // never replace a build this import did not create, retries resume their own
   if (existing && !existing.active) return;
   if (!existing || existing.voxelStoragePath === path) {
-    // an owned copy keeps the arena build alive if the example is later removed
-    await copySupabaseStorageObject({ from: artifact, to: { bucket, path } });
-    const build = await prisma.$transaction(async (tx) => {
-      // serialize build creation with source moderation
-      await tx.$queryRaw`SELECT id FROM "CustomBuild" WHERE id = ${job.customBuildId} FOR UPDATE`;
-      const current = await tx.build.findFirst({ where: buildKey });
-      if (current) return current.active && current.voxelStoragePath === path ? current : null;
-      const eligible = await tx.galleryExample.findFirst({
-        where: { customBuildId: job.customBuildId, candidateId: selected.id, removedAt: null, adminHiddenAt: null, customBuild: { removedAt: null } },
-        select: { id: true },
-      });
-      if (!eligible) return null;
-      return tx.build.create({
-        data: {
-          ...buildKey,
-          voxelData: Prisma.DbNull,
-          voxelStorageBucket: bucket,
-          voxelStoragePath: path,
-          voxelStorageEncoding: artifact.encoding === "gzip" ? "gzip" : null,
-          voxelByteSize: Number(artifact.byteSize),
-          voxelCompressedByteSize: artifact.compressedByteSize == null ? null : Number(artifact.compressedByteSize),
-          voxelSha256: source.buildSha256,
-          blockCount: Number(source.blockCount ?? 0),
-          generationTimeMs: source.generationTimeMs ?? 0,
-        },
-      });
-    });
+    let build = existing;
     if (!build) {
-      await deleteCustomBuildArtifact({ bucket, path });
-      return;
+      if (!artifact || source.removedAt) return;
+      await copySupabaseStorageObject({ from: artifact, to: { bucket, path } });
+      build = await prisma.$transaction(async (tx) => {
+        // serialize build creation with source moderation
+        await tx.$queryRaw`SELECT id FROM "CustomBuild" WHERE id = ${job.customBuildId} FOR UPDATE`;
+        const current = await tx.build.findFirst({ where: buildKey });
+        if (current) return current.active && current.voxelStoragePath === path ? current : null;
+        const eligible = await tx.galleryExample.findFirst({
+          where: { customBuildId: job.customBuildId, candidateId: selected.id, removedAt: null, adminHiddenAt: null, customBuild: { removedAt: null } },
+          select: { id: true },
+        });
+        if (!eligible) return null;
+        return tx.build.create({
+          data: {
+            ...buildKey,
+            voxelData: Prisma.DbNull,
+            voxelStorageBucket: bucket,
+            voxelStoragePath: path,
+            voxelStorageEncoding: artifact.encoding === "gzip" ? "gzip" : null,
+            voxelByteSize: Number(artifact.byteSize),
+            voxelCompressedByteSize: artifact.compressedByteSize == null ? null : Number(artifact.compressedByteSize),
+            voxelSha256: source.buildSha256,
+            blockCount: Number(source.blockCount ?? 0),
+            generationTimeMs: source.generationTimeMs ?? 0,
+          },
+        });
+      });
+      if (!build) {
+        await deleteCustomBuildArtifact({ bucket, path });
+        return;
+      }
     }
     try {
       await opts.beforeArtifactPreparation();
@@ -99,7 +103,7 @@ export async function runGalleryArenaImportJob(
           retiringBuilds: [build], survivingChecksums: new Set(),
           deleteStorage: async (refs) => { for (const ref of refs) await deleteCustomBuildArtifact(ref); },
         });
-        await deleteCustomBuildArtifact({ bucket, path });
+        await deleteCustomBuildArtifact({ bucket: build.voxelStorageBucket ?? bucket, path });
       }
     }
   }
