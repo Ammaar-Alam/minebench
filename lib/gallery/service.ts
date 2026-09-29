@@ -5,6 +5,7 @@ import { customBuildJsonNumber, customBuildStorageBigInt } from "@/lib/custom-bu
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
 import { voxelWorldPartSourceSha256 } from "@/lib/custom-builds/worldArtifacts";
+import { arenaCohortBuildWhere } from "@/lib/arena/eligibility";
 import { isCommunityArenaPrompt, queueGalleryArenaImports } from "@/lib/gallery/arenaImport";
 import {
   sendGalleryAccountNotification,
@@ -97,6 +98,9 @@ const candidateSelect = {
   publishedAt: true,
   selectedAt: true,
   officialPromptId: true,
+  officialPrompt: {
+    select: { active: true, _count: { select: { builds: { where: arenaCohortBuildWhere() } } } },
+  },
   postAnonymously: true,
   uploader: {
     select: { publicNickname: true },
@@ -230,7 +234,10 @@ function publicCandidate(
     upvoteCount: candidate.upvoteCount,
     upvoted,
     selected: Boolean(candidate.selectedAt),
-    arenaPromptId: candidate.selectedAt ? candidate.officialPromptId : null,
+    // only link once Compare can show this prompt
+    arenaPromptId: candidate.selectedAt && candidate.officialPrompt?.active && candidate.officialPrompt._count.builds >= 2
+      ? candidate.officialPromptId
+      : null,
     canRemove: Boolean(
       viewerUserId && candidate.uploaderId === viewerUserId && !candidate.selectedAt,
     ),

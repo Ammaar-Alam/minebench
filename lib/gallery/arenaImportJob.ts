@@ -75,6 +75,13 @@ export async function runGalleryArenaImportJob(
     await opts.beforeArtifactPreparation();
     await maybePrecomputeArenaArtifactsForBuild(build);
   }
-  // a prompt needs two builds before sampling picks it up
-  await prisma.prompt.update({ where: { id: promptId }, data: { active: true } });
+  // one conditional write so a hide or unselect during the import wins
+  // a prompt still needs two builds before sampling picks it up
+  await prisma.prompt.updateMany({
+    where: {
+      id: promptId,
+      selectedGalleryCandidate: { is: { selectedAt: { not: null }, removedAt: null, adminHiddenAt: null } },
+    },
+    data: { active: true },
+  });
 }
