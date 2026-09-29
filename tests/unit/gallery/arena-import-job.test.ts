@@ -16,6 +16,8 @@ let copy: () => void = () => {};
 let prepare: () => void = () => {};
 let cleanup: () => void = () => {};
 const deleted: string[] = [];
+let rawDeletionFails = false;
+let cleanupTracked = false;
 const row = () => ({ id: "arena-build", active, arenaImportPending: pending,
   voxelSha256: "checksum", voxelStoragePath: "gallery/prompt/model-source-g256-simple-precise.json.gz" });
 const mock = (path: string, exports: unknown) => {
@@ -27,8 +29,12 @@ const db = {
   customBuild: {
     findUnique: async () => ({ removedAt: sourceVisible ? null : new Date(0), modelKey: "model",
       buildSha256: "checksum", blockCount: 1, generationTimeMs: 1,
-      artifacts: sourceVisible ? [{ bucket: "builds", path: "source.json.gz", byteSize: 1 }] : [] }),
+      artifacts: sourceVisible ? [{ bucket: "builds", path: "source.json.gz", byteSize: 1, sha256: "a".repeat(64), storedByteSize: 1, format: "json.gz", contentType: "application/json", fileName: "build.json.gz" }] : [] }),
     update: async () => { cleanupPending = true; },
+  },
+  customBuildArtifact: {
+    upsert: async () => { cleanupTracked = true; },
+    deleteMany: async () => { cleanupTracked = false; },
   },
   model: { findUnique: async () => ({ id: "model", isBaseline: false }) },
   galleryExample: { findFirst: async () => sourceVisible ? { id: "example" } : null },
@@ -53,6 +59,9 @@ const db = {
 };
 mock("../../../lib/prisma", { prisma: db });
 mock("../../../lib/storage/buildPayload", { isMissingBuildPayloadError, copySupabaseStorageObject: async () => { copies++; copy(); } });
+mock("../../../lib/custom-builds/storage", { deleteCustomBuildArtifact: async () => {
+  if (rawDeletionFails) throw new Error("late deletion failed");
+} });
 mock("../../../lib/gallery/arenaImport", { deleteRetiredGalleryArenaArtifacts: async () => {
   cleanup(); deleted.push("derived-artifacts", row().voxelStoragePath);
 } });
@@ -110,6 +119,13 @@ async function main() {
   assert.equal(pending, false, "missing reservations retire once their source is removed");
   assert.equal(cleanupPending, true);
   assert.equal(activations, activationCount);
+  sourceVisible = true; existing = false; cleanupPending = false;
+  copy = () => { sourceVisible = false; active = false; pending = false; existing = false; };
+  rawDeletionFails = true;
+  await assert.rejects(run(), /late deletion failed/);
+  assert.equal(existing, false, "moderation already deleted the original owner");
+  assert.equal(cleanupTracked, true, "late copies retain a durable cleanup ref without a Build row");
+  assert.equal(cleanupPending, true);
   console.log("gallery arena import moderation, publication and retry checks passed");
 }
 

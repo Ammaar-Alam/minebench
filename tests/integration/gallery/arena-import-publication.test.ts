@@ -5,15 +5,21 @@ import { PrismaClient } from "@prisma/client";
 
 const require = createRequire(import.meta.url);
 let prepare: () => Promise<void> = async () => {};
-let copy: () => void = () => {};
+let copy: () => void | Promise<void> = () => {};
+const objects = new Set<string>();
 let deletionFails = false;
 const payloadId = require.resolve("../../../lib/storage/buildPayload");
 require.cache[payloadId] = { id: payloadId, filename: payloadId, loaded: true,
   exports: { ...require(payloadId), copySupabaseStorageObject: async () => copy() },
 } as NodeJS.Module;
+const deleteObject = async ({ bucket, path }: { bucket: string; path: string }) => {
+  if (deletionFails) throw new Error("retirement deletion failed");
+  objects.delete(`${bucket}:${path}`);
+};
 const storageId = require.resolve("../../../lib/custom-builds/storage");
 require.cache[storageId] = { id: storageId, filename: storageId, loaded: true,
-  exports: { deleteCustomBuildArtifact: async () => { if (deletionFails) throw new Error("retirement deletion failed"); } },
+  exports: { deleteCustomBuildArtifact: deleteObject,
+    deleteCustomBuildArtifacts: async (refs: Array<{ bucket: string; path: string }>) => { for (const ref of refs) await deleteObject(ref); } },
 } as NodeJS.Module;
 const moduleId = require.resolve("../../../lib/arena/artifactMaintenance");
 require.cache[moduleId] = { id: moduleId, filename: moduleId, loaded: true,
@@ -36,7 +42,7 @@ async function main() {
   const { uploadArenaBuildArtifact } = await import("../../../lib/arena/artifactOwnership");
   const suffix = randomUUID();
   try {
-    const owner = await db.user.create({ data: { id: randomUUID(), email: `${suffix}@example.test` } });
+    const owner = await db.user.create({ data: { id: randomUUID(), email: `${suffix}@example.test`, isMineBenchAdmin: true } });
     const prompt = await db.prompt.create({ data: { text: `Import publication ${suffix}`, active: true } });
     const candidate = await db.galleryCandidate.create({ data: {
       publicId: `gal_${suffix}`, promptText: prompt.text, promptKey: suffix,
@@ -126,11 +132,11 @@ async function main() {
     const stalledModel = await db.model.create({ data: {
       key: `stalled-${suffix}`, provider: "test", modelId: `${suffix}-stalled`, displayName: "Stalled import",
     } });
-    const makeSource = (label: string) => db.customBuild.create({ data: {
+    const makeSource = (label: string, selectedModel = stalledModel) => db.customBuild.create({ data: {
       publicId: `cb_${label}_${suffix}`, ownerId: owner.id, status: "succeeded", promptText: prompt.text,
       promptSha256: "b".repeat(64), gridSize: 256, palette: "simple", mode: "precise",
-      modelKind: "catalog", modelKey: stalledModel.key, modelProvider: "test", modelId: stalledModel.modelId,
-      modelDisplayName: stalledModel.displayName, buildSha256: "b".repeat(64),
+      modelKind: "catalog", modelKey: selectedModel.key, modelProvider: "test", modelId: selectedModel.modelId,
+      modelDisplayName: selectedModel.displayName, buildSha256: "b".repeat(64),
       artifacts: { create: {
         kind: "build_json", format: "json.gz", bucket: "builds", path: `${label}/${suffix}.json.gz`,
         contentType: "application/json", fileName: "build.json.gz", sha256: "b".repeat(64), byteSize: 1, storedByteSize: 1,
@@ -166,6 +172,47 @@ async function main() {
     prepare = async () => {};
     await runGalleryArenaImportJob(replacementJob, { beforeArtifactPreparation: async () => {} });
     assert.equal((await db.build.findFirstOrThrow({ where: { promptId: prompt.id, modelId: stalledModel.id } })).active, true);
+    const raceModel = await db.model.create({ data: {
+      key: `race-${suffix}`, provider: "test", modelId: `${suffix}-race`, displayName: "Racing import",
+    } });
+    const { hideGalleryExample } = await import("../../../lib/gallery/service");
+    for (const failLateDeletion of [false, true]) {
+      const racingSource = await makeSource(`race-${failLateDeletion}`, raceModel);
+      const example = await db.galleryExample.create({ data: {
+        candidateId: candidate.id, customBuildId: racingSource.id, contributorId: owner.id,
+      } });
+      const copying = barrier();
+      const finishCopy = barrier();
+      const destination = `gallery/${prompt.id}/${raceModel.key}-${racingSource.id}-g256-simple-precise.json.gz`;
+      const objectKey = `builds:${destination}`;
+      copy = async () => {
+        copying.release();
+        await finishCopy.promise;
+        objects.add(objectKey);
+      };
+      prepare = async () => { throw new Error("retired during copy"); };
+      const importing = runGalleryArenaImportJob({ customBuildId: racingSource.id, payload: { promptId: prompt.id } },
+        { beforeArtifactPreparation: async () => {} });
+      await copying.promise;
+      const reservation = await db.build.findFirstOrThrow({ where: { promptId: prompt.id, modelId: raceModel.id } });
+      await hideGalleryExample(owner.id, example.id, deleteObject);
+      assert.equal(await db.build.findUnique({ where: { id: reservation.id } }), null);
+      assert.equal(objects.has(objectKey), false);
+      deletionFails = failLateDeletion;
+      finishCopy.release();
+      await assert.rejects(importing, failLateDeletion ? /retirement deletion failed/ : /retired during copy/);
+      if (failLateDeletion) {
+        assert.ok(objects.has(objectKey), "the failed delete left the late payload present");
+        const ticket = await db.customBuildArtifact.findUniqueOrThrow({ where: { id: `arena_cleanup_${reservation.id}` } });
+        assert.equal(ticket.path, destination);
+        assert.ok((await db.customBuild.findUniqueOrThrow({ where: { id: racingSource.id } })).deletionPendingAt);
+        deletionFails = false;
+        const cleanup = await purgePendingCustomBuildArtifacts({ deleteArtifact: deleteObject });
+        assert.equal(cleanup.objectDeletionFailures, 0, (await db.customBuild.findUniqueOrThrow({ where: { id: racingSource.id } })).deletionError ?? undefined);
+        assert.equal(await db.customBuildArtifact.findUnique({ where: { id: ticket.id } }), null);
+      }
+      assert.equal(objects.has(objectKey), false, "cleanup removes a copy completed after its Build was deleted");
+    }
     console.log("Arena import publication and PostgreSQL moderation race checks passed");
   } finally {
     await db.$disconnect();

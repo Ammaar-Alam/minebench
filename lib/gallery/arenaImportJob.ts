@@ -1,5 +1,6 @@
 import { Prisma, type CustomBuildJob } from "@prisma/client";
 import { invalidateArenaBuildMeta } from "@/lib/arena/buildMetaCache";
+import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import { deleteRetiredGalleryArenaArtifacts } from "@/lib/gallery/arenaImport";
 import { maybePrecomputeArenaArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
@@ -36,7 +37,7 @@ export async function runGalleryArenaImportJob(
       generationTimeMs: true,
       artifacts: {
         where: { kind: "build_json" },
-        select: { bucket: true, path: true, encoding: true, byteSize: true, compressedByteSize: true },
+        select: { bucket: true, path: true, encoding: true, byteSize: true, compressedByteSize: true, sha256: true, storedByteSize: true, format: true, contentType: true, fileName: true },
         take: 1,
       },
     },
@@ -94,9 +95,13 @@ export async function runGalleryArenaImportJob(
       });
       if (!build) return;
     }
+    let copyAttempted = false;
+    const cleanupId = `arena_cleanup_${build.id}`;
+    const destination = { bucket: build.voxelStorageBucket ?? bucket, path };
     try {
       if (build.arenaImportPending && artifact && !source.removedAt) {
-        await copySupabaseStorageObject({ from: artifact, to: { bucket: build.voxelStorageBucket ?? bucket, path } });
+        copyAttempted = true;
+        await copySupabaseStorageObject({ from: artifact, to: destination });
       }
       await opts.beforeArtifactPreparation();
       await maybePrecomputeArenaArtifactsForBuild(build);
@@ -114,7 +119,19 @@ export async function runGalleryArenaImportJob(
     } finally {
       if (!await prisma.build.findFirst({ where: { id: build.id, OR: [{ active: true }, { arenaImportPending: true }] }, select: { id: true } })) {
         try {
+          if (copyAttempted && artifact) {
+            await prisma.$transaction(async (tx) => {
+              await tx.customBuild.update({ where: { id: job.customBuildId }, data: { objectsDeletedAt: null, deletionPendingAt: new Date() } });
+              await tx.customBuildArtifact.upsert({
+                where: { id: cleanupId },
+                create: { ...artifact, ...destination, id: cleanupId, customBuildId: job.customBuildId, kind: "build_json" },
+                update: {},
+              });
+            });
+          }
+          await deleteCustomBuildArtifact(destination);
           await deleteRetiredGalleryArenaArtifacts(job.customBuildId);
+          if (copyAttempted) await prisma.customBuildArtifact.deleteMany({ where: { id: cleanupId } });
         } catch (error) {
           await prisma.customBuild.update({
             where: { id: job.customBuildId },
