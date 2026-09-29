@@ -5,7 +5,7 @@ import { deleteRetiredGalleryArenaArtifacts } from "@/lib/gallery/arenaImport";
 import { maybePrecomputeArenaArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
 import { ARENA_BUILD_GRID_SIZE, ARENA_BUILD_MODE, ARENA_BUILD_PALETTE } from "@/lib/arena/eligibility";
 import { prisma } from "@/lib/prisma";
-import { copySupabaseStorageObject } from "@/lib/storage/buildPayload";
+import { copySupabaseStorageObject, isMissingBuildPayloadError } from "@/lib/storage/buildPayload";
 import { getBuildStorageBucketFromEnv } from "@/lib/storage/config";
 
 function readPromptId(payload: Prisma.JsonValue | null): string | null {
@@ -101,6 +101,16 @@ export async function runGalleryArenaImportJob(
       await opts.beforeArtifactPreparation();
       await maybePrecomputeArenaArtifactsForBuild(build);
       preparedBuildId = build.id;
+    } catch (error) {
+      if (!build.arenaImportPending || !source.removedAt || !isMissingBuildPayloadError(error)) throw error;
+      await prisma.$transaction(async (tx) => {
+        await tx.customBuild.update({ where: { id: job.customBuildId }, data: { deletionPendingAt: new Date() } });
+        await tx.build.updateMany({
+          where: { id: build.id, voxelStoragePath: path, active: false, arenaImportPending: true },
+          data: { arenaImportPending: false },
+        });
+      });
+      return;
     } finally {
       if (!await prisma.build.findFirst({ where: { id: build.id, OR: [{ active: true }, { arenaImportPending: true }] }, select: { id: true } })) {
         try {

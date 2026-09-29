@@ -411,6 +411,10 @@ export async function loadBuildJsonFromStorage(
   return extracted;
 }
 
+export function isMissingBuildPayloadError(error: unknown): boolean {
+  return error instanceof Error && /Storage download failed \(404\)/.test(error.message);
+}
+
 export async function resolveBuildPayload(
   source: BuildPayloadSource,
   opts?: LoadBuildPayloadOptions,

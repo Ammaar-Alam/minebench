@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
+import { isMissingBuildPayloadError } from "../../../lib/storage/buildPayload";
 import type { CustomBuildJob } from "@prisma/client";
 
 const require = createRequire(import.meta.url);
@@ -41,9 +42,9 @@ const db = {
       active = false; pending = true; existing = true;
       return row();
     },
-    updateMany: async () => {
+    updateMany: async ({ data }: { data: { active?: boolean; arenaImportPending: boolean } }) => {
       if (!active && !pending) return { count: 0 };
-      active = true; pending = false; return { count: 1 };
+      active = data.active ?? active; pending = data.arenaImportPending; return { count: 1 };
     },
   },
   prompt: { update: async () => { activations++; } },
@@ -51,7 +52,7 @@ const db = {
   $transaction: async (fn: (tx: unknown) => unknown): Promise<unknown> => fn(db),
 };
 mock("../../../lib/prisma", { prisma: db });
-mock("../../../lib/storage/buildPayload", { copySupabaseStorageObject: async () => { copies++; copy(); } });
+mock("../../../lib/storage/buildPayload", { isMissingBuildPayloadError, copySupabaseStorageObject: async () => { copies++; copy(); } });
 mock("../../../lib/gallery/arenaImport", { deleteRetiredGalleryArenaArtifacts: async () => {
   cleanup(); deleted.push("derived-artifacts", row().voxelStoragePath);
 } });
@@ -94,6 +95,21 @@ async function main() {
   existing = false;
   await run();
   assert.equal(copies, 2, "removed sources cannot create new imports");
+  sourceVisible = true; existing = false; cleanupPending = false;
+  copy = () => { throw new Error("Storage copy failed (503)"); };
+  await assert.rejects(run(), /Storage copy failed/);
+  assert.equal(pending, true);
+  const activationCount = activations;
+  sourceVisible = false;
+  prepare = () => { throw new Error("Storage download failed (503)"); };
+  await assert.rejects(run(), /Storage download failed/);
+  assert.equal(pending, true, "transient storage failures never retire an owned copy");
+  prepare = () => { throw new Error("Storage download failed (404)"); };
+  await run();
+  assert.equal(active, false);
+  assert.equal(pending, false, "missing reservations retire once their source is removed");
+  assert.equal(cleanupPending, true);
+  assert.equal(activations, activationCount);
   console.log("gallery arena import moderation, publication and retry checks passed");
 }
 

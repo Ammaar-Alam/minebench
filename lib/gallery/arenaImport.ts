@@ -32,7 +32,7 @@ export async function deleteRetiredGalleryArenaArtifacts(
       arenaImportPending: false,
       voxelStoragePath: { startsWith: "gallery/", endsWith: `-${customBuildId}-g256-simple-precise.json.gz` },
     },
-    select: { id: true, voxelSha256: true, voxelStorageBucket: true, voxelStoragePath: true },
+    select: { id: true, promptId: true, voxelSha256: true, voxelStorageBucket: true, voxelStoragePath: true },
   });
   if (!builds.length) return;
   await deleteArenaBuildArtifacts({
@@ -44,6 +44,24 @@ export async function deleteRetiredGalleryArenaArtifacts(
     if (build.voxelStorageBucket && build.voxelStoragePath) {
       await deleteArtifact({ bucket: build.voxelStorageBucket, path: build.voxelStoragePath });
     }
+    await prisma.$transaction(async (tx) => {
+      const candidates = await tx.$queryRaw<Array<{
+        id: string; promptText: string; selectedAt: Date | null; adminHiddenAt: Date | null; removedAt: Date | null;
+      }>>`
+        SELECT id, "promptText", "selectedAt", "adminHiddenAt", "removedAt" FROM "GalleryCandidate"
+        WHERE "officialPromptId" = ${build.promptId}
+        FOR UPDATE
+      `;
+      const deleted = await tx.build.deleteMany({ where: {
+        id: build.id, active: false, arenaImportPending: false,
+        matchupsAsA: { none: {} }, matchupsAsB: { none: {} }, stealthGenerationResults: { none: {} },
+      } });
+      const candidate = candidates[0];
+      if (deleted.count > 0 && candidate?.selectedAt && !candidate.adminHiddenAt && !candidate.removedAt
+        && isCommunityArenaPrompt(candidate.promptText)) {
+        await queueGalleryArenaImports(tx, candidate.id, build.promptId);
+      }
+    });
   }
 }
 

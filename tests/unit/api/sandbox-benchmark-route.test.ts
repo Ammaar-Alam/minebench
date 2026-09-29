@@ -14,6 +14,7 @@ const builds = models.map((model, index) => ({
   voxelSha256: null, arenaBuildHints: null,
 }));
 let hasSnapshot = true;
+let rankedModelKeys = ["a", "b", "e", "d", "c"];
 const prismaPath = require.resolve("../../../lib/prisma");
 require.cache[prismaPath] = {
   id: prismaPath, filename: prismaPath, loaded: true,
@@ -39,7 +40,7 @@ require.cache[prismaPath] = {
       galleryCandidate: { findFirst: async () => null },
       modelRankSnapshot: {
         findFirst: async () => hasSnapshot ? { capturedAt: new Date(0) } : null,
-        findMany: async () => ["a", "b", "e", "d", "c"].map((key, index) => ({ rank: index + 1, model: { key } })),
+        findMany: async () => rankedModelKeys.map((key, index) => ({ rank: index + 1, model: { key } })),
       },
     },
   },
@@ -65,6 +66,17 @@ async function main() {
     assert.equal(fallback.selectedPrompt.id, "original");
     assert.deepEqual(fallback.selectedModels, { a: "a", b: "b", c: null, d: null });
   }
+  rankedModelKeys = ["e", "a", "b", "d", "c"];
+  for (const query of ["", "?promptId=missing"]) {
+    const fallback = await get(query);
+    assert.equal(fallback.selectedPrompt.id, "gallery");
+    assert.deepEqual(fallback.selectedModels, { a: "e", b: "d", c: null, d: null });
+    assert.equal(fallback.builds.a.buildId, "build-e");
+    assert.equal(fallback.builds.b.buildId, "build-d");
+  }
+  const original = await get("?promptId=original");
+  assert.equal(original.selectedPrompt.id, "original");
+  assert.deepEqual(original.selectedModels, { a: "a", b: "b", c: null, d: null });
   const explicit = await get("?promptId=gallery&modelA=a&modelB=b");
   assert.deepEqual(explicit.selectedModels, { a: "a", b: "b", c: null, d: null });
   const partial = await get("?promptId=gallery&modelC=c");

@@ -205,11 +205,16 @@ export async function GET(req: Request) {
       !hasRequestedModels && requestedPromptId && promptOptions.some((p) => p.id === requestedPromptId)
         ? modelIdsByPromptId.get(requestedPromptId)
         : undefined;
+    const selectionModels = modelRows
+      .filter((model) => !defaultPromptModelIds || defaultPromptModelIds.has(model.id))
+      .sort((a, b) => (leaderboardRank.get(a.key) ?? unranked) - (leaderboardRank.get(b.key) ?? unranked));
     const selection = normalizeSandboxComparisonSelection(
-      modelRows
-        .filter((model) => !defaultPromptModelIds || defaultPromptModelIds.has(model.id))
-        .map((model) => model.key)
-        .sort((a, b) => (leaderboardRank.get(a) ?? unranked) - (leaderboardRank.get(b) ?? unranked)),
+      selectionModels
+        .filter((model) => hasRequestedModels || promptOptions.some((p) => {
+          const ids = modelIdsByPromptId.get(p.id);
+          return ids?.has(selectionModels[0].id) && ids.has(model.id);
+        }))
+        .map((model) => model.key),
       requestedModels,
     );
     const modelIdByKey = new Map(modelRows.map((m) => [m.key, m.id]));
