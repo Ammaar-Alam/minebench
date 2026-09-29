@@ -199,7 +199,7 @@ export async function uploadAndRecordCustomBuildArtifact(args: {
   };
   const existingArtifact = await client.customBuildArtifact.findUnique({
     where: { customBuildId_kind_sourceBuildSha256: ownershipKey },
-    select: { bucket: true, path: true },
+    select: { bucket: true, path: true, storedByteSize: true },
   });
   const fileName =
     args.kind === "build_json"
@@ -288,11 +288,6 @@ export async function uploadAndRecordCustomBuildArtifact(args: {
     }
     throw error;
   }
-  const stored = await client.customBuildArtifact.aggregate({
-    where: { customBuildId: args.customBuildId },
-    _sum: { storedByteSize: true },
-  });
-  const totalStoredByteSize = stored._sum.storedByteSize ?? 0;
   const generationArtifact = [
     "build_json",
     "preview_mbv4",
@@ -302,6 +297,7 @@ export async function uploadAndRecordCustomBuildArtifact(args: {
     "world_part",
     "preview_svg",
   ].includes(args.kind);
+  // an atomic delta keeps each write constant-time while concurrent parts stay exact
   const updated = await client.customBuild.updateMany({
     where: {
       id: args.customBuildId,
@@ -309,13 +305,17 @@ export async function uploadAndRecordCustomBuildArtifact(args: {
       ...(generationArtifact ? { status: "running" as const }
         : args.kind === "raw_text_debug" ? { status: { in: ["queued" as const, "running" as const] } } : {}),
     },
-    data: { storedByteSize: totalStoredByteSize },
+    data: { storedByteSize: { increment: BigInt(storedByteSize) - (existingArtifact?.storedByteSize ?? 0n) } },
   });
   if (updated.count !== 1) {
+    const stored = await client.customBuildArtifact.aggregate({
+      where: { customBuildId: args.customBuildId },
+      _sum: { storedByteSize: true },
+    });
     await client.customBuild.update({
       where: { id: args.customBuildId },
       data: {
-        storedByteSize: totalStoredByteSize,
+        storedByteSize: stored._sum.storedByteSize ?? 0,
         objectsDeletedAt: null,
         deletionPendingAt: new Date(),
         deletionError: "Artifact cleanup pending.",

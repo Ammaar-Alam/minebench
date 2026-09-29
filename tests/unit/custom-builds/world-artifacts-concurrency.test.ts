@@ -242,7 +242,7 @@ async function preserveOrderWithConcurrentUploads() {
     persistWorld(sourceBuild, state.persistArtifact),
     state,
   );
-  assert.ok(state.maxInFlight <= 4);
+  assert.ok(state.maxInFlight <= 16);
   assert.ok(state.startedKeys.filter((key) => key.startsWith("mixed-")).length > 4);
   assert.equal(result.manifest.regionPages?.length, 2);
   assert.equal(state.pages.length, 2);

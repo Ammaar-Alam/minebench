@@ -46,7 +46,8 @@ export type PersistVoxelWorldArtifact = (
 ) => Promise<PersistedVoxelWorldArtifact>;
 
 const PAGE_KEY_PREFIX = "page-";
-const MIXED_PART_PERSIST_CONCURRENCY = 4;
+// parts are small, so upload round trips rather than bytes bound this stage
+const MIXED_PART_PERSIST_CONCURRENCY = 16;
 
 export function voxelWorldPartSourceSha256(sourceBuildSha256: string, partKey: string): string {
   return sha256Hex(`${sourceBuildSha256}\0${partKey}`);
