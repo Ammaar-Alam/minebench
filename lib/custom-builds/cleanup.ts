@@ -2,6 +2,7 @@ import type { CustomBuildArtifact, Prisma } from "@prisma/client";
 import { customBuildStorageBigInt } from "@/lib/custom-builds/numericMetadata";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import { deleteCustomBuildArtifacts } from "@/lib/custom-builds/storage";
+import { deleteRetiredGalleryArenaArtifacts } from "@/lib/gallery/arenaImport";
 import { prisma } from "@/lib/prisma";
 
 export async function purgePendingCustomBuildArtifacts(options: {
@@ -44,6 +45,7 @@ export async function purgePendingCustomBuildArtifacts(options: {
         } },
       });
       if (!current) continue;
+      await deleteRetiredGalleryArenaArtifacts(build.id, options.deleteArtifact);
       const retainPreview = current.galleryExamples.length > 0;
       const artifacts = await prisma.customBuildArtifact.findMany({
         where: { customBuildId: build.id, ...(retainPreview ? { kind: { not: "preview_svg" as const } } : {}) },

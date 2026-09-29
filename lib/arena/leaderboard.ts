@@ -15,6 +15,7 @@ import { confidenceFromRd, stabilityTier } from "@/lib/arena/rating";
 import {
   getGlobalBradleyTerrySnapshot,
   getLeaderboardDispersionByModelId,
+  queryBuiltPromptCountByModelId,
 } from "@/lib/arena/stats";
 import type { LeaderboardModelBenchmark, LeaderboardResponse } from "@/lib/arena/types";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
@@ -200,7 +201,7 @@ async function queryLeaderboardData(): Promise<LeaderboardResponse> {
   });
   const topBandIds = sortedModels.slice(0, CONTENDER_BAND_SIZE).map((model) => model.id);
 
-  const [baselineRows, pairCoverageByKey, benchmarkBlocksByModelId] = await Promise.all([
+  const [baselineRows, pairCoverageByKey, benchmarkBlocksByModelId, builtPromptCounts] = await Promise.all([
     baselineAnchor
       ? prisma.modelRankSnapshot.findMany({
           where: { capturedAt: baselineAnchor.capturedAt },
@@ -211,6 +212,7 @@ async function queryLeaderboardData(): Promise<LeaderboardResponse> {
       ? getArenaPairCoverageByKey(topBandIds, eligiblePromptIds)
       : Promise.resolve(new Map<string, PairCoverage>()),
     getLeaderboardBenchmarkBlocksByModelId(eligiblePromptIds),
+    queryBuiltPromptCountByModelId(eligiblePromptIds),
   ]);
   const baselineRanksByModelId = new Map(
     baselineRows.map((row) => [row.modelId, row.rank]),
@@ -306,7 +308,7 @@ async function queryLeaderboardData(): Promise<LeaderboardResponse> {
         sampledVotes: dispersion.sampledVotes,
         benchmark: createLeaderboardBenchmark(
           model.key,
-          eligiblePromptCount,
+          builtPromptCounts.get(model.id) ?? 0,
           benchmarkBlocksByModelId.get(model.id),
         ),
       };

@@ -5,12 +5,11 @@ import { customBuildJsonNumber, customBuildStorageBigInt } from "@/lib/custom-bu
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
 import { voxelWorldPartSourceSha256 } from "@/lib/custom-builds/worldArtifacts";
-import { deleteArenaBuildArtifacts } from "@/lib/arena/artifactOwnership";
 import { invalidateArenaBuildMeta } from "@/lib/arena/buildMetaCache";
 import { invalidateArenaCoverageCache } from "@/lib/arena/coverage";
 import { invalidateArenaStatsCache } from "@/lib/arena/stats";
 import { arenaCohortBuildWhere } from "@/lib/arena/eligibility";
-import { isCommunityArenaPrompt, queueGalleryArenaImports } from "@/lib/gallery/arenaImport";
+import { deleteRetiredGalleryArenaArtifacts, isCommunityArenaPrompt, queueGalleryArenaImports } from "@/lib/gallery/arenaImport";
 import {
   sendGalleryAccountNotification,
   sendGalleryAdminNotification,
@@ -1482,7 +1481,7 @@ export async function hideGalleryExample(
       where: { voxelStoragePath: { startsWith: "gallery/", endsWith: `-${example.customBuildId}-g256-simple-precise.json.gz` } },
       select: { id: true, voxelSha256: true, voxelStorageBucket: true, voxelStoragePath: true },
     });
-    await tx.build.updateMany({ where: { id: { in: builds.map(({ id }) => id) } }, data: { active: false } });
+    await tx.build.updateMany({ where: { id: { in: builds.map(({ id }) => id) } }, data: { active: false, arenaImportPending: false } });
     await tx.galleryModerationRecord.create({
       data: {
         kind: "ADMIN_ACTION",
@@ -1502,16 +1501,7 @@ export async function hideGalleryExample(
   invalidateArenaCoverageCache();
   invalidateArenaStatsCache();
   try {
-    await deleteArenaBuildArtifacts({
-      retiringBuilds: importedBuilds,
-      survivingChecksums: new Set(),
-      deleteStorage: async (refs) => { for (const ref of refs) await deleteArtifact(ref); },
-    });
-    for (const build of importedBuilds) {
-      if (build.voxelStorageBucket && build.voxelStoragePath) {
-        await deleteArtifact({ bucket: build.voxelStorageBucket, path: build.voxelStoragePath });
-      }
-    }
+    await deleteRetiredGalleryArenaArtifacts(example.customBuildId, deleteArtifact);
     for (const artifact of example.customBuild.artifacts) {
       await deleteArtifact({ bucket: artifact.bucket, path: artifact.path });
     }
@@ -1535,7 +1525,7 @@ export async function hideGalleryExample(
   } catch (error) {
     await prisma.customBuild.update({
       where: { id: example.customBuildId },
-      data: { deletionError: redactSensitiveText(error).slice(0, 500) },
+      data: { deletionPendingAt: now, deletionError: redactSensitiveText(error).slice(0, 500) },
     });
   }
   return { hidden: true };

@@ -939,7 +939,7 @@ export async function getGlobalBradleyTerrySnapshot(): Promise<PromptSignalSnaps
 }
 
 // coverage counts only the prompts a model was actually given
-async function queryBuiltPromptCountByModelId(
+export async function queryBuiltPromptCountByModelId(
   eligiblePromptIds: string[],
   modelId?: string,
 ): Promise<Map<string, number>> {

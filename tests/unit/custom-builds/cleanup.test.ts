@@ -8,6 +8,7 @@ let eligible = true;
 const updates: Array<Record<string, unknown>> = [];
 let findPending = async () => [{ id: "removed-build", galleryExamples: [] }];
 const prisma = {
+  build: { findMany: async () => [] },
   customBuild: {
     findMany: async ({ take, select }: { take: number; select: Record<string, unknown> }) => {
       assert.equal(take, 100);

@@ -474,6 +474,7 @@ model Prompt {
 }
 
 model Build {
+  arenaImportPending Boolean @default(false)
   active    Boolean  @default(true)
   id        String   @id @default(cuid())
   createdAt DateTime @default(now())

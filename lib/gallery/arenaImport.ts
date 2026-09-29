@@ -1,6 +1,9 @@
 import type { Prisma } from "@prisma/client";
+import { deleteArenaBuildArtifacts } from "@/lib/arena/artifactOwnership";
 import { ARENA_BUILD_GRID_SIZE, ARENA_BUILD_MODE, ARENA_BUILD_PALETTE } from "@/lib/arena/eligibility";
 import { BENCHMARK_PROMPT_MAP } from "@/lib/benchmark/prompts";
+import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
+import { prisma } from "@/lib/prisma";
 
 const BENCHMARK_PROMPTS = new Set(Object.values(BENCHMARK_PROMPT_MAP));
 
@@ -17,6 +20,31 @@ export function pickArenaImportSources<T extends { customBuild: { modelKey: stri
     seen.add(modelKey);
     return true;
   });
+}
+
+export async function deleteRetiredGalleryArenaArtifacts(
+  customBuildId: string,
+  deleteArtifact: typeof deleteCustomBuildArtifact = deleteCustomBuildArtifact,
+): Promise<void> {
+  const builds = await prisma.build.findMany({
+    where: {
+      active: false,
+      arenaImportPending: false,
+      voxelStoragePath: { startsWith: "gallery/", endsWith: `-${customBuildId}-g256-simple-precise.json.gz` },
+    },
+    select: { id: true, voxelSha256: true, voxelStorageBucket: true, voxelStoragePath: true },
+  });
+  if (!builds.length) return;
+  await deleteArenaBuildArtifacts({
+    retiringBuilds: builds,
+    survivingChecksums: new Set(),
+    deleteStorage: async (refs) => { for (const ref of refs) await deleteArtifact(ref); },
+  });
+  for (const build of builds) {
+    if (build.voxelStorageBucket && build.voxelStoragePath) {
+      await deleteArtifact({ bucket: build.voxelStorageBucket, path: build.voxelStoragePath });
+    }
+  }
 }
 
 export async function queueGalleryArenaImports(

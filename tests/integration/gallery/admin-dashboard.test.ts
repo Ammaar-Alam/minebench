@@ -338,6 +338,7 @@ async function main() {
     const { getArenaEligiblePromptIds } = await import("../../../lib/arena/eligibility");
     const { getArenaBuildMeta } = await import("../../../lib/arena/buildMetaCache");
     const { uploadArenaBuildArtifact } = await import("../../../lib/arena/artifactOwnership");
+    const { purgePendingCustomBuildArtifacts } = await import("../../../lib/custom-builds/cleanup");
     await db.customBuild.update({ where: { id: completed.id }, data: {
       gridSize: 256, mode: "precise", modelKey: modelAKey,
     } });
@@ -365,12 +366,30 @@ async function main() {
     assert.ok((await getArenaEligiblePromptIds()).includes(prompt.id));
     assert.ok(await getArenaBuildMeta(buildA.id, "f".repeat(64)));
     const deleted: string[] = [];
-    await hideGalleryExample(adminId, example.id, async ({ path }) => { deleted.push(path); });
+    await hideGalleryExample(adminId, example.id, async ({ path }) => {
+      if (path.endsWith(".mbv4")) throw new Error("derived storage unavailable");
+      deleted.push(path);
+    });
     assert.equal((await db.build.findUniqueOrThrow({ where: { id: buildA.id } })).active, false);
+    assert.equal((await db.build.findUniqueOrThrow({ where: { id: buildA.id } })).arenaImportPending, false);
     assert.equal((await db.build.findUniqueOrThrow({ where: { id: buildB.id } })).active, true);
     assert.equal((await getArenaEligiblePromptIds()).includes(prompt.id), false);
     assert.equal(await getArenaBuildMeta(buildA.id, "f".repeat(64)), null);
     assert.equal(await db.vote.count({ where: { matchupId: matchup.id } }), 1, "moderation preserves vote history");
+    assert.match((await db.customBuild.findUniqueOrThrow({ where: { id: completed.id } })).deletionError ?? "", /derived storage unavailable/);
+    assert.equal((await purgePendingCustomBuildArtifacts({ deleteArtifact: async ({ path }) => {
+      if (path === copiedPath) throw new Error("raw storage unavailable");
+      deleted.push(path);
+    } })).objectDeletionFailures, 1);
+    const pending = await db.customBuild.findUniqueOrThrow({ where: { id: completed.id } });
+    assert.ok(pending.deletionPendingAt, "failed Arena copy deletion must remain pending");
+    assert.match(pending.deletionError ?? "", /raw storage unavailable/);
+    assert.equal((await purgePendingCustomBuildArtifacts({ deleteArtifact: async ({ path }) => {
+      deleted.push(path);
+    } })).objectDeletionFailures, 0);
+    const cleaned = await db.customBuild.findUniqueOrThrow({ where: { id: completed.id } });
+    assert.equal(cleaned.deletionPendingAt, null);
+    assert.equal(cleaned.deletionError, null);
     assert.ok(deleted.includes(copiedPath));
     assert.ok(deleted.some((path) => path.includes(buildA.id) && path.endsWith(".mbv4")));
     const latePath = `late/${buildA.id}.mbv4`;

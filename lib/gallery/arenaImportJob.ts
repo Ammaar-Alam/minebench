@@ -1,9 +1,10 @@
 import { Prisma, type CustomBuildJob } from "@prisma/client";
-import { deleteArenaBuildArtifacts } from "@/lib/arena/artifactOwnership";
+import { invalidateArenaBuildMeta } from "@/lib/arena/buildMetaCache";
+import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
+import { deleteRetiredGalleryArenaArtifacts } from "@/lib/gallery/arenaImport";
 import { maybePrecomputeArenaArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
 import { ARENA_BUILD_GRID_SIZE, ARENA_BUILD_MODE, ARENA_BUILD_PALETTE } from "@/lib/arena/eligibility";
 import { prisma } from "@/lib/prisma";
-import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
 import { copySupabaseStorageObject } from "@/lib/storage/buildPayload";
 import { getBuildStorageBucketFromEnv } from "@/lib/storage/config";
 
@@ -58,17 +59,17 @@ export async function runGalleryArenaImportJob(
   const path = `gallery/${promptId}/${source.modelKey}-${job.customBuildId}-g256-simple-precise.json.gz`;
   const existing = await prisma.build.findFirst({ where: buildKey });
   // never replace a build this import did not create, retries resume their own
-  if (existing && !existing.active) return;
+  if (existing && !existing.active && !existing.arenaImportPending) return;
+  let preparedBuildId: string | undefined;
   if (!existing || existing.voxelStoragePath === path) {
     let build = existing;
     if (!build) {
       if (!artifact || source.removedAt) return;
-      await copySupabaseStorageObject({ from: artifact, to: { bucket, path } });
       build = await prisma.$transaction(async (tx) => {
         // serialize build creation with source moderation
         await tx.$queryRaw`SELECT id FROM "CustomBuild" WHERE id = ${job.customBuildId} FOR UPDATE`;
         const current = await tx.build.findFirst({ where: buildKey });
-        if (current) return current.active && current.voxelStoragePath === path ? current : null;
+        if (current) return (current.active || current.arenaImportPending) && current.voxelStoragePath === path ? current : null;
         const eligible = await tx.galleryExample.findFirst({
           where: { customBuildId: job.customBuildId, candidateId: selected.id, removedAt: null, adminHiddenAt: null, customBuild: { removedAt: null } },
           select: { id: true },
@@ -77,6 +78,8 @@ export async function runGalleryArenaImportJob(
         return tx.build.create({
           data: {
             ...buildKey,
+            active: false,
+            arenaImportPending: true,
             voxelData: Prisma.DbNull,
             voxelStorageBucket: bucket,
             voxelStoragePath: path,
@@ -89,31 +92,47 @@ export async function runGalleryArenaImportJob(
           },
         });
       });
-      if (!build) {
-        await deleteCustomBuildArtifact({ bucket, path });
-        return;
-      }
+      if (!build) return;
     }
     try {
+      if (build.arenaImportPending && artifact && !source.removedAt) {
+        await copySupabaseStorageObject({ from: artifact, to: { bucket: build.voxelStorageBucket ?? bucket, path } });
+      }
       await opts.beforeArtifactPreparation();
       await maybePrecomputeArenaArtifactsForBuild(build);
+      preparedBuildId = build.id;
     } finally {
-      if (!await prisma.build.findFirst({ where: { id: build.id, active: true }, select: { id: true } })) {
-        await deleteArenaBuildArtifacts({
-          retiringBuilds: [build], survivingChecksums: new Set(),
-          deleteStorage: async (refs) => { for (const ref of refs) await deleteCustomBuildArtifact(ref); },
-        });
-        await deleteCustomBuildArtifact({ bucket: build.voxelStorageBucket ?? bucket, path });
+      if (!await prisma.build.findFirst({ where: { id: build.id, OR: [{ active: true }, { arenaImportPending: true }] }, select: { id: true } })) {
+        try {
+          await deleteRetiredGalleryArenaArtifacts(job.customBuildId);
+        } catch (error) {
+          await prisma.customBuild.update({
+            where: { id: job.customBuildId },
+            data: { deletionPendingAt: new Date(), deletionError: redactSensitiveText(error).slice(0, 500) },
+          });
+          throw error;
+        }
       }
     }
   }
-  // one conditional write so a hide or unselect during the import wins
-  // a prompt still needs two builds before sampling picks it up
-  await prisma.prompt.updateMany({
-    where: {
-      id: promptId,
-      selectedGalleryCandidate: { is: { selectedAt: { not: null }, removedAt: null, adminHiddenAt: null } },
-    },
-    data: { active: true },
+  const published = await prisma.$transaction(async (tx) => {
+    // moderation and publication take the candidate lock in the same order
+    await tx.$queryRaw`SELECT id FROM "GalleryCandidate" WHERE id = ${selected.id} FOR UPDATE`;
+    const eligible = await tx.galleryCandidate.findFirst({
+      where: { id: selected.id, officialPromptId: promptId, selectedAt: { not: null }, removedAt: null, adminHiddenAt: null },
+      select: { id: true },
+    });
+    if (!eligible) return;
+    if (preparedBuildId) {
+      await tx.$queryRaw`SELECT id FROM "CustomBuild" WHERE id = ${job.customBuildId} FOR UPDATE`;
+      const published = await tx.build.updateMany({
+        where: { id: preparedBuildId, OR: [{ active: true }, { arenaImportPending: true }] },
+        data: { active: true, arenaImportPending: false },
+      });
+      if (published.count === 0) return;
+    }
+    await tx.prompt.update({ where: { id: promptId }, data: { active: true } });
+    return true;
   });
+  if (published && preparedBuildId) invalidateArenaBuildMeta(preparedBuildId);
 }
