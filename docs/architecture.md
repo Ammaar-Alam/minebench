@@ -95,7 +95,10 @@ retain image previews through `previewUrl`. Binary-only viewer and thumbnail URL
 are omitted for spatial worlds.
 
 Large worlds retain compact canonical source and prepare exact surface meshes once.
-Viewers reuse stored mesh parts without invoking the generation worker. Rendering
+Viewers reuse stored mesh parts without invoking the generation worker. Part URLs
+carry the part checksum from the manifest; the server serves a matching checksum
+as immutable and rejects a stale one, so reopening a world or entering Explore
+reads parts from the browser cache instead of downloading them again. Rendering
 still retains the complete surface geometry; fog reduces drawing work, not memory
 residency. World extent alone does not predict processing cost or frame rate.
 

@@ -6,9 +6,9 @@ import {
   adjustExplorerNoclipSpeedMultiplier,
   createExplorerCollisionWorld,
   moveExplorerPlayerAxis,
-  readVoxelWorldPartBytes,
   setExplorerMoveDirection,
 } from "@/lib/voxel/explorerCollision";
+import { readVoxelWorldPartBytes } from "@/lib/voxel/world";
 import { encodeBinaryVoxelBuild } from "@/lib/voxel/binaryBuild";
 import {
   packVoxelBlocks,

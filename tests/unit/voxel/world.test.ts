@@ -123,9 +123,9 @@ const inlineManifest = {
   assert.equal(
     voxelWorldPartUrl(
       { manifest, partBaseUrl: "/api/generations/gen_123/artifacts/viewer" },
-      "mixed-0-data",
+      { key: "mixed-0-data", sha256: SHA.toUpperCase() },
     ),
-    "/api/generations/gen_123/artifacts/viewer?part=mixed-0-data",
+    `/api/generations/gen_123/artifacts/viewer?part=mixed-0-data&v=${SHA.toLowerCase()}`,
   );
 }
 

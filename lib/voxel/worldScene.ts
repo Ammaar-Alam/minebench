@@ -20,10 +20,9 @@ import { WORLD_QUAD_TINT_GRASS, WORLD_QUAD_TINT_LEAVES, WORLD_QUAD_TINT_WATER, W
 import {
   parseVoxelWorldManifest,
   parseVoxelWorldRegionPage,
-  voxelWorldPartUrl,
+  readVoxelWorldPartBytes,
   type VoxelWorldBounds,
   type VoxelWorldDelivery,
-  type VoxelWorldPartRef,
   type VoxelWorldRegion,
   type VoxelWorldUniformRegion,
 } from "@/lib/voxel/world";
@@ -350,41 +349,19 @@ function buildUniformGroup(
   return group.children.length > 0 ? group : null;
 }
 
-async function inflatePart(bytes: Uint8Array): Promise<Uint8Array> {
-  if (typeof DecompressionStream !== "function") {
-    throw new Error("Compressed world parts are not supported by this browser.");
-  }
-  const body = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-  const stream = new Blob([body])
-    .stream()
-    .pipeThrough(new DecompressionStream("gzip") as unknown as TransformStream<Uint8Array, Uint8Array>);
-  return new Uint8Array(await new Response(stream).arrayBuffer());
-}
-
-function hasGzipMagic(bytes: Uint8Array): boolean {
-  return bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
-}
-
-async function readPartBytes(
-  delivery: VoxelWorldDelivery,
-  ref: VoxelWorldPartRef,
-  signal?: AbortSignal,
-): Promise<Uint8Array> {
-  let encoded: Uint8Array;
-  if (delivery.resolvePart) {
-    encoded = await delivery.resolvePart(ref.key, signal);
-  } else {
-    if (ref.kind !== "opaque") throw new Error("Voxel world part is not available to this client.");
-    if (typeof window === "undefined") throw new Error("Voxel world part fetch requires a browser.");
-    const url = new URL(voxelWorldPartUrl(delivery, ref.key), window.location.href);
-    if (url.origin !== window.location.origin) {
-      throw new Error("Voxel world part URL must be same-origin.");
+// keeps every slot busy instead of waiting for the slowest part of each wave
+async function forEachConcurrent<T>(
+  items: readonly T[],
+  limit: number,
+  run: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      await run(items[index]!, index);
     }
-    const response = await fetch(url, { credentials: "same-origin", signal });
-    if (!response.ok) throw new Error(`World part request failed (${response.status})`);
-    encoded = new Uint8Array(await response.arrayBuffer());
-  }
-  return ref.encoding === "gzip" && hasGzipMagic(encoded) ? inflatePart(encoded) : encoded;
+  }));
 }
 
 function parseJsonBytes(bytes: Uint8Array, label: string): unknown {
@@ -456,26 +433,25 @@ export async function createVoxelWorldScene(
     const regions = [...manifest.regions ?? []];
     const regionKeys = new Set(regions.map((region) => region.key));
     const pages = manifest.regionPages ?? [];
-    for (let offset = 0; offset < pages.length; offset += PART_LOAD_CONCURRENCY) {
+    const loadedPages = new Array<VoxelWorldRegion[]>(pages.length);
+    await forEachConcurrent(pages, PART_LOAD_CONCURRENCY, async (page, index) => {
+      const bytes = await readVoxelWorldPartBytes(delivery, page.data, signal);
       signal.throwIfAborted();
-      const loaded = await Promise.all(pages.slice(offset, offset + PART_LOAD_CONCURRENCY).map(async (page) => {
-        const bytes = await readPartBytes(delivery, page.data, signal);
-        signal.throwIfAborted();
-        const parsedPage = parseVoxelWorldRegionPage(parseJsonBytes(bytes, "World region page"), {
-          gridSize: manifest.gridSize,
-          worldBounds: manifest.bounds,
-          pageRef: page,
-          allowLocalBlobRefs: Boolean(delivery.resolvePart),
-        });
-        if (!parsedPage.ok) throw new Error(parsedPage.error);
-        return parsedPage.value;
-      }));
-      for (const page of loaded) {
-        for (const region of page.regions) {
-          if (regionKeys.has(region.key)) throw new Error(`Duplicate world region key: ${region.key}`);
-          regionKeys.add(region.key);
-          regions.push(region);
-        }
+      const parsedPage = parseVoxelWorldRegionPage(parseJsonBytes(bytes, "World region page"), {
+        gridSize: manifest.gridSize,
+        worldBounds: manifest.bounds,
+        pageRef: page,
+        allowLocalBlobRefs: Boolean(delivery.resolvePart),
+      });
+      if (!parsedPage.ok) throw new Error(parsedPage.error);
+      loadedPages[index] = parsedPage.value.regions;
+    });
+    // region order determines batch layout, so pages merge in manifest order
+    for (const pageRegions of loadedPages) {
+      for (const region of pageRegions) {
+        if (regionKeys.has(region.key)) throw new Error(`Duplicate world region key: ${region.key}`);
+        regionKeys.add(region.key);
+        regions.push(region);
       }
     }
 
@@ -508,34 +484,29 @@ export async function createVoxelWorldScene(
         return ref.blockCount !== batch.regions.reduce((sum, region) => sum + region.blockCount, 0) ||
           (["x", "y", "z"] as const).some((axis) => ref.bounds.origin[axis] !== batch.bounds.origin[axis] || ref.bounds.size[axis] !== batch.bounds.size[axis]);
       })) throw new Error("World mesh batches do not match source regions");
-      for (let offset = 0; offset < preparedMesh.batches.length; offset += MESH_LOAD_CONCURRENCY) {
+      await forEachConcurrent(preparedMesh.batches, MESH_LOAD_CONCURRENCY, async (ref) => {
+        const bytes = await readVoxelWorldPartBytes(delivery, ref.data, signal);
         signal.throwIfAborted();
-        await Promise.all(preparedMesh.batches.slice(offset, offset + MESH_LOAD_CONCURRENCY).map(async (ref) => {
-          const bytes = await readPartBytes(delivery, ref.data, signal);
-          signal.throwIfAborted();
-          const payload = decodeWorldMeshPayload(bytes);
-          const anchor = payload.worldQuads!.anchor;
-          if (payload.filteredBlockCount > ref.blockCount || (["x", "y", "z"] as const).some((axis, index) =>
-            payload.bounds.min[index] + anchor[index] < 0 || payload.bounds.max[index] + anchor[index] > ref.bounds.size[axis],
-          )) throw new Error("World mesh payload is outside its source batch");
-          addBatch(createVoxelGroupFromMeshPayload(payload, atlasTexture), ref.bounds.origin,
-            { x: anchor[0], y: anchor[1], z: anchor[2] }, ref.blockCount);
-        }));
-      }
+        const payload = decodeWorldMeshPayload(bytes);
+        const anchor = payload.worldQuads!.anchor;
+        if (payload.filteredBlockCount > ref.blockCount || (["x", "y", "z"] as const).some((axis, index) =>
+          payload.bounds.min[index] + anchor[index] < 0 || payload.bounds.max[index] + anchor[index] > ref.bounds.size[axis],
+        )) throw new Error("World mesh payload is outside its source batch");
+        addBatch(createVoxelGroupFromMeshPayload(payload, atlasTexture), ref.bounds.origin,
+          { x: anchor[0], y: anchor[1], z: anchor[2] }, ref.blockCount);
+      });
     } else for (const batch of batches) {
       signal.throwIfAborted();
       const sourceRegions = [...batch.regions, ...batch.neighbors.filter((region) => region.kind === "mixed")];
       const parts = new Map<string, PackedVoxelBlocks>();
-      for (let offset = 0; offset < sourceRegions.length; offset += PART_LOAD_CONCURRENCY) {
-        await Promise.all(sourceRegions.slice(offset, offset + PART_LOAD_CONCURRENCY).map(async (region) => {
-          const bytes = await readPartBytes(delivery, region.data, signal);
-          signal.throwIfAborted();
-          if (readBinaryVoxelBuildHeader(bytes).blockCount !== region.blockCount) {
-            throw new Error(`Voxel world region ${region.key} block count mismatch`);
-          }
-          parts.set(region.key, decodeBinaryVoxelBuild(bytes));
-        }));
-      }
+      await forEachConcurrent(sourceRegions, PART_LOAD_CONCURRENCY, async (region) => {
+        const bytes = await readVoxelWorldPartBytes(delivery, region.data, signal);
+        signal.throwIfAborted();
+        if (readBinaryVoxelBuildHeader(bytes).blockCount !== region.blockCount) {
+          throw new Error(`Voxel world region ${region.key} block count mismatch`);
+        }
+        parts.set(region.key, decodeBinaryVoxelBuild(bytes));
+      });
       signal.throwIfAborted();
       const { packed, halo } = packWorldMeshBatch(batch, parts);
       parts.clear();

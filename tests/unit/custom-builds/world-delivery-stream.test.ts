@@ -121,6 +121,18 @@ async function checkLargePartIsReturnedAsAStream() {
     const delivered = new Uint8Array(await bodyPromise);
     assert.equal(delivered.byteLength, bytes.byteLength);
     assert.equal(sha256(delivered), sha256(bytes), "streamed world part bytes should be preserved");
+
+    const pinned = (v: string) => customBuildWorldViewerResponse({
+      request: new Request(`http://localhost:3000/api/gallery/examples/cb/viewer?format=world&part=held-large-part&v=${v}`),
+      artifact: artifact("manifest"),
+      buildId: "cb",
+      findPart: async () => artifact("held-large-part"),
+      cacheControl: "public, max-age=300",
+    });
+    const cached = await pinned(PART_SHA.toUpperCase());
+    assert.equal(cached.headers.get("cache-control"), "public, max-age=31536000, s-maxage=3600, immutable");
+    await cached.body?.cancel();
+    assert.equal((await pinned("0".repeat(64))).status, 404);
   });
 }
 
@@ -213,6 +225,12 @@ async function checkPageIdentity() {
       assert.equal(sha256(bytes), ref.sha256, "page checksum must describe the bytes returned to clients");
       assert.equal(ref.encoding, "identity");
       assert.equal(response.headers.get("cache-control"), "private, no-store");
+      assert.equal(
+        (await get(`page-0&v=${ref.sha256}`)).headers.get("cache-control"),
+        "private, max-age=31536000, immutable",
+        "hash-pinned parts are cacheable",
+      );
+      assert.equal((await get(`page-0&v=${"0".repeat(64)}`)).status, 404, "stale hashes never cache other bytes");
       const text = new TextDecoder().decode(bytes);
       assert.equal(text.includes("private/region"), false);
       assert.equal(JSON.parse(text).regions[0].data.kind, "opaque");

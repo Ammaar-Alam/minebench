@@ -2,7 +2,7 @@ import { decodeBinaryVoxelBuild } from "@/lib/voxel/binaryBuild";
 import {
   parseVoxelWorldManifest,
   parseVoxelWorldRegionPage,
-  voxelWorldPartUrl,
+  readVoxelWorldPartBytes,
   type VoxelWorldBounds,
   type VoxelWorldDelivery,
   type VoxelWorldManifest,
@@ -121,42 +121,6 @@ async function yieldToMainThread() {
     return;
   }
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
-}
-
-async function gunzipVoxelWorldPart(bytes: Uint8Array): Promise<Uint8Array> {
-  const DecompressionStreamCtor = (globalThis as typeof globalThis & {
-    DecompressionStream?: typeof DecompressionStream;
-  }).DecompressionStream;
-  if (typeof DecompressionStreamCtor !== "function") {
-    throw new Error("This browser cannot decompress voxel world parts");
-  }
-  const decompressor = new DecompressionStreamCtor("gzip") as unknown as TransformStream<Uint8Array, Uint8Array>;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(bytes);
-      controller.close();
-    },
-  }).pipeThrough(decompressor);
-  return new Uint8Array(await new Response(stream).arrayBuffer());
-}
-
-export async function readVoxelWorldPartBytes(
-  delivery: VoxelWorldDelivery,
-  ref: VoxelWorldPartRef,
-  signal?: AbortSignal,
-): Promise<Uint8Array> {
-  throwIfAborted(signal);
-  const encoded = delivery.resolvePart
-    ? await delivery.resolvePart(ref.key, signal)
-    : await (async () => {
-        const response = await fetch(voxelWorldPartUrl(delivery, ref.key), { signal });
-        if (!response.ok) throw new Error(`Voxel world part ${ref.key} failed to load`);
-        return new Uint8Array(await response.arrayBuffer());
-      })();
-  throwIfAborted(signal);
-  return ref.encoding === "gzip" && encoded[0] === 0x1f && encoded[1] === 0x8b
-    ? gunzipVoxelWorldPart(encoded)
-    : encoded;
 }
 
 function setBit(bits: Uint8Array, index: number) {

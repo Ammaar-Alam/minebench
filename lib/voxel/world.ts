@@ -338,8 +338,43 @@ export function toOpaqueVoxelWorldRegionPage(page: VoxelWorldRegionPage): VoxelW
   return { ...page, bounds: cloneBounds(page.bounds), regions: page.regions.map(toOpaqueRegion) };
 }
 
-export function voxelWorldPartUrl(delivery: VoxelWorldDelivery, key: string): string {
+// the content hash makes each part URL immutable so repeat opens hit the browser cache
+export function voxelWorldPartUrl(delivery: VoxelWorldDelivery, ref: Pick<VoxelWorldPartRef, "key" | "sha256">): string {
   const partBaseUrl = delivery.partBaseUrl?.trim();
   if (!partBaseUrl) throw new Error("Voxel world part base URL is missing");
-  return `${partBaseUrl}${partBaseUrl.includes("?") ? "&" : "?"}part=${encodeURIComponent(keySchema.parse(key))}`;
+  const version = ref.sha256 ? `&v=${sha256Schema.parse(ref.sha256).toLowerCase()}` : "";
+  return `${partBaseUrl}${partBaseUrl.includes("?") ? "&" : "?"}part=${encodeURIComponent(keySchema.parse(ref.key))}${version}`;
+}
+
+async function gunzipVoxelWorldPart(bytes: Uint8Array): Promise<Uint8Array> {
+  if (typeof DecompressionStream !== "function") throw new Error("This browser cannot decompress voxel world parts");
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    },
+  }).pipeThrough(new DecompressionStream("gzip") as unknown as TransformStream<Uint8Array, Uint8Array>);
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+export async function readVoxelWorldPartBytes(
+  delivery: VoxelWorldDelivery,
+  ref: VoxelWorldPartRef,
+  signal?: AbortSignal,
+): Promise<Uint8Array> {
+  signal?.throwIfAborted();
+  let encoded: Uint8Array;
+  if (delivery.resolvePart) {
+    encoded = await delivery.resolvePart(ref.key, signal);
+  } else {
+    if (ref.kind !== "opaque") throw new Error("Voxel world part is not available to this client.");
+    const response = await fetch(voxelWorldPartUrl(delivery, ref), { credentials: "same-origin", signal });
+    if (!response.ok) throw new Error(`Voxel world part ${ref.key} failed to load (${response.status})`);
+    encoded = new Uint8Array(await response.arrayBuffer());
+  }
+  signal?.throwIfAborted();
+  // stored parts may arrive already decoded when the transport applied content encoding
+  return ref.encoding === "gzip" && encoded[0] === 0x1f && encoded[1] === 0x8b
+    ? gunzipVoxelWorldPart(encoded)
+    : encoded;
 }

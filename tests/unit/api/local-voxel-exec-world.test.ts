@@ -34,7 +34,7 @@ async function jsonPost(body: unknown) {
 }
 
 async function getWorldPart(world: VoxelWorldDelivery, key: string) {
-  return GET(new Request(new URL(voxelWorldPartUrl(world, key), "http://localhost:3000")));
+  return GET(new Request(new URL(voxelWorldPartUrl(world, { key }), "http://localhost:3000")));
 }
 
 async function main() {

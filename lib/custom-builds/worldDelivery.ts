@@ -40,7 +40,17 @@ function assertPartKey(value: string | null): string | null {
 function partBaseUrl(request: Request): string {
   const url = new URL(request.url);
   url.searchParams.delete("part");
+  url.searchParams.delete("v");
   return `${url.pathname}${url.search}`;
+}
+
+// a verified content hash in the URL pins the bytes, so the part can be cached indefinitely
+function partCacheControl(cacheControl: string, requestedSha256: string | null, servedSha256: string): string | null {
+  if (!requestedSha256) return cacheControl;
+  if (requestedSha256.toLowerCase() !== servedSha256.toLowerCase()) return null;
+  return cacheControl.startsWith("public")
+    ? "public, max-age=31536000, s-maxage=3600, immutable"
+    : "private, max-age=31536000, immutable";
 }
 
 async function readJsonArtifact(artifact: WorldArtifact): Promise<unknown> {
@@ -92,8 +102,10 @@ export async function customBuildWorldViewerResponse(args: {
   findPart: FindWorldPart;
   cacheControl: string;
 }): Promise<Response> {
-  const parsedPartKey = assertPartKey(new URL(args.request.url).searchParams.get("part"));
+  const searchParams = new URL(args.request.url).searchParams;
+  const parsedPartKey = assertPartKey(searchParams.get("part"));
   if (parsedPartKey === "") return new Response("Artifact not found", { status: 404 });
+  const requestedSha256 = searchParams.get("v");
 
   const readManifest = async () => {
     const manifestResult = parseVoxelWorldManifest(
@@ -136,13 +148,17 @@ export async function customBuildWorldViewerResponse(args: {
       const pageRef = manifest.regionPages?.find((page) => page.data.key === parsedPartKey);
       if (!pageRef) return new Response("Artifact not found", { status: 404 });
       const bytes = await readPageBytes(manifest, pageRef, part);
+      const cacheControl = partCacheControl(args.cacheControl, requestedSha256, sha256Hex(bytes));
+      if (!cacheControl) return new Response("Artifact not found", { status: 404 });
       return new Response(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, {
-        headers: { "Cache-Control": args.cacheControl, "Content-Type": "application/json" },
+        headers: { "Cache-Control": cacheControl, "Content-Type": "application/json" },
       });
     }
+    const cacheControl = partCacheControl(args.cacheControl, requestedSha256, part.sha256);
+    if (!cacheControl) return new Response("Artifact not found", { status: 404 });
     return new Response(streamedBytes(part, args.request.signal), {
       headers: {
-        "Cache-Control": args.cacheControl,
+        "Cache-Control": cacheControl,
         "Content-Type": part.contentType,
       },
     });
