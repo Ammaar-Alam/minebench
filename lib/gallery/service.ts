@@ -5,6 +5,10 @@ import { customBuildJsonNumber, customBuildStorageBigInt } from "@/lib/custom-bu
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
 import { voxelWorldPartSourceSha256 } from "@/lib/custom-builds/worldArtifacts";
+import { deleteArenaBuildArtifacts } from "@/lib/arena/artifactOwnership";
+import { invalidateArenaBuildMeta } from "@/lib/arena/buildMetaCache";
+import { invalidateArenaCoverageCache } from "@/lib/arena/coverage";
+import { invalidateArenaStatsCache } from "@/lib/arena/stats";
 import { arenaCohortBuildWhere } from "@/lib/arena/eligibility";
 import { isCommunityArenaPrompt, queueGalleryArenaImports } from "@/lib/gallery/arenaImport";
 import {
@@ -1416,6 +1420,7 @@ export async function setGalleryCandidateHidden(
     // hidden community prompts leave the arena until restored
     if (candidate.selectedAt && candidate.officialPromptId && isCommunityArenaPrompt(candidate.promptText)) {
       await tx.prompt.update({ where: { id: candidate.officialPromptId }, data: { active: !hidden } });
+      if (!hidden) await queueGalleryArenaImports(tx, candidate.id, candidate.officialPromptId);
     }
     await tx.galleryModerationRecord.create({
       data: {
@@ -1464,16 +1469,21 @@ export async function hideGalleryExample(
   if (!example) throw new GalleryServiceError("not_found", "Gallery example not found.");
   const now = new Date();
   const purgeAt = new Date(now.getTime() + RETENTION_MS);
-  await prisma.$transaction([
-    prisma.galleryExample.update({
-      where: { id: example.id },
-      data: { adminHiddenAt: now, purgeAt, previewRetained: true },
-    }),
-    prisma.customBuild.update({
+  const importedBuilds = await prisma.$transaction(async (tx) => {
+    await tx.customBuild.update({
       where: { id: example.customBuildId },
       data: { removedAt: now, purgeAt, deletionPendingAt: now },
-    }),
-    prisma.galleryModerationRecord.create({
+    });
+    await tx.galleryExample.update({
+      where: { id: example.id },
+      data: { adminHiddenAt: now, purgeAt, previewRetained: true },
+    });
+    const builds = await tx.build.findMany({
+      where: { voxelStoragePath: { startsWith: "gallery/", endsWith: `-${example.customBuildId}-g256-simple-precise.json.gz` } },
+      select: { id: true, voxelSha256: true, voxelStorageBucket: true, voxelStoragePath: true },
+    });
+    await tx.build.updateMany({ where: { id: { in: builds.map(({ id }) => id) } }, data: { active: false } });
+    await tx.galleryModerationRecord.create({
       data: {
         kind: "ADMIN_ACTION",
         target: "EXAMPLE",
@@ -1485,9 +1495,23 @@ export async function hideGalleryExample(
         safeSnapshot: { prompt: example.candidate.promptText },
         purgeAt,
       },
-    }),
-  ]);
+    });
+    return builds;
+  });
+  for (const build of importedBuilds) invalidateArenaBuildMeta(build.id);
+  invalidateArenaCoverageCache();
+  invalidateArenaStatsCache();
   try {
+    await deleteArenaBuildArtifacts({
+      retiringBuilds: importedBuilds,
+      survivingChecksums: new Set(),
+      deleteStorage: async (refs) => { for (const ref of refs) await deleteArtifact(ref); },
+    });
+    for (const build of importedBuilds) {
+      if (build.voxelStorageBucket && build.voxelStoragePath) {
+        await deleteArtifact({ bucket: build.voxelStorageBucket, path: build.voxelStoragePath });
+      }
+    }
     for (const artifact of example.customBuild.artifacts) {
       await deleteArtifact({ bucket: artifact.bucket, path: artifact.path });
     }

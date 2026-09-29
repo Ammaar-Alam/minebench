@@ -1219,6 +1219,7 @@ async function queryModelDetailStats(modelKeyOrSlug: string): Promise<ModelDetai
     `,
     prisma.build.findMany({
       where: {
+        active: true,
         modelId: model.id,
         gridSize: ARENA_BUILD_GRID_SIZE,
         palette: ARENA_BUILD_PALETTE,

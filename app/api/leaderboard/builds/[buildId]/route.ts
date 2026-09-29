@@ -23,7 +23,7 @@ export async function GET(
   const { buildId } = await params;
 
   const build = await prisma.build.findUnique({
-    where: { id: buildId },
+    where: { id: buildId, active: true },
     select: {
       id: true,
       voxelData: true,

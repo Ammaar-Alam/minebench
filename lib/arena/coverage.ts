@@ -384,6 +384,7 @@ async function queryArenaMatchupSamplingState(): Promise<ArenaMatchupSamplingRes
   const eligibilityStartedAt = startedAt;
   const rows = await prisma.build.findMany({
     where: {
+      active: true,
       gridSize: ARENA_GRID_SIZE,
       palette: ARENA_PALETTE,
       mode: ARENA_MODE,

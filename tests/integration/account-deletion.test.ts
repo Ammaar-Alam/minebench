@@ -202,7 +202,13 @@ async function main() {
             expiresAt: new Date(now.getTime() + 60_000),
           },
         },
-        jobs: { create: { type: "generate", status: "succeeded", completedAt: now } },
+        jobs: {
+          create: [
+            { type: "generate", status: "succeeded", completedAt: now },
+            { type: "arena_import", status: "queued", payload: { promptId } },
+            { type: "arena_import", status: "running", payload: { promptId }, lockedBy: "worker" },
+          ],
+        },
         events: { create: { seq: 1, type: "succeeded" } },
       },
     });
@@ -371,7 +377,11 @@ async function main() {
     assert.equal(retained.requestedIpHash, null);
     assert.equal(retained.requestedUserAgentHash, null);
     assert.equal(retained.artifacts.length, 1);
-    assert.equal(retained.jobs.length, 0);
+    assert.equal(retained.jobs.length, 2);
+    assert.ok(retained.jobs.every((job) => job.type === "arena_import"));
+    assert.deepEqual(retained.jobs.map((job) => job.status).sort(), ["queued", "running"]);
+    for (const job of retained.jobs) assert.deepEqual(job.payload, { promptId });
+    assert.equal(retained.jobs.find((job) => job.status === "running")?.lockedBy, "worker");
     assert.equal(retained.events.length, 0);
     assert.equal(retained.secret, null);
 

@@ -190,11 +190,13 @@ export async function POST(req: Request) {
       CROSS JOIN "Build" AS build_b
       INNER JOIN "Model" AS model_b ON model_b."id" = build_b."modelId"
       WHERE build_a."id" = ${tokenMatchup.buildAId}
+        AND build_a.active = true
         AND build_a."promptId" = ${tokenMatchup.promptId}
         AND build_a."modelId" = ${tokenMatchup.modelAId}
         AND BTRIM(build_a."voxelSha256") = ${tokenMatchup.buildAChecksum}
         AND model_a."enabled" = true
         AND build_b."id" = ${tokenMatchup.buildBId}
+        AND build_b.active = true
         AND build_b."promptId" = ${tokenMatchup.promptId}
         AND build_b."modelId" = ${tokenMatchup.modelBId}
         AND BTRIM(build_b."voxelSha256") = ${tokenMatchup.buildBChecksum}

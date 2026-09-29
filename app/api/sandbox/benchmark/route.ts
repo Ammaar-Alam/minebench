@@ -106,6 +106,7 @@ export async function GET(req: Request) {
     const grouped = await prisma.build.groupBy({
       by: ["promptId", "modelId"],
       where: {
+        active: true,
         gridSize: ARENA_GRID_SIZE,
         palette: ARENA_PALETTE,
         mode: ARENA_MODE,
@@ -158,6 +159,7 @@ export async function GET(req: Request) {
         stealthVariant: null,
         builds: {
           some: {
+            active: true,
             promptId: { in: eligiblePromptIds },
             gridSize: ARENA_GRID_SIZE,
             palette: ARENA_PALETTE,
@@ -183,8 +185,9 @@ export async function GET(req: Request) {
     }));
 
     // default pair follows the latest hourly leaderboard ranking
+    const hasRequestedModels = SANDBOX_COMPARISON_SLOTS.some((slot) => requestedModels[slot]);
     const leaderboardRank = new Map<string, number>();
-    if (!SANDBOX_COMPARISON_SLOTS.some((slot) => requestedModels[slot])) {
+    if (!hasRequestedModels) {
       const latest = await prisma.modelRankSnapshot.findFirst({
         orderBy: { capturedAt: "desc" },
         select: { capturedAt: true },
@@ -198,8 +201,13 @@ export async function GET(req: Request) {
       }
     }
     const unranked = Number.MAX_SAFE_INTEGER;
+    const defaultPromptModelIds =
+      !hasRequestedModels && requestedPromptId && promptOptions.some((p) => p.id === requestedPromptId)
+        ? modelIdsByPromptId.get(requestedPromptId)
+        : undefined;
     const selection = normalizeSandboxComparisonSelection(
-      models
+      modelRows
+        .filter((model) => !defaultPromptModelIds || defaultPromptModelIds.has(model.id))
         .map((model) => model.key)
         .sort((a, b) => (leaderboardRank.get(a) ?? unranked) - (leaderboardRank.get(b) ?? unranked)),
       requestedModels,
@@ -237,6 +245,7 @@ export async function GET(req: Request) {
     });
     const selectedBuildRows = await prisma.build.findMany({
       where: {
+        active: true,
         promptId: selectedPrompt.id,
         gridSize: ARENA_GRID_SIZE,
         palette: ARENA_PALETTE,
@@ -298,7 +307,7 @@ export async function GET(req: Request) {
           return shouldPrepare[slot] && build ? [build.id] : [];
         });
         const buildsForPrepare = await prisma.build.findMany({
-          where: { id: { in: prepareBuildIds } },
+          where: { id: { in: prepareBuildIds }, active: true },
           select: {
             id: true,
             gridSize: true,

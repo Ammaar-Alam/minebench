@@ -193,7 +193,7 @@ export async function deleteMineBenchAccount(
 
     if (retainedBuildIds.length > 0) {
       await tx.customBuildJob.deleteMany({
-        where: { customBuildId: { in: retainedBuildIds } },
+        where: { customBuildId: { in: retainedBuildIds }, type: { not: "arena_import" } },
       });
       await tx.customBuildEvent.deleteMany({
         where: { customBuildId: { in: retainedBuildIds } },

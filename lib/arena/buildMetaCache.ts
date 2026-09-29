@@ -119,7 +119,7 @@ export async function getArenaBuildMeta(
   const startGen = getGeneration(buildId);
   const promise = (async () => {
     const build = await prisma.build.findUnique({
-      where: { id: buildId },
+      where: { id: buildId, active: true },
       select: {
         id: true,
         gridSize: true,

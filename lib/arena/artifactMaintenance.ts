@@ -61,7 +61,7 @@ export async function maybePrecomputeArenaArtifactsForPreparedBuild(
   estimatedBytes: number | null,
 ): Promise<{ streamUploaded: number; snapshotUploaded: boolean; streamSkipped: boolean; reason?: string }> {
   const marked = await prisma.build.updateMany({
-    where: prepared.payloadIdentity,
+    where: { ...prepared.payloadIdentity, active: true },
     data: getPreparedArenaBuildCoreMetadataUpdate(prepared),
   });
   if (marked.count === 0) {

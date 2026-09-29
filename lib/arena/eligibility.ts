@@ -7,6 +7,7 @@ export const ARENA_BUILD_MODE = "precise";
 function benchmarkBuildWhere(modelKeys: readonly string[] | undefined, publicOnly: boolean) {
   const scoped = Boolean(modelKeys && modelKeys.length > 0);
   return {
+    active: true,
     gridSize: ARENA_BUILD_GRID_SIZE,
     palette: ARENA_BUILD_PALETTE,
     mode: ARENA_BUILD_MODE,
@@ -40,7 +41,8 @@ export async function getArenaEligiblePromptIds(): Promise<string[]> {
     FROM "Build" build
     INNER JOIN "Model" model ON model.id = build."modelId"
     INNER JOIN "Prompt" prompt ON prompt.id = build."promptId"
-    WHERE build."gridSize" = ${ARENA_BUILD_GRID_SIZE}
+    WHERE build.active = true
+      AND build."gridSize" = ${ARENA_BUILD_GRID_SIZE}
       AND build."palette" = ${ARENA_BUILD_PALETTE}
       AND build."mode" = ${ARENA_BUILD_MODE}
       AND model.enabled = true
