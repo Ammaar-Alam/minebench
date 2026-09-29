@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Leaderboard } from "@/components/leaderboard/Leaderboard";
-import { LeaderboardPageShell } from "@/components/leaderboard/LeaderboardPageShell";
 import { breadcrumbJsonLd, DEFAULT_OG_IMAGE, leaderboardItemListJsonLd } from "@/lib/seo";
 import { getLeaderboardItemListRankings } from "@/lib/arena/stats";
 import { getLeaderboardData } from "@/lib/arena/leaderboard";
@@ -61,7 +60,7 @@ export default async function LeaderboardPage() {
   const itemListData = rankings.length > 0 ? leaderboardItemListJsonLd(rankings) : null;
 
   return (
-    <LeaderboardPageShell>
+    <>
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbData) }}
@@ -73,9 +72,9 @@ export default async function LeaderboardPage() {
         />
       )}
       <h1 className="sr-only">MineBench AI benchmark leaderboard</h1>
-      <div className="h-full min-h-0">
+      <div className="mb-page-fixed h-full min-h-0">
         <Leaderboard initialData={initialData} />
       </div>
-    </LeaderboardPageShell>
+    </>
   );
 }

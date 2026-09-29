@@ -27,6 +27,7 @@ import {
   ARENA_BUILD_GRID_SIZE,
   ARENA_BUILD_MODE,
   ARENA_BUILD_PALETTE,
+  arenaCohortBuildWhere,
   getArenaEligiblePromptIds,
 } from "@/lib/arena/eligibility";
 
@@ -937,6 +938,19 @@ export async function getGlobalBradleyTerrySnapshot(): Promise<PromptSignalSnaps
   return getPromptSignalSnapshot();
 }
 
+// coverage counts only the prompts a model was actually given
+export async function queryBuiltPromptCountByModelId(
+  eligiblePromptIds: string[],
+  modelId?: string,
+): Promise<Map<string, number>> {
+  const rows = await prisma.build.groupBy({
+    by: ["modelId"],
+    where: { ...arenaCohortBuildWhere(), promptId: { in: eligiblePromptIds }, ...(modelId ? { modelId } : {}) },
+    _count: { _all: true },
+  });
+  return new Map(rows.map((row) => [row.modelId, row._count._all]));
+}
+
 async function queryLeaderboardDispersionByModelId(): Promise<Map<string, ScoreDispersion>> {
   const promptSignal = await getPromptSignalSnapshot();
   const activePromptCount = promptSignal.eligiblePromptIds.length;
@@ -1013,8 +1027,9 @@ async function queryLeaderboardDispersionByModelId(): Promise<Map<string, ScoreD
   }
 
   const out = new Map<string, ScoreDispersion>();
+  const builtPromptCounts = await queryBuiltPromptCountByModelId(promptSignal.eligiblePromptIds);
   for (const [modelId, samples] of samplesByModelId) {
-    out.set(modelId, summarizeDispersion(samples, activePromptCount));
+    out.set(modelId, summarizeDispersion(samples, builtPromptCounts.get(modelId) ?? activePromptCount));
   }
 
   return out;
@@ -1204,6 +1219,7 @@ async function queryModelDetailStats(modelKeyOrSlug: string): Promise<ModelDetai
     `,
     prisma.build.findMany({
       where: {
+        active: true,
         modelId: model.id,
         gridSize: ARENA_BUILD_GRID_SIZE,
         palette: ARENA_BUILD_PALETTE,
@@ -1269,7 +1285,8 @@ async function queryModelDetailStats(modelKeyOrSlug: string): Promise<ModelDetai
     });
   }
 
-  const dispersion = summarizeDispersion(promptSamples, activePromptCount);
+  const builtPromptCounts = await queryBuiltPromptCountByModelId(promptSignal.eligiblePromptIds, model.id);
+  const dispersion = summarizeDispersion(promptSamples, builtPromptCounts.get(model.id) ?? activePromptCount);
 
   const buildByPromptId = new Map<
     string,

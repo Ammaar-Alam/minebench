@@ -74,6 +74,7 @@ type BenchmarkResponse = {
   selectedPrompt: {
     id: string;
     text: string;
+    galleryId: string | null;
   } | null;
   models: ModelOption[];
   selectedModels: SandboxComparisonSelection<string | null>;
@@ -105,6 +106,7 @@ export async function GET(req: Request) {
     const grouped = await prisma.build.groupBy({
       by: ["promptId", "modelId"],
       where: {
+        active: true,
         gridSize: ARENA_GRID_SIZE,
         palette: ARENA_PALETTE,
         mode: ARENA_MODE,
@@ -157,6 +159,7 @@ export async function GET(req: Request) {
         stealthVariant: null,
         builds: {
           some: {
+            active: true,
             promptId: { in: eligiblePromptIds },
             gridSize: ARENA_GRID_SIZE,
             palette: ARENA_PALETTE,
@@ -181,8 +184,37 @@ export async function GET(req: Request) {
       eloRating: Number(m.eloRating),
     }));
 
+    // default pair follows the latest hourly leaderboard ranking
+    const hasRequestedModels = SANDBOX_COMPARISON_SLOTS.some((slot) => requestedModels[slot]);
+    const leaderboardRank = new Map<string, number>();
+    if (!hasRequestedModels) {
+      const latest = await prisma.modelRankSnapshot.findFirst({
+        orderBy: { capturedAt: "desc" },
+        select: { capturedAt: true },
+      });
+      if (latest) {
+        const rankRows = await prisma.modelRankSnapshot.findMany({
+          where: { capturedAt: latest.capturedAt },
+          select: { rank: true, model: { select: { key: true } } },
+        });
+        for (const row of rankRows) leaderboardRank.set(row.model.key, row.rank);
+      }
+    }
+    const unranked = Number.MAX_SAFE_INTEGER;
+    const defaultPromptModelIds =
+      !hasRequestedModels && requestedPromptId && promptOptions.some((p) => p.id === requestedPromptId)
+        ? modelIdsByPromptId.get(requestedPromptId)
+        : undefined;
+    const selectionModels = modelRows
+      .filter((model) => !defaultPromptModelIds || defaultPromptModelIds.has(model.id))
+      .sort((a, b) => (leaderboardRank.get(a.key) ?? unranked) - (leaderboardRank.get(b.key) ?? unranked));
     const selection = normalizeSandboxComparisonSelection(
-      models.map((model) => model.key),
+      selectionModels
+        .filter((model) => hasRequestedModels || promptOptions.some((p) => {
+          const ids = modelIdsByPromptId.get(p.id);
+          return ids?.has(selectionModels[0].id) && ids.has(model.id);
+        }))
+        .map((model) => model.key),
       requestedModels,
     );
     const modelIdByKey = new Map(modelRows.map((m) => [m.key, m.id]));
@@ -212,8 +244,13 @@ export async function GET(req: Request) {
       const modelKey = selection[slot];
       return modelKey ? [modelKey] : [];
     });
+    const galleryCandidate = await prisma.galleryCandidate.findFirst({
+      where: { officialPromptId: selectedPrompt.id, selectedAt: { not: null }, removedAt: null, adminHiddenAt: null },
+      select: { publicId: true },
+    });
     const selectedBuildRows = await prisma.build.findMany({
       where: {
+        active: true,
         promptId: selectedPrompt.id,
         gridSize: ARENA_GRID_SIZE,
         palette: ARENA_PALETTE,
@@ -275,7 +312,7 @@ export async function GET(req: Request) {
           return shouldPrepare[slot] && build ? [build.id] : [];
         });
         const buildsForPrepare = await prisma.build.findMany({
-          where: { id: { in: prepareBuildIds } },
+          where: { id: { in: prepareBuildIds }, active: true },
           select: {
             id: true,
             gridSize: true,
@@ -379,6 +416,7 @@ export async function GET(req: Request) {
       selectedPrompt: {
         id: selectedPrompt.id,
         text: selectedPrompt.text,
+        galleryId: galleryCandidate?.publicId ?? null,
       },
       models,
       selectedModels: selection,

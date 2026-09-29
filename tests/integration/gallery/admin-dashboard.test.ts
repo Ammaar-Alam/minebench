@@ -28,6 +28,7 @@ async function main() {
     getGalleryAdminDashboard,
     getGalleryAdminPerson,
     GalleryServiceError,
+    hideGalleryExample,
     setGalleryCandidateHidden,
     setGalleryPersonVoteBlocked,
     setGalleryPublishingSuspension,
@@ -333,6 +334,69 @@ async function main() {
     assert.ok(dashboard.onlinePeopleCount > dashboard.people.filter((person) => person.online).length);
     assert.equal(dashboard.refreshedAt, now.toISOString());
 
+    const { runGalleryArenaImportJob } = await import("../../../lib/gallery/arenaImportJob");
+    const { getArenaEligiblePromptIds } = await import("../../../lib/arena/eligibility");
+    const { getArenaBuildMeta } = await import("../../../lib/arena/buildMetaCache");
+    const { uploadArenaBuildArtifact } = await import("../../../lib/arena/artifactOwnership");
+    const { purgePendingCustomBuildArtifacts } = await import("../../../lib/custom-builds/cleanup");
+    await db.customBuild.update({ where: { id: completed.id }, data: {
+      gridSize: 256, mode: "precise", modelKey: modelAKey,
+    } });
+    await db.galleryCandidate.update({ where: { id: candidate.id }, data: {
+      selectedAt: now, officialPromptId: prompt.id,
+    } });
+    const consumed = await db.customBuildJob.create({ data: {
+      customBuildId: completed.id, type: "arena_import", payload: { promptId: prompt.id },
+    } });
+    await setGalleryCandidateHidden(adminId, candidate.publicId, true);
+    await runGalleryArenaImportJob(consumed, { beforeArtifactPreparation: async () => assert.fail("hidden import ran") });
+    await db.customBuildJob.update({ where: { id: consumed.id }, data: { status: "succeeded" } });
+    await setGalleryCandidateHidden(adminId, candidate.publicId, false);
+    await setGalleryCandidateHidden(adminId, candidate.publicId, false);
+    assert.equal(await db.customBuildJob.count({ where: {
+      customBuildId: completed.id, type: "arena_import", status: "queued",
+    } }), 1, "restoration replaces a consumed import exactly once");
+
+    const copiedPath = `gallery/${prompt.id}/${modelAKey}-${completed.id}-g256-simple-precise.json.gz`;
+    await db.build.update({ where: { id: buildA.id }, data: {
+      gridSize: 256, mode: "precise", voxelSha256: "f".repeat(64),
+      voxelStorageBucket: "builds", voxelStoragePath: copiedPath,
+    } });
+    await db.build.update({ where: { id: buildB.id }, data: { gridSize: 256, mode: "precise" } });
+    assert.ok((await getArenaEligiblePromptIds()).includes(prompt.id));
+    assert.ok(await getArenaBuildMeta(buildA.id, "f".repeat(64)));
+    const deleted: string[] = [];
+    await hideGalleryExample(adminId, example.id, async ({ path }) => {
+      if (path.endsWith(".mbv4")) throw new Error("derived storage unavailable");
+      deleted.push(path);
+    });
+    assert.equal((await db.build.findUniqueOrThrow({ where: { id: buildA.id } })).active, false);
+    assert.equal((await db.build.findUniqueOrThrow({ where: { id: buildA.id } })).arenaImportPending, false);
+    assert.equal((await db.build.findUniqueOrThrow({ where: { id: buildB.id } })).active, true);
+    assert.equal((await getArenaEligiblePromptIds()).includes(prompt.id), false);
+    assert.equal(await getArenaBuildMeta(buildA.id, "f".repeat(64)), null);
+    assert.equal(await db.vote.count({ where: { matchupId: matchup.id } }), 1, "moderation preserves vote history");
+    assert.match((await db.customBuild.findUniqueOrThrow({ where: { id: completed.id } })).deletionError ?? "", /derived storage unavailable/);
+    assert.equal((await purgePendingCustomBuildArtifacts({ deleteArtifact: async ({ path }) => {
+      if (path === copiedPath) throw new Error("raw storage unavailable");
+      deleted.push(path);
+    } })).objectDeletionFailures, 1);
+    const pending = await db.customBuild.findUniqueOrThrow({ where: { id: completed.id } });
+    assert.ok(pending.deletionPendingAt, "failed Arena copy deletion must remain pending");
+    assert.match(pending.deletionError ?? "", /raw storage unavailable/);
+    assert.equal((await purgePendingCustomBuildArtifacts({ deleteArtifact: async ({ path }) => {
+      deleted.push(path);
+    } })).objectDeletionFailures, 0);
+    const cleaned = await db.customBuild.findUniqueOrThrow({ where: { id: completed.id } });
+    assert.equal(cleaned.deletionPendingAt, null);
+    assert.equal(cleaned.deletionError, null);
+    assert.ok(deleted.includes(copiedPath));
+    assert.ok(deleted.some((path) => path.includes(buildA.id) && path.endsWith(".mbv4")));
+    const latePath = `late/${buildA.id}.mbv4`;
+    assert.equal(await uploadArenaBuildArtifact(buildA.id, { bucket: "builds", path: latePath },
+      async () => {}, async (refs) => { deleted.push(...refs.map(({ path }) => path)); }), false);
+    assert.ok(deleted.includes(latePath), "late artifact uploads are compensated for inactive builds");
+    await runGalleryArenaImportJob(consumed, { beforeArtifactPreparation: async () => assert.fail("hidden source imported") });
     console.log("Gallery admin dashboard checks passed");
   } finally {
     await db.galleryVoteBlock.deleteMany({ where: { OR: [{ userId: memberId }, { createdById: adminId }] } });

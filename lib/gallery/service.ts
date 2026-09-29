@@ -5,6 +5,11 @@ import { customBuildJsonNumber, customBuildStorageBigInt } from "@/lib/custom-bu
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
 import { voxelWorldPartSourceSha256 } from "@/lib/custom-builds/worldArtifacts";
+import { invalidateArenaBuildMeta } from "@/lib/arena/buildMetaCache";
+import { invalidateArenaCoverageCache } from "@/lib/arena/coverage";
+import { invalidateArenaStatsCache } from "@/lib/arena/stats";
+import { arenaCohortBuildWhere } from "@/lib/arena/eligibility";
+import { deleteRetiredGalleryArenaArtifacts, isCommunityArenaPrompt, queueGalleryArenaImports } from "@/lib/gallery/arenaImport";
 import {
   sendGalleryAccountNotification,
   sendGalleryAdminNotification,
@@ -95,6 +100,10 @@ const candidateSelect = {
   upvoteCount: true,
   publishedAt: true,
   selectedAt: true,
+  officialPromptId: true,
+  officialPrompt: {
+    select: { active: true, _count: { select: { builds: { where: arenaCohortBuildWhere() } } } },
+  },
   postAnonymously: true,
   uploader: {
     select: { publicNickname: true },
@@ -228,6 +237,10 @@ function publicCandidate(
     upvoteCount: candidate.upvoteCount,
     upvoted,
     selected: Boolean(candidate.selectedAt),
+    // only link once Compare can show this prompt
+    arenaPromptId: candidate.selectedAt && candidate.officialPrompt?.active && candidate.officialPrompt._count.builds >= 2
+      ? candidate.officialPromptId
+      : null,
     canRemove: Boolean(
       viewerUserId && candidate.uploaderId === viewerUserId && !candidate.selectedAt,
     ),
@@ -965,6 +978,13 @@ export async function setGalleryCandidateSelected(adminId: string, publicId: str
         : { selectedAt: null, selectedById: null, officialPromptId: null },
     });
     if (transition.count !== 1) throw new GalleryServiceError("not_found", "Gallery prompt not found.");
+    if (isCommunityArenaPrompt(candidate.promptText)) {
+      if (selected) {
+        await queueGalleryArenaImports(tx, candidate.id, prompt!.id);
+      } else if (candidate.officialPromptId) {
+        await tx.prompt.update({ where: { id: candidate.officialPromptId }, data: { active: false } });
+      }
+    }
     await tx.galleryModerationRecord.create({
       data: {
         kind: "ADMIN_ACTION",
@@ -1384,7 +1404,7 @@ export async function setGalleryCandidateHidden(
     const candidate = locked[0]
       ? await tx.galleryCandidate.findUnique({
           where: { id: locked[0].id },
-          select: { id: true, promptText: true, uploaderId: true, adminHiddenAt: true },
+          select: { id: true, promptText: true, uploaderId: true, adminHiddenAt: true, selectedAt: true, officialPromptId: true },
         })
       : null;
     if (!candidate) throw new GalleryServiceError("not_found", "Gallery prompt not found.");
@@ -1396,6 +1416,11 @@ export async function setGalleryCandidateHidden(
         ? { adminHiddenAt: now, purgeAt: new Date(now.getTime() + RETENTION_MS) }
         : { adminHiddenAt: null, purgeAt: null },
     });
+    // hidden community prompts leave the arena until restored
+    if (candidate.selectedAt && candidate.officialPromptId && isCommunityArenaPrompt(candidate.promptText)) {
+      await tx.prompt.update({ where: { id: candidate.officialPromptId }, data: { active: !hidden } });
+      if (!hidden) await queueGalleryArenaImports(tx, candidate.id, candidate.officialPromptId);
+    }
     await tx.galleryModerationRecord.create({
       data: {
         kind: "ADMIN_ACTION",
@@ -1443,16 +1468,21 @@ export async function hideGalleryExample(
   if (!example) throw new GalleryServiceError("not_found", "Gallery example not found.");
   const now = new Date();
   const purgeAt = new Date(now.getTime() + RETENTION_MS);
-  await prisma.$transaction([
-    prisma.galleryExample.update({
-      where: { id: example.id },
-      data: { adminHiddenAt: now, purgeAt, previewRetained: true },
-    }),
-    prisma.customBuild.update({
+  const importedBuilds = await prisma.$transaction(async (tx) => {
+    await tx.customBuild.update({
       where: { id: example.customBuildId },
       data: { removedAt: now, purgeAt, deletionPendingAt: now },
-    }),
-    prisma.galleryModerationRecord.create({
+    });
+    await tx.galleryExample.update({
+      where: { id: example.id },
+      data: { adminHiddenAt: now, purgeAt, previewRetained: true },
+    });
+    const builds = await tx.build.findMany({
+      where: { voxelStoragePath: { startsWith: "gallery/", endsWith: `-${example.customBuildId}-g256-simple-precise.json.gz` } },
+      select: { id: true, voxelSha256: true, voxelStorageBucket: true, voxelStoragePath: true },
+    });
+    await tx.build.updateMany({ where: { id: { in: builds.map(({ id }) => id) } }, data: { active: false, arenaImportPending: false } });
+    await tx.galleryModerationRecord.create({
       data: {
         kind: "ADMIN_ACTION",
         target: "EXAMPLE",
@@ -1464,9 +1494,14 @@ export async function hideGalleryExample(
         safeSnapshot: { prompt: example.candidate.promptText },
         purgeAt,
       },
-    }),
-  ]);
+    });
+    return builds;
+  });
+  for (const build of importedBuilds) invalidateArenaBuildMeta(build.id);
+  invalidateArenaCoverageCache();
+  invalidateArenaStatsCache();
   try {
+    await deleteRetiredGalleryArenaArtifacts(example.customBuildId, deleteArtifact);
     for (const artifact of example.customBuild.artifacts) {
       await deleteArtifact({ bucket: artifact.bucket, path: artifact.path });
     }
@@ -1490,7 +1525,7 @@ export async function hideGalleryExample(
   } catch (error) {
     await prisma.customBuild.update({
       where: { id: example.customBuildId },
-      data: { deletionError: redactSensitiveText(error).slice(0, 500) },
+      data: { deletionPendingAt: now, deletionError: redactSensitiveText(error).slice(0, 500) },
     });
   }
   return { hidden: true };

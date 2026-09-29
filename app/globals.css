@@ -121,25 +121,25 @@
     -webkit-tap-highlight-color: transparent;
   }
 
-  body.mb-page-fixed {
+  body:is(.mb-page-fixed, :has(.mb-page-fixed)) {
     height: 100dvh;
     overflow: hidden;
   }
 
-  body.mb-page-fixed #mb-shell {
+  body:is(.mb-page-fixed, :has(.mb-page-fixed)) #mb-shell {
     height: 100dvh;
   }
 
-  body.mb-page-fixed #mb-container {
+  body:is(.mb-page-fixed, :has(.mb-page-fixed)) #mb-container {
     min-height: 0;
   }
 
-  body.mb-page-fixed #main {
+  body:is(.mb-page-fixed, :has(.mb-page-fixed)) #main {
     min-height: 0;
     overflow: hidden;
   }
 
-  body.mb-page-fixed #mb-footer {
+  body:is(.mb-page-fixed, :has(.mb-page-fixed)) #mb-footer {
     flex-shrink: 0;
   }
 
@@ -1464,6 +1464,34 @@
 
   .mb-card-enter-delay {
     animation-delay: 60ms;
+  }
+
+  /* rank movement eases in the direction it describes */
+  @keyframes mb-rank-move {
+    from {
+      opacity: 0;
+      translate: 0 var(--mb-rank-from);
+    }
+  }
+
+  .mb-rank-rise,
+  .mb-rank-drop {
+    animation: mb-rank-move 420ms cubic-bezier(0.22, 1, 0.36, 1) 220ms both;
+  }
+
+  .mb-rank-rise {
+    --mb-rank-from: 4px;
+  }
+
+  .mb-rank-drop {
+    --mb-rank-from: -4px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mb-rank-rise,
+    .mb-rank-drop {
+      animation: none;
+    }
   }
 
   /* One transitioned state, not a pulse that ends and then snaps back into a

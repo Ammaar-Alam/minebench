@@ -106,6 +106,8 @@ export type ArenaRegisteredArtifactOwnership = {
 };
 
 type ArenaArtifactBuildOwner = {
+  active: boolean;
+  arenaImportPending: boolean;
   model: {
     stealthVariant: {
       experiment: { status: string; retentionDeleteAt: Date | null };
@@ -115,7 +117,7 @@ type ArenaArtifactBuildOwner = {
 
 function isRetainedArtifactBuild(build: ArenaArtifactBuildOwner, now: Date): boolean {
   const experiment = build.model.stealthVariant?.experiment;
-  return !(
+  return (build.active || build.arenaImportPending) && !(
     experiment?.status === "CLOSED" &&
     experiment.retentionDeleteAt &&
     experiment.retentionDeleteAt <= now
@@ -140,6 +142,8 @@ const ARTIFACT_OWNER_SELECT = {
   path: true,
   build: {
     select: {
+      active: true,
+      arenaImportPending: true,
       model: {
         select: {
           stealthVariant: {
@@ -304,6 +308,8 @@ export async function deleteArenaBuildArtifacts(params: {
             voxelSha256: { in: checksums },
           },
           select: {
+            active: true,
+            arenaImportPending: true,
             voxelSha256: true,
             model: {
               select: {

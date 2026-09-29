@@ -1,0 +1,1 @@
+ALTER TABLE "Build" ADD COLUMN "arenaImportPending" BOOLEAN NOT NULL DEFAULT false;

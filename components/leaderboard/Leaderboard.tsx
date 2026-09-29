@@ -209,9 +209,11 @@ function MovementMark({ badge }: { badge: MovementBadge | null }) {
   if (!badge) return null;
   const Icon = badge.kind === "up" ? ChevronUp : badge.kind === "down" ? ChevronDown : ChevronRight;
   const label = badge.kind === "new" ? "NEW" : String(badge.delta ?? "");
+  // climbs sit above the rank and drops below so the rank itself never moves
+  const placement = badge.kind === "up" ? "bottom-full mb-1 mb-rank-rise" : "top-full mt-1 mb-rank-drop";
   return (
     <span
-      className={`inline-flex items-center justify-center gap-0.5 whitespace-nowrap font-mono text-[10px] font-semibold leading-none ${badge.toneClass}`}
+      className={`absolute left-1/2 inline-flex -translate-x-1/2 items-center justify-center gap-0.5 whitespace-nowrap font-mono text-[10px] font-semibold leading-none ${placement} ${badge.toneClass}`}
       aria-label={badge.ariaLabel}
     >
       <Icon className="h-3 w-3 opacity-90" />
@@ -618,7 +620,7 @@ export function Leaderboard({
 	                >
 	                  <div className="flex items-start justify-between gap-3">
 	                    <div className="flex min-w-0 items-start gap-3">
-		                      <div className="flex w-9 flex-col items-center gap-0.5 pt-0.5">
+		                      <div className="relative flex w-9 shrink-0 justify-center self-center">
 		                        <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-bg/65 px-1.5 text-[11px] font-mono text-muted ring-1 ring-border/80">
 		                          {m.rank}
 	                        </span>
@@ -875,7 +877,7 @@ export function Leaderboard({
                   >
 	                    <td className="mb-leaderboard-model-cell px-3 py-3 sm:px-3.5 sm:py-3.5">
 	                      <div className="flex items-start gap-3">
-		                        <div className="mt-0.5 flex w-9 shrink-0 flex-col items-center gap-0.5">
+		                        <div className="relative flex w-9 shrink-0 justify-center self-center">
 		                          <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-bg/62 px-1.5 text-[11px] font-mono text-muted ring-1 ring-border/80">
 		                            {m.rank}
 	                          </span>

@@ -367,9 +367,7 @@ export async function deleteUnacceptedStealthBuild(buildId: string): Promise<boo
   );
 }
 
-export function isMissingStealthBuildPayload(error: unknown): boolean {
-  return error instanceof Error && /Storage download failed \(404\)/.test(error.message);
-}
+export { isMissingBuildPayloadError as isMissingStealthBuildPayload } from "@/lib/storage/buildPayload";
 
 export async function ensureStealthBuildArtifacts(buildId: string): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL ?? process.env.DIRECT_URL ?? "";
