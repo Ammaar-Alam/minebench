@@ -74,6 +74,7 @@ type BenchmarkResponse = {
   selectedPrompt: {
     id: string;
     text: string;
+    galleryId: string | null;
   } | null;
   models: ModelOption[];
   selectedModels: SandboxComparisonSelection<string | null>;
@@ -181,8 +182,26 @@ export async function GET(req: Request) {
       eloRating: Number(m.eloRating),
     }));
 
+    // default pair follows the latest hourly leaderboard ranking
+    const leaderboardRank = new Map<string, number>();
+    if (!SANDBOX_COMPARISON_SLOTS.some((slot) => requestedModels[slot])) {
+      const latest = await prisma.modelRankSnapshot.findFirst({
+        orderBy: { capturedAt: "desc" },
+        select: { capturedAt: true },
+      });
+      if (latest) {
+        const rankRows = await prisma.modelRankSnapshot.findMany({
+          where: { capturedAt: latest.capturedAt },
+          select: { rank: true, model: { select: { key: true } } },
+        });
+        for (const row of rankRows) leaderboardRank.set(row.model.key, row.rank);
+      }
+    }
+    const unranked = Number.MAX_SAFE_INTEGER;
     const selection = normalizeSandboxComparisonSelection(
-      models.map((model) => model.key),
+      models
+        .map((model) => model.key)
+        .sort((a, b) => (leaderboardRank.get(a) ?? unranked) - (leaderboardRank.get(b) ?? unranked)),
       requestedModels,
     );
     const modelIdByKey = new Map(modelRows.map((m) => [m.key, m.id]));
@@ -211,6 +230,10 @@ export async function GET(req: Request) {
     const selectedModelKeys = SANDBOX_COMPARISON_SLOTS.flatMap((slot) => {
       const modelKey = selection[slot];
       return modelKey ? [modelKey] : [];
+    });
+    const galleryCandidate = await prisma.galleryCandidate.findFirst({
+      where: { officialPromptId: selectedPrompt.id, selectedAt: { not: null }, removedAt: null, adminHiddenAt: null },
+      select: { publicId: true },
     });
     const selectedBuildRows = await prisma.build.findMany({
       where: {
@@ -379,6 +402,7 @@ export async function GET(req: Request) {
       selectedPrompt: {
         id: selectedPrompt.id,
         text: selectedPrompt.text,
+        galleryId: galleryCandidate?.publicId ?? null,
       },
       models,
       selectedModels: selection,

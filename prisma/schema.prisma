@@ -370,6 +370,7 @@ enum CustomBuildStatus {
 enum CustomBuildJobType {
   generate
   export
+  arena_import
 }
 
 enum CustomBuildJobStatus {

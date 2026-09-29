@@ -520,7 +520,7 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
       }))
     : [];
   return (
-    <article className="mb-fade-in mx-auto w-full max-w-7xl py-4 sm:py-8">
+    <article className="mx-auto w-full max-w-7xl py-4 sm:py-8">
       <nav aria-label="Gallery navigation" className="flex items-center justify-between gap-4">
         <Link href={gallerySortHref(navigation?.sort)} className="group inline-flex min-h-11 items-center gap-2 text-sm font-medium text-muted transition-colors hover:text-fg motion-reduce:transition-none">
           <span aria-hidden="true" className="transition-transform duration-200 group-hover:-translate-x-0.5 motion-reduce:transform-none motion-reduce:transition-none">←</span>
@@ -542,6 +542,7 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
         <div className="mt-6 flex flex-wrap items-center gap-2">
           <GalleryVoteButton candidateId={candidate.id} initialCount={candidate.upvoteCount} initialUpvoted={candidate.upvoted} />
           <Link href={`/sandbox?mode=live&prompt=${encodeURIComponent(candidate.prompt)}`} className="mb-btn mb-btn-primary h-11">Use prompt</Link>
+          {candidate.arenaPromptId ? <Link href={`/sandbox?promptId=${encodeURIComponent(candidate.arenaPromptId)}`} className="mb-btn h-11">Arena builds</Link> : null}
           {promptTruncated ? (
             <button ref={promptToggleRef} type="button" aria-expanded={promptOpen} aria-controls={`gallery-prompt-${candidate.id}`} onClick={() => setPromptOpen((open) => !open)} className="inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 text-sm font-medium text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none">
               Full prompt

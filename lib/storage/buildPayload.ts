@@ -146,6 +146,33 @@ export async function uploadSupabaseStorageFile(args: {
   }
 }
 
+// server-side copy so large payloads never pass through this process
+export async function copySupabaseStorageObject(args: {
+  from: { bucket: string; path: string };
+  to: { bucket: string; path: string };
+}): Promise<void> {
+  const config = getSupabaseStorageConfig();
+  const response = await fetch(`${config.url}/storage/v1/object/copy`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.serviceRoleKey}`,
+      apikey: config.serviceRoleKey,
+      "x-upsert": "true",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      bucketId: args.from.bucket,
+      sourceKey: args.from.path,
+      destinationBucket: args.to.bucket,
+      destinationKey: args.to.path,
+    }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`Storage copy failed (${response.status}): ${text || "empty response"}`);
+  }
+}
+
 export async function createSupabaseSignedUploadToken(args: {
   bucket: string;
   path: string;

@@ -17,6 +17,7 @@ import { runCustomBuildExportJob } from "@/lib/custom-builds/exportJob";
 import { startCustomBuildCleanup } from "@/lib/custom-builds/cleanup";
 import { isTerminalCustomBuildGenerateError, runCustomBuildGenerateJob } from "@/lib/custom-builds/generateJob";
 import { createCustomBuildProcessingGate } from "@/lib/custom-builds/processingGate";
+import { runGalleryArenaImportJob } from "@/lib/gallery/arenaImportJob";
 import { startNotificationDelivery } from "@/lib/notifications/delivery";
 import {
   CustomBuildLeaseLostError,
@@ -220,6 +221,11 @@ async function runJob(
           throwIfCustomBuildLeaseLost(signal);
         },
       });
+      throwIfCustomBuildLeaseLost(signal);
+      return;
+    }
+    if (job.type === "arena_import") {
+      await runGalleryArenaImportJob(job, { beforeArtifactPreparation: acquireProcessing });
       throwIfCustomBuildLeaseLost(signal);
       return;
     }

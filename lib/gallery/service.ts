@@ -5,6 +5,7 @@ import { customBuildJsonNumber, customBuildStorageBigInt } from "@/lib/custom-bu
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
 import { voxelWorldPartSourceSha256 } from "@/lib/custom-builds/worldArtifacts";
+import { isCommunityArenaPrompt, queueGalleryArenaImports } from "@/lib/gallery/arenaImport";
 import {
   sendGalleryAccountNotification,
   sendGalleryAdminNotification,
@@ -95,6 +96,7 @@ const candidateSelect = {
   upvoteCount: true,
   publishedAt: true,
   selectedAt: true,
+  officialPromptId: true,
   postAnonymously: true,
   uploader: {
     select: { publicNickname: true },
@@ -228,6 +230,7 @@ function publicCandidate(
     upvoteCount: candidate.upvoteCount,
     upvoted,
     selected: Boolean(candidate.selectedAt),
+    arenaPromptId: candidate.selectedAt ? candidate.officialPromptId : null,
     canRemove: Boolean(
       viewerUserId && candidate.uploaderId === viewerUserId && !candidate.selectedAt,
     ),
@@ -965,6 +968,13 @@ export async function setGalleryCandidateSelected(adminId: string, publicId: str
         : { selectedAt: null, selectedById: null, officialPromptId: null },
     });
     if (transition.count !== 1) throw new GalleryServiceError("not_found", "Gallery prompt not found.");
+    if (isCommunityArenaPrompt(candidate.promptText)) {
+      if (selected) {
+        await queueGalleryArenaImports(tx, candidate.id, prompt!.id);
+      } else if (candidate.officialPromptId) {
+        await tx.prompt.update({ where: { id: candidate.officialPromptId }, data: { active: false } });
+      }
+    }
     await tx.galleryModerationRecord.create({
       data: {
         kind: "ADMIN_ACTION",

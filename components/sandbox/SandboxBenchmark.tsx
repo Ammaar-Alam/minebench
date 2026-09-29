@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
   type RefObject,
@@ -97,6 +98,7 @@ type BenchmarkResponse = {
   selectedPrompt: {
     id: string;
     text: string;
+    galleryId: string | null;
   } | null;
   models: BenchmarkModelOption[];
   selectedModels: SandboxComparisonSelection<string | null>;
@@ -134,14 +136,6 @@ type CachedBuild = {
   variant: ArenaBuildVariant;
 };
 
-const DEFAULT_MODEL_A = "openai_gpt_5_5_pro";
-const DEFAULT_MODEL_B = "openai_gpt_5_6_sol";
-const DEFAULT_MODEL_SELECTION: SandboxComparisonSelection<string> = {
-  a: DEFAULT_MODEL_A,
-  b: DEFAULT_MODEL_B,
-  c: "",
-  d: "",
-};
 const COMPARISON_SLOT_LABELS: SandboxComparisonSelection<string> = {
   a: "Model 1",
   b: "Model 2",
@@ -468,7 +462,7 @@ export function SandboxBenchmark() {
   );
   const [promptId, setPromptId] = useState("");
   const [modelSelection, setModelSelection] =
-    useState<SandboxComparisonSelection<string>>(DEFAULT_MODEL_SELECTION);
+    useState<SandboxComparisonSelection<string>>(() => createModelSelectionFromKeys([]));
   const [data, setData] = useState<BenchmarkResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -631,10 +625,7 @@ export function SandboxBenchmark() {
     void runLoad(
       {
         promptId: requestedDeepLink.promptId ?? undefined,
-        models:
-          requestedDeepLink.modelKeys.length > 0
-            ? createModelSelectionFromKeys(requestedDeepLink.modelKeys)
-            : DEFAULT_MODEL_SELECTION,
+        models: createModelSelectionFromKeys(requestedDeepLink.modelKeys),
       },
       { initial, syncUrl: true },
     );
@@ -910,7 +901,7 @@ export function SandboxBenchmark() {
       const selectedPrompt = prev.prompts.find((p) => p.id === nextPromptId);
       return {
         ...prev,
-        selectedPrompt: selectedPrompt ? { id: selectedPrompt.id, text: selectedPrompt.text } : prev.selectedPrompt,
+        selectedPrompt: selectedPrompt ? { id: selectedPrompt.id, text: selectedPrompt.text, galleryId: null } : prev.selectedPrompt,
         builds: createEmptyBuilds(),
       };
     });
@@ -1198,10 +1189,7 @@ export function SandboxBenchmark() {
                 void runLoad(
                   {
                     promptId: requestedDeepLink.promptId ?? undefined,
-                    models:
-                      requestedDeepLink.modelKeys.length > 0
-                        ? createModelSelectionFromKeys(requestedDeepLink.modelKeys)
-                        : DEFAULT_MODEL_SELECTION,
+                    models: createModelSelectionFromKeys(requestedDeepLink.modelKeys),
                   },
                   { initial: true, syncUrl: true },
                 );
@@ -1265,6 +1253,14 @@ export function SandboxBenchmark() {
                     ))}
                   </select>
                 </label>
+              </>
+            ) : null}
+            {data?.selectedPrompt?.galleryId ? (
+              <>
+                <span className="text-muted/35">·</span>
+                <Link href={`/gallery/${data.selectedPrompt.galleryId}`} className="rounded px-1 text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none">
+                  More builds
+                </Link>
               </>
             ) : null}
           </div>
@@ -1383,7 +1379,15 @@ export function SandboxBenchmark() {
       </div>
 
       {loading && !data ? (
-        <div className="mb-panel p-10 text-center text-sm text-muted">Loading benchmark builds…</div>
+        <div aria-busy="true" aria-label="Loading builds" className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          {[0, 1].map((index) => (
+            <div key={index} aria-hidden="true" className="mb-panel animate-pulse motion-reduce:animate-none">
+              {/* matches VoxelViewerCard so the builds swap in without moving the page */}
+              <div className="h-[120px] border-b border-border/70 bg-bg/10 sm:h-[83px]" />
+              <div className="h-[300px] bg-card/25 sm:h-[360px] md:h-[420px] lg:h-[480px] xl:h-[520px]" />
+            </div>
+          ))}
+        </div>
       ) : null}
 
       {!loading && data ? <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{cards}</div> : null}

@@ -397,7 +397,7 @@ export function GalleryExplore({
   }
 
   return (
-    <div className="mb-fade-in mx-auto w-full max-w-7xl py-4 sm:py-8">
+    <div className="mx-auto w-full max-w-7xl py-4 sm:py-8">
       <header className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="font-display text-3xl font-semibold tracking-tight text-fg sm:text-4xl">Gallery</h1>
@@ -489,7 +489,7 @@ export function GalleryExplore({
         role="region"
         aria-label="Gallery results"
         aria-busy={loading || searchPending}
-        className={`mb-fade-in transition-opacity duration-200 motion-reduce:transition-none ${loading ? "opacity-60" : "opacity-100"}`}
+        className={`transition-opacity duration-200 motion-reduce:transition-none ${loading ? "opacity-60" : "opacity-100"}`}
       >
         {items.length ? (
           <div className="mt-7 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
