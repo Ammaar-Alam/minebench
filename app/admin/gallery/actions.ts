@@ -18,7 +18,7 @@ import {
 } from "@/lib/gallery/service";
 
 const mutationSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("generation_published"), publicId: z.string().min(1).max(100) }),
+  z.object({ type: z.literal("generation_published"), publicId: z.string().min(1).max(100), prompt: z.string().trim().min(1).max(800).optional() }),
   z.object({ type: z.literal("candidate_hidden"), publicId: z.string().min(1).max(100), hidden: z.boolean() }),
   z.object({ type: z.literal("example_hidden"), exampleId: z.string().min(1).max(100) }),
   z.object({
@@ -64,7 +64,7 @@ export async function mutateGalleryAdmin(input: unknown) {
     const actorId = await adminId();
     switch (parsed.data.type) {
       case "generation_published":
-        await publishAdminGeneration(actorId, parsed.data.publicId);
+        await publishAdminGeneration(actorId, parsed.data.publicId, parsed.data.prompt);
         break;
       case "candidate_hidden":
         await setGalleryCandidateHidden(actorId, parsed.data.publicId, parsed.data.hidden);

@@ -273,8 +273,9 @@ export async function POST(req: Request) {
       const spec = parseVoxelBuildSpec(buildPayload);
       if (!spec.ok) return NextResponse.json({ error: spec.error }, { status: 400 });
 
-      inlineSpec = spec.value as Prisma.InputJsonValue;
-      const specJson = JSON.stringify(spec.value);
+      const { version, boxes, lines, blocks } = spec.value;
+      inlineSpec = { version, boxes: boxes ?? [], lines: lines ?? [], blocks };
+      const specJson = JSON.stringify(inlineSpec);
       inlineByteSize = Buffer.byteLength(specJson);
       inlineSha256 = createHash("sha256").update(specJson).digest("hex");
     }

@@ -103,7 +103,7 @@ export function VoxelBuildExportButton({
   const [menuOpen, setMenuOpen] = useState(false);
   const [status, setStatus] = useState<ExportStatus>({ type: "idle" });
   const isWorking = status.type === "working";
-  const isDisabled = disabled || !build || isWorking;
+  const isDisabled = disabled || !build || Boolean(build.world) || isWorking;
 
   useEffect(() => {
     return () => {
@@ -205,7 +205,7 @@ export function VoxelBuildExportButton({
         disabled={isDisabled}
         onClick={() => setMenuOpen((open) => !open)}
         className="mb-btn mb-btn-ghost h-8 w-8 border border-border/70 bg-bg/55 p-0 text-muted shadow-sm backdrop-blur-sm hover:border-accent/60 hover:bg-accent/10 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
-        title={disabledReason ?? "Export build"}
+        title={disabledReason ?? (build?.world ? "Download JSON to export this world" : "Export build")}
       >
         <svg
           aria-hidden="true"

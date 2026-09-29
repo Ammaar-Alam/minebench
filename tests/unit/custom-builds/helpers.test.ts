@@ -220,6 +220,50 @@ async function main() {
     else process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = originalStorageDir;
   }
 
+  process.env.CUSTOM_BUILD_STORAGE_BUCKET = "__local_fs__";
+  process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = ".custom-build-storage/unit-artifact-late-write";
+  const latePath = getCustomBuildArtifactPath({ publicId: id, kind: "raw_text_debug", sha256: compensationSha });
+  const updates: Array<Record<string, unknown>> = [];
+  let alreadyOwned = false;
+  try {
+    const lateWrite = () => uploadAndRecordCustomBuildArtifact({
+      customBuildId: "removed-build", publicId: id, kind: "raw_text_debug", bytes: compensationBytes,
+      client: {
+        customBuildArtifact: {
+          findUnique: async () => {
+            if (!alreadyOwned) return null;
+            await deleteCustomBuildArtifact({ bucket: "__local_fs__", path: latePath });
+            return { bucket: "__local_fs__", path: latePath };
+          },
+          upsert: async ({ create }: { create: unknown }) => create,
+          aggregate: async () => ({ _sum: { storedByteSize: compensationBytes.byteLength } }),
+        },
+        customBuild: {
+          updateMany: async ({ where }: { where: { removedAt?: unknown; status?: unknown } }) => {
+            assert.equal(where.removedAt, null);
+            assert.deepEqual(where.status, { in: ["queued", "running"] }, "late raw responses cannot reactivate canceled builds");
+            return { count: 0 };
+          },
+          update: async ({ data }: { data: Record<string, unknown> }) => { updates.push(data); return data; },
+        },
+      } as never,
+    });
+    await assert.rejects(lateWrite(), /no longer active/);
+    assert.equal(updates[0]?.objectsDeletedAt, null);
+    assert.ok(updates[0]?.deletionPendingAt instanceof Date, "a late raw upload must requeue physical cleanup");
+    assert.equal(updates[0]?.storedByteSize, compensationBytes.byteLength);
+    alreadyOwned = true;
+    await assert.rejects(lateWrite(), /no longer active/);
+    await assert.rejects(downloadCustomBuildArtifactBytes({ bucket: "__local_fs__", path: latePath }), /ENOENT/,
+      "a repeated upload must not recreate an immutable object while its ownership is being deleted");
+  } finally {
+    await deleteCustomBuildArtifact({ bucket: "__local_fs__", path: latePath });
+    if (originalBucket === undefined) delete process.env.CUSTOM_BUILD_STORAGE_BUCKET;
+    else process.env.CUSTOM_BUILD_STORAGE_BUCKET = originalBucket;
+    if (originalStorageDir === undefined) delete process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR;
+    else process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = originalStorageDir;
+  }
+
   const originalFetch = globalThis.fetch;
   const originalSupabaseUrl = process.env.SUPABASE_URL;
   const originalSupabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -237,6 +281,38 @@ async function main() {
       bytes: new Uint8Array([1, 2, 3]),
       contentType: "application/gzip",
     });
+    for (const failure of [504, 429, new TypeError("fetch failed"), 403, new DOMException("Aborted", "AbortError")]) {
+      const requests: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+      globalThis.fetch = (async (input, init) => {
+        requests.push({ input, init });
+        if (requests.length > 1) return new Response("{}", { status: 200 });
+        if (failure instanceof Error) throw failure;
+        return new Response("storage unavailable", { status: failure });
+      }) as typeof fetch;
+      const bytes = new Uint8Array([1, 2, 3]);
+      const upload = uploadCustomBuildArtifact({
+        bucket: "builds", path: "world-part.gz", bytes, contentType: "application/gzip",
+      });
+      if (failure === 403 || failure instanceof DOMException) {
+        await assert.rejects(upload, failure === 403 ? /403/ : /Aborted/);
+        assert.equal(requests.length, 1, "permanent failures and cancellation should not retry");
+      } else {
+        await upload;
+        assert.equal(requests.length, 2, "transient storage failures should retry the same upload");
+        assert.equal(requests[1]!.input, requests[0]!.input);
+        assert.equal(requests[1]!.init?.body, bytes);
+        assert.equal(new Headers(requests[1]!.init?.headers).get("x-upsert"), "true");
+      }
+    }
+    let attempts = 0;
+    globalThis.fetch = (async () => {
+      attempts += 1;
+      return new Response("still unavailable", { status: 504 });
+    }) as typeof fetch;
+    await assert.rejects(uploadCustomBuildArtifact({
+      bucket: "builds", path: "world-part.gz", bytes: new Uint8Array([1]), contentType: "application/gzip",
+    }), /Custom build artifact upload failed \(504\): still unavailable/);
+    assert.equal(attempts, 3, "storage retries should stop after three attempts");
   } finally {
     globalThis.fetch = originalFetch;
     if (originalSupabaseUrl === undefined) {

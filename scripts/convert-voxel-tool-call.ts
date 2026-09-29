@@ -16,6 +16,7 @@
  *   pnpm tool:convert --in raw.json --expanded
  */
 
+import { GRID_SIZES, isGridSize, type GridSize } from "../lib/ai/limits";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -30,8 +31,12 @@ import {
 } from "../lib/ai/tools/voxelExec";
 import { getPalette } from "../lib/blocks/palettes";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "../lib/voxel/validate";
+import { evaluateVoxelWorldRegions, summarizeVoxelWorldRegions } from "../lib/voxel/worldRegions";
+import { canonicalBuildJsonChunks, voxelBuildSourceJsonChunks } from "../lib/voxel/canonicalArtifact";
+import type { VoxelBlock } from "../lib/voxel/types";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 
-type GridSize = 64 | 256 | 512;
 type PaletteName = "simple" | "advanced";
 
 type Args = {
@@ -62,8 +67,8 @@ function parseArgs(): Args {
   let gridSizeOverride: GridSize | null = null;
   if (gridSizeRaw !== null) {
     const n = Number(gridSizeRaw);
-    if (n !== 64 && n !== 256 && n !== 512) {
-      throw new Error(`Invalid --gridSize value "${gridSizeRaw}". Expected 64 | 256 | 512.`);
+    if (!isGridSize(n)) {
+      throw new Error(`Invalid --gridSize value "${gridSizeRaw}". Expected ${GRID_SIZES.join(" | ")}.`);
     }
     gridSizeOverride = n;
   }
@@ -115,7 +120,7 @@ Options:
   --paste              Read input JSON from system clipboard.
   --out <path>         Output build JSON path.
   --expanded           Write expanded/validated build (blocks-only canonical output).
-  --gridSize <n>       Override grid size in call: 64 | 256 | 512.
+  --gridSize <n>       Override grid size in call: ${GRID_SIZES.join(" | ")}.
   --palette <name>     Override palette in call: simple | advanced.
   --seed <int>         Override seed in call.
   --print              Also print resulting JSON to stdout.
@@ -463,7 +468,10 @@ async function main() {
   }
 
   const paletteDefs = getPalette(call.input.palette);
-  const validated = validateVoxelBuild(parsedSpec.value, {
+  const world = call.input.gridSize > 512
+    ? summarizeVoxelWorldRegions(parsedSpec.value, { gridSize: call.input.gridSize, palette: paletteDefs })
+    : null;
+  const validated = world ?? validateVoxelBuild(parsedSpec.value, {
     gridSize: call.input.gridSize,
     palette: paletteDefs,
     maxBlocks: maxBlocksForGrid(call.input.gridSize),
@@ -473,9 +481,29 @@ async function main() {
   }
 
   const outputBuild = args.expanded ? validated.value.build : parsedSpec.value;
+  function* expandedBlocks(): Generator<VoxelBlock> {
+    const evaluated = evaluateVoxelWorldRegions(outputBuild, {
+      gridSize: call.input.gridSize, palette: paletteDefs,
+    });
+    if (!evaluated.ok) throw new Error(evaluated.error);
+    for (const region of evaluated.regions) {
+      const { origin, size } = region;
+      const plane = size.x * size.y;
+      for (let index = 0; index < plane * size.z; index += 1) {
+        const type = region.kind === "uniform" ? region.type : paletteDefs[region.materialIndexes[index]! - 1]?.id;
+        if (!type) continue;
+        yield { x: origin.x + index % size.x, y: origin.y + Math.floor(index / size.x) % size.y, z: origin.z + Math.floor(index / plane), type };
+      }
+    }
+  }
+  const outputChunks = () => world
+    ? args.expanded
+      ? canonicalBuildJsonChunks({ version: "1.0", blocks: expandedBlocks() })
+      : voxelBuildSourceJsonChunks(outputBuild)
+    : [Buffer.from(`${JSON.stringify(outputBuild, null, 2)}\n`)];
   const outPath = path.resolve(args.outPath ?? defaultOutputPath(args.inPath, args.expanded));
   ensureParentDir(outPath);
-  fs.writeFileSync(outPath, `${JSON.stringify(outputBuild, null, 2)}\n`);
+  await pipeline(Readable.from(outputChunks()), fs.createWriteStream(outPath));
 
   const fileLink = formatFileLink(outPath);
   console.log("🔧 MineBench tool-call conversion");
@@ -489,7 +517,7 @@ async function main() {
   console.log(
     `Runtime primitives: blocks=${run.blockCount}, boxes=${run.boxCount}, lines=${run.lineCount}`,
   );
-  console.log(`Validated expanded blocks: ${validated.value.build.blocks.length}`);
+  console.log(`Validated blocks: ${world?.ok ? world.value.blockCount : validated.value.build.blocks.length}`);
   if (validated.value.warnings.length > 0) {
     console.log(`Validation warnings: ${validated.value.warnings.length}`);
     for (const warning of validated.value.warnings.slice(0, 3)) {
@@ -503,7 +531,7 @@ async function main() {
   console.log(`   ${fileLink.absoluteUrl}`);
 
   if (args.print) {
-    process.stdout.write(`${JSON.stringify(outputBuild, null, 2)}\n`);
+    await pipeline(Readable.from(outputChunks()), process.stdout, { end: false });
   }
 }
 

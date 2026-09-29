@@ -324,14 +324,27 @@ async function main() {
         storedByteSize: 10,
       },
     });
-    assert.deepEqual(
-      await removeSavedGeneration(ownerId, removable[0]!.id, {
-        deleteArtifact: async () => {
-          throw new Error("storage unavailable");
-        },
-      }),
-      { removed: true, publicExamplesRemoved: 0 },
-    );
+    await db.customBuild.update({ where: { id: removableRow.id }, data: { storedByteSize: 1024 ** 3 } });
+    const originalFetch = globalThis.fetch;
+    const originalStorageUrl = process.env.SUPABASE_URL;
+    const originalStorageKey = process.env.SUPABASE_SECRET_KEY;
+    let deletionRequests = 0;
+    process.env.SUPABASE_URL = "https://storage.example.test";
+    process.env.SUPABASE_SECRET_KEY = "unit-storage-key";
+    globalThis.fetch = async () => {
+      deletionRequests += 1;
+      return Response.json({ message: "storage unavailable" }, { status: 503 });
+    };
+    try {
+      assert.deepEqual(await removeSavedGeneration(ownerId, removable[0]!.id), { removed: true, publicExamplesRemoved: 0 });
+      assert.equal(deletionRequests, 0, "removal must return without waiting for physical storage deletion");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalStorageUrl === undefined) delete process.env.SUPABASE_URL;
+      else process.env.SUPABASE_URL = originalStorageUrl;
+      if (originalStorageKey === undefined) delete process.env.SUPABASE_SECRET_KEY;
+      else process.env.SUPABASE_SECRET_KEY = originalStorageKey;
+    }
     const removed = await db.customBuild.findUniqueOrThrow({
       where: { publicId: removable[0]!.id },
       include: { jobs: true, secret: true },
@@ -341,6 +354,15 @@ async function main() {
     assert.ok(removed.deletionPendingAt);
     assert.equal(removed.secret, null);
     assert.equal(removed.jobs.every((job) => job.status === "canceled"), true);
+    assert.equal(removed.storedByteSize, BigInt(1024 ** 3), "physical byte accounting remains until cleanup");
+    assert.equal(await db.customBuildArtifact.count({ where: { customBuildId: removed.id } }), 1);
+    assert.equal(await getSavedGeneration(ownerId, removable[0]!.id), null);
+    assert.ok(!(await listSavedGenerations(ownerId)).items.some(generation => generation.id === removable[0]!.id));
+    assert.equal((await createSavedGenerations({
+      ownerId, prompt: "A new observatory", gridSize: 64, palette: "simple",
+      models: [{ id: "after-removal", kind: "catalog", modelKey: "openai_gpt_5_4_mini" }],
+      providerKeys: { openai: "request-only-secret" },
+    })).length, 1, "removed builds release the generation allowance before cleanup finishes");
 
     await db.customBuild.update({
       where: { id: rows[0]!.id },

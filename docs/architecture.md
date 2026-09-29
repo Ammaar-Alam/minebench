@@ -85,6 +85,27 @@ Derived objects are immutable and checksum-addressed. `ArenaBuildArtifact`
 rows record which build owns each Storage object so lifecycle cleanup can remove
 unreferenced artifacts without guessing from path names.
 
+## Large worlds
+
+Grids above 512 are available to MineBench administrators through saved generation
+and pasted tool calls. Public requests and imports remain limited to 512 or below;
+reading an explicitly published Gallery world does not require administrator access.
+World-capable clients follow `worldViewerUrl` with `format=world`; older clients
+retain image previews through `previewUrl`. Binary-only viewer and thumbnail URLs
+are omitted for spatial worlds.
+
+Large worlds retain compact canonical source and prepare exact surface meshes once.
+Viewers reuse stored mesh parts without invoking the generation worker. Part URLs
+carry the part checksum from the manifest; the server serves a matching checksum
+as immutable and rejects a stale one, so reopening a world or entering Explore
+reads parts from the browser cache instead of downloading them again. Rendering
+still retains the complete surface geometry; fog reduces drawing work, not memory
+residency. World extent alone does not predict processing cost or frame rate.
+
+Administrators can inspect a saved import and publish it with a descriptive Gallery
+prompt. Imported provenance remains distinct from model-generated results. File
+imports remain browser-local, and ordinary imports cannot be published.
+
 ## Saved generations
 
 Signed-in Sandbox requests enqueue one durable Postgres job per model. Private

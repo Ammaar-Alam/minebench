@@ -17,6 +17,7 @@ async function main() {
   const deletedPaths: string[] = [];
   const expiredSessionCount = 101;
   const { purgeDueGalleryRecords } = await import("../../../lib/gallery/purge");
+  const { purgePendingCustomBuildArtifacts } = await import("../../../lib/custom-builds/cleanup");
 
   const buildData = (id: string, purgeAt: Date, path: string) => ({
     id,
@@ -59,8 +60,28 @@ async function main() {
       ],
     });
     await db.customBuild.create({ data: buildData(`${suffix}due`, past, `gallery/${suffix}/due.svg`) });
+    const empty = await db.customBuild.create({ data: {
+      ...buildData(`${suffix}empty`, new Date(past.getTime() - 60_000), `gallery/${suffix}/empty.svg`),
+      artifacts: undefined, storedByteSize: 0, objectsDeletedAt: past, deletionPendingAt: null,
+    } });
+    assert.deepEqual(await purgePendingCustomBuildArtifacts({
+      now, limit: 1, deleteArtifact: async ({ path }) => { deletedPaths.push(path); },
+    }), { objectsDeleted: 1, objectDeletionFailures: 0 }, "empty retained metadata must not block pending artifact cleanup");
+    await db.customBuild.delete({ where: { id: empty.id } });
     await db.customBuild.create({ data: buildData(`${suffix}failed`, past, `gallery/${suffix}/failed.svg`) });
     await db.customBuild.create({ data: buildData(`${suffix}future`, future, `gallery/${suffix}/future.svg`) });
+    for (const status of ["queued", "running", "failed"] as const) {
+      await db.customBuild.create({ data: {
+        ...buildData(`${suffix}protected-${status}`, past, `gallery/${suffix}/protected-${status}-source.svg`),
+        status, removedAt: null, deletionPendingAt: past, errorRetryable: true,
+      } });
+    }
+    for (const errorRetryable of [false, null]) {
+      await db.customBuild.create({ data: {
+        ...buildData(`${suffix}terminal-${errorRetryable}`, past, `gallery/${suffix}/terminal-${errorRetryable}.svg`),
+        status: "failed", removedAt: null, errorRetryable,
+      } });
+    }
     const retainedBuild = await db.customBuild.create({
       data: buildData(`${suffix}retained`, future, `gallery/${suffix}/retained-preview.svg`),
     });
@@ -211,11 +232,20 @@ async function main() {
       `gallery/${suffix}/due.svg`,
       `gallery/${suffix}/future.svg`,
       `gallery/${suffix}/retained-build.json.gz`,
+      `gallery/${suffix}/terminal-false.svg`,
+      `gallery/${suffix}/terminal-null.svg`,
     ]);
     assert.equal(await db.customBuild.count({ where: { id: `${suffix}due` } }), 0);
     assert.equal(await db.customBuild.count({ where: { id: `${suffix}failed` } }), 1);
     assert.match((await db.customBuild.findUniqueOrThrow({ where: { id: `${suffix}failed` } })).deletionError ?? "", /storage unavailable/);
     assert.equal(await db.customBuild.count({ where: { id: `${suffix}future` } }), 1);
+    for (const status of ["queued", "running", "failed"]) {
+      assert.equal(await db.customBuildArtifact.count({ where: { customBuildId: `${suffix}protected-${status}` } }), 1,
+        "stale cleanup flags must not delete live or recoverable build sources");
+    }
+    for (const errorRetryable of [false, null]) {
+      assert.equal(await db.customBuildArtifact.count({ where: { customBuildId: `${suffix}terminal-${errorRetryable}` } }), 0);
+    }
     const retained = await db.customBuild.findUniqueOrThrow({
       where: { id: retainedBuild.id },
       include: { artifacts: true },

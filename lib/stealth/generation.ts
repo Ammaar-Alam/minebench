@@ -14,7 +14,11 @@ import {
   uploadSupabaseStorageFile,
 } from "@/lib/storage/buildPayload";
 import { writeCanonicalBuildArtifact } from "@/lib/voxel/canonicalArtifact";
-import type { VoxelBuild } from "@/lib/voxel/types";
+import {
+  toObjectBackedVoxelBuild,
+  voxelBuildBlockCount,
+  type RenderableVoxelBuild,
+} from "@/lib/voxel/packedBlocks";
 
 const GRID_SIZE = 256;
 const PALETTE = "simple";
@@ -73,7 +77,7 @@ function storageConfig(): { url: string; key: string; bucket: string } | null {
 function preparePayload(params: {
   variantId: string;
   promptSlug: string;
-  build: VoxelBuild;
+  build: RenderableVoxelBuild;
   sha256: string;
   target?: { bucket: string; path: string };
 }): PreparedPayload {
@@ -81,7 +85,7 @@ function preparePayload(params: {
   if (isLoopbackDatabaseUrl(databaseUrl)) {
     return {
       stored: {
-        voxelData: params.build as unknown as Prisma.InputJsonValue,
+        voxelData: toObjectBackedVoxelBuild(params.build) as unknown as Prisma.InputJsonValue,
         voxelStorageBucket: null,
         voxelStoragePath: null,
         voxelStorageEncoding: null,
@@ -166,7 +170,7 @@ function retryPayloadTarget(build: ExistingBuild): { bucket: string; path: strin
 
 async function maybePrecomputeRemoteArtifacts(
   build: ExistingBuild,
-  fullBuild?: VoxelBuild,
+  fullBuild?: RenderableVoxelBuild,
 ): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL ?? process.env.DIRECT_URL ?? "";
   if (!isLoopbackDatabaseUrl(databaseUrl)) {
@@ -190,12 +194,12 @@ export async function persistStealthBuild(params: {
   modelId: string;
   promptSlug: string;
   promptText: string;
-  build: VoxelBuild;
+  build: RenderableVoxelBuild;
   generationTimeMs: number;
 }): Promise<{ id: string; blockCount: number; created: boolean }> {
   const artifact = await writeCanonicalBuildArtifact(params.build);
   const sha256 = artifact.sourceSha256;
-  const blockCount = params.build.blocks.length;
+  const blockCount = voxelBuildBlockCount(params.build);
   try {
     const prompt = await prisma.prompt.upsert({
       where: { text: params.promptText },

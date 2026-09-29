@@ -18,6 +18,7 @@ const packed = packVoxelBlocks([
   { x: 1, y: 1, z: 0, type: "glass" },
   { x: 2, y: 0, z: 0, type: "water" },
   { x: 3, y: 0, z: 0, type: "glowstone" },
+  { x: 8191, y: 8191, z: 8191, type: "stone" },
 ]);
 
 const facts = createVoxelMeshFacts(packed);

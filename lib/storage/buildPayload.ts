@@ -11,7 +11,7 @@ import {
   type SupabaseStorageConfig,
 } from "@/lib/storage/config";
 
-const STORAGE_DELETE_BATCH_SIZE = 100;
+const STORAGE_DELETE_BATCH_SIZE = 1000;
 
 export {
   DEFAULT_BUILD_STORAGE_BUCKET,
@@ -110,6 +110,7 @@ export async function deleteSupabaseStorageObjects(
           body: JSON.stringify({ prefixes: paths.slice(index, index + STORAGE_DELETE_BATCH_SIZE) }),
         },
       );
+      await response.body?.cancel().catch(() => undefined);
       if (!response.ok) throw new Error(`Storage deletion failed (${response.status})`);
     }
   }

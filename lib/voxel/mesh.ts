@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import type { BlockDefinition } from "@/lib/blocks/palettes";
-import { getRenderKind } from "@/lib/blocks/registry";
-import { getAtlasUv, hasAtlasKey } from "@/lib/blocks/atlas";
+import { getRenderKind, hasLeafTint } from "@/lib/blocks/registry";
+import { ATLAS, getAtlasUv, hasAtlasKey } from "@/lib/blocks/atlas";
 import { Face, getTextureKey } from "@/lib/blocks/textures";
 import { isVoxelOccluder } from "@/lib/voxel/renderVisibility";
 import type { VoxelBuild } from "@/lib/voxel/types";
@@ -22,6 +22,11 @@ import {
 } from "@/lib/voxel/meshBuckets";
 import { getCachedMeshPayload, setCachedMeshPayload } from "@/lib/voxel/meshPayloadCache";
 import {
+  packVoxelPlaneCell,
+  unpackVoxelPlaneCellU,
+  unpackVoxelPlaneCellV,
+} from "@/lib/voxel/coordinateKeys";
+import {
   canBlockEmitAnyFace,
   computeFaceAO,
   DIRS,
@@ -32,6 +37,12 @@ import {
   copyVoxelMeshFacts,
   type VoxelMeshFacts,
 } from "@/lib/voxel/meshFacts";
+import {
+  buildWorldRegionGreedyMeshPayload,
+  type WorldRegionMeshOptions,
+} from "@/lib/voxel/worldRegionMesh";
+import { WORLD_QUAD_TINT_LEAVES, WORLD_QUAD_TINT_WHITE, type WorldQuadPayload } from "@/lib/voxel/worldQuadData";
+import { configureWorldQuadMesh, createWorldQuadGeometry, WORLD_QUAD_TEXTURE_CAPACITY } from "@/lib/voxel/worldQuadGeometry";
 
 export type { SerializedMeshBucket } from "@/lib/voxel/meshBuckets";
 
@@ -63,6 +74,7 @@ type CreateVoxelGroupAsyncOpts = {
   // Optional in-flight or resolved worker mesh promise (e.g. from background premeshing).
   premeshedPayloadPromise?: Promise<VoxelMeshPayload> | null;
   onPremeshedPayloadConsumed?: (promise: Promise<VoxelMeshPayload>) => void;
+  worldRegion?: WorldRegionMeshOptions;
 };
 
 const LOCAL_MESH_MAX_BLOCKS = Number.parseInt(
@@ -88,6 +100,7 @@ export type VoxelMeshPayload = {
   transparent: SerializedMeshBucket | null;
   water: SerializedMeshBucket | null;
   emissive: SerializedMeshBucket | null;
+  worldQuads?: WorldQuadPayload;
   bounds: SerializedBuildBounds;
   filteredBlockCount: number;
 };
@@ -185,37 +198,7 @@ type PreparedMeshData = {
   cz: number;
 };
 
-const POSITION_BITS = 10;
-const POSITION_MASK = (1 << POSITION_BITS) - 1;
 const WATER_BLOCK_ID = "water";
-
-function encodePosition(x: number, y: number, z: number): number {
-  return x | (y << POSITION_BITS) | (z << (POSITION_BITS * 2));
-}
-
-function decodePositionX(value: number): number {
-  return value & POSITION_MASK;
-}
-
-function decodePositionY(value: number): number {
-  return (value >> POSITION_BITS) & POSITION_MASK;
-}
-
-function decodePositionZ(value: number): number {
-  return (value >> (POSITION_BITS * 2)) & POSITION_MASK;
-}
-
-function packPlaneCell(u: number, v: number): number {
-  return u | (v << POSITION_BITS);
-}
-
-function unpackPlaneCellU(value: number): number {
-  return value & POSITION_MASK;
-}
-
-function unpackPlaneCellV(value: number): number {
-  return value >> POSITION_BITS;
-}
 
 function srgbByteToLinear(byte: number): number {
   const s = Math.min(1, Math.max(0, byte / 255));
@@ -236,11 +219,14 @@ const TINT_WATER = hexToLinearRgb(0x3f76e4);
 const TINT_WHITE: [number, number, number] = [1, 1, 1];
 const WATER_TEXTURE_KEY = "water_still";
 const WATER_SURFACE_OPACITY = 0.60;
+const LEAF_ATLAS_WORDS = new Set(Object.entries(ATLAS.keys)
+  .filter(([key]) => hasLeafTint(key))
+  .map(([, tile]) => (tile.x | ((ATLAS.atlasHeight - tile.y - tile.h) << 16)) >>> 0));
 
 let cachedWaterTexture: { atlasTexture: THREE.Texture; texture: THREE.Texture } | null = null;
 
 function faceTint(blockType: string, face: Face): [number, number, number] {
-  if (blockType === "oak_leaves") return TINT_LEAVES;
+  if (hasLeafTint(blockType)) return TINT_LEAVES;
   if (blockType === WATER_BLOCK_ID) return TINT_WATER;
   if (blockType === "grass_block" && face === "up") return TINT_GRASS;
   return TINT_WHITE;
@@ -340,6 +326,20 @@ function getWaterSurfaceTexture(atlasTexture: THREE.Texture): THREE.Texture | nu
   return texture;
 }
 
+export function createWaterSurfaceMaterial(atlasTexture: THREE.Texture): THREE.MeshLambertMaterial {
+  return new THREE.MeshLambertMaterial({
+    map: getWaterSurfaceTexture(atlasTexture),
+    color: 0xffffff,
+    transparent: true,
+    opacity: WATER_SURFACE_OPACITY,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    emissive: new THREE.Color(0x0b214f),
+    emissiveIntensity: 0.18,
+    vertexColors: true,
+  });
+}
+
 function buildBoundsFromPrepared(prepared: PreparedMeshData) {
   const box = new THREE.Box3(
     new THREE.Vector3(
@@ -397,6 +397,14 @@ function collectPayloadTransferables(payload: VoxelMeshPayload): Transferable[] 
       bucket.colors.buffer,
       bucket.indices.buffer,
     );
+  }
+  for (const quads of Object.values(payload.worldQuads ?? {})) {
+    if (quads instanceof Uint32Array) transferables.push(quads.buffer);
+  }
+  const depth = payload.worldQuads?.transparentDepth;
+  if (depth?.quads) transferables.push(depth.quads.buffer);
+  for (const page of [...payload.worldQuads?.surfaces ?? [], ...depth?.surfaces ?? []]) {
+    transferables.push(page.quads.buffer, page.texels.buffer);
   }
   return transferables;
 }
@@ -672,22 +680,22 @@ function collectWaterPlanes(prepared: PreparedMeshData) {
 
       switch (d.face) {
         case "east":
-          getOrCreatePlane(planes, d.face, block.x + 1).cells.add(packPlaneCell(block.y, block.z));
+          getOrCreatePlane(planes, d.face, block.x + 1).cells.add(packVoxelPlaneCell(block.y, block.z));
           break;
         case "west":
-          getOrCreatePlane(planes, d.face, block.x).cells.add(packPlaneCell(block.y, block.z));
+          getOrCreatePlane(planes, d.face, block.x).cells.add(packVoxelPlaneCell(block.y, block.z));
           break;
         case "north":
-          getOrCreatePlane(planes, d.face, block.z).cells.add(packPlaneCell(block.x, block.y));
+          getOrCreatePlane(planes, d.face, block.z).cells.add(packVoxelPlaneCell(block.x, block.y));
           break;
         case "south":
-          getOrCreatePlane(planes, d.face, block.z + 1).cells.add(packPlaneCell(block.x, block.y));
+          getOrCreatePlane(planes, d.face, block.z + 1).cells.add(packVoxelPlaneCell(block.x, block.y));
           break;
         case "up":
-          getOrCreatePlane(planes, d.face, block.y + 1).cells.add(packPlaneCell(block.x, block.z));
+          getOrCreatePlane(planes, d.face, block.y + 1).cells.add(packVoxelPlaneCell(block.x, block.z));
           break;
         case "down":
-          getOrCreatePlane(planes, d.face, block.y).cells.add(packPlaneCell(block.x, block.z));
+          getOrCreatePlane(planes, d.face, block.y).cells.add(packVoxelPlaneCell(block.x, block.z));
           break;
       }
     }
@@ -792,8 +800,8 @@ function appendMergedPlaneFaces(
   let maxV = -Infinity;
 
   for (const cell of cells) {
-    const u = unpackPlaneCellU(cell);
-    const v = unpackPlaneCellV(cell);
+    const u = unpackVoxelPlaneCellU(cell);
+    const v = unpackVoxelPlaneCellV(cell);
     minU = Math.min(minU, u);
     minV = Math.min(minV, v);
     maxU = Math.max(maxU, u);
@@ -807,8 +815,8 @@ function appendMergedPlaneFaces(
   const mask = new Uint8Array(width * height);
 
   for (const cell of cells) {
-    const u = unpackPlaneCellU(cell) - minU;
-    const v = unpackPlaneCellV(cell) - minV;
+    const u = unpackVoxelPlaneCellU(cell) - minU;
+    const v = unpackVoxelPlaneCellV(cell) - minV;
     mask[v * width + u] = 1;
   }
 
@@ -883,22 +891,22 @@ async function buildWaterSurfaceBucketAsync(
 
       switch (d.face) {
         case "east":
-          getOrCreatePlane(planes, d.face, block.x + 1).cells.add(packPlaneCell(block.y, block.z));
+          getOrCreatePlane(planes, d.face, block.x + 1).cells.add(packVoxelPlaneCell(block.y, block.z));
           break;
         case "west":
-          getOrCreatePlane(planes, d.face, block.x).cells.add(packPlaneCell(block.y, block.z));
+          getOrCreatePlane(planes, d.face, block.x).cells.add(packVoxelPlaneCell(block.y, block.z));
           break;
         case "north":
-          getOrCreatePlane(planes, d.face, block.z).cells.add(packPlaneCell(block.x, block.y));
+          getOrCreatePlane(planes, d.face, block.z).cells.add(packVoxelPlaneCell(block.x, block.y));
           break;
         case "south":
-          getOrCreatePlane(planes, d.face, block.z + 1).cells.add(packPlaneCell(block.x, block.y));
+          getOrCreatePlane(planes, d.face, block.z + 1).cells.add(packVoxelPlaneCell(block.x, block.y));
           break;
         case "up":
-          getOrCreatePlane(planes, d.face, block.y + 1).cells.add(packPlaneCell(block.x, block.z));
+          getOrCreatePlane(planes, d.face, block.y + 1).cells.add(packVoxelPlaneCell(block.x, block.z));
           break;
         case "down":
-          getOrCreatePlane(planes, d.face, block.y).cells.add(packPlaneCell(block.x, block.z));
+          getOrCreatePlane(planes, d.face, block.y).cells.add(packVoxelPlaneCell(block.x, block.z));
           break;
       }
     }
@@ -944,7 +952,6 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
   const water = buildWaterSurfaceBucket(prepared);
 
   configureAtlasTexture(atlasTexture);
-  const waterTexture = getWaterSurfaceTexture(atlasTexture);
 
   const matOpaque = new THREE.MeshLambertMaterial({ map: atlasTexture, vertexColors: true });
   const matCutout = new THREE.MeshLambertMaterial({
@@ -959,17 +966,7 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
     depthWrite: false,
     vertexColors: true,
   });
-  const matWater = new THREE.MeshLambertMaterial({
-    map: waterTexture ?? undefined,
-    color: 0xffffff,
-    transparent: true,
-    opacity: WATER_SURFACE_OPACITY,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    emissive: new THREE.Color(0x0b214f),
-    emissiveIntensity: 0.18,
-    vertexColors: true,
-  });
+  const matWater = createWaterSurfaceMaterial(atlasTexture);
   const matEmissive = new THREE.MeshBasicMaterial({
     map: atlasTexture,
     vertexColors: true,
@@ -1018,6 +1015,7 @@ type MeshWorkerRequest =
       blocks: TransferableVoxelBlocks;
       allowedBlockIds: string[];
       blockLimit?: number;
+      worldRegion?: WorldRegionMeshOptions;
     }
   | {
       type: "mesh-facts";
@@ -1045,7 +1043,6 @@ export function createVoxelGroupFromMeshPayload(
 ): VoxelGroup {
   const bounds = deserializeBounds(payload.bounds);
   configureAtlasTexture(atlasTexture);
-  const waterTexture = getWaterSurfaceTexture(atlasTexture);
 
   const matOpaque = new THREE.MeshLambertMaterial({ map: atlasTexture, vertexColors: true });
   const matCutout = new THREE.MeshLambertMaterial({
@@ -1060,17 +1057,7 @@ export function createVoxelGroupFromMeshPayload(
     depthWrite: false,
     vertexColors: true,
   });
-  const matWater = new THREE.MeshLambertMaterial({
-    map: waterTexture ?? undefined,
-    color: 0xffffff,
-    transparent: true,
-    opacity: WATER_SURFACE_OPACITY,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    emissive: new THREE.Color(0x0b214f),
-    emissiveIntensity: 0.18,
-    vertexColors: true,
-  });
+  const matWater = createWaterSurfaceMaterial(atlasTexture);
   const matEmissive = new THREE.MeshBasicMaterial({
     map: atlasTexture,
     vertexColors: true,
@@ -1079,21 +1066,72 @@ export function createVoxelGroupFromMeshPayload(
   const group = new THREE.Group();
   group.name = "VoxelGroup";
 
-  const geoOpaque = buildGeometryFromSerialized(payload.opaque, bounds);
-  const geoCutout = buildGeometryFromSerialized(payload.cutout, bounds);
-  const geoTransparent = buildGeometryFromSerialized(payload.transparent, bounds);
-  const geoWater = buildGeometryFromSerialized(payload.water, bounds);
-  const geoEmissive = buildGeometryFromSerialized(payload.emissive, bounds);
+  const worldQuads = payload.worldQuads;
+  const addMesh = (
+    kind: "opaque" | "cutout" | "transparent" | "water" | "emissive",
+    material: THREE.Material,
+    words: Uint32Array | null = worldQuads?.[kind] ?? null,
+    depthOnly = false,
+  ) => {
+    const append = (geometry: THREE.BufferGeometry | null, partMaterial: THREE.Material) => {
+      if (!geometry) return;
+      const mesh = new THREE.Mesh(geometry, partMaterial);
+      if (worldQuads) configureWorldQuadMesh(mesh, worldQuads.anchor, kind === "water");
+      if (kind === "water") mesh.renderOrder = 1;
+      if (depthOnly) {
+        mesh.visible = false;
+        mesh.userData.worldDepthRole = "replacement";
+      } else if (kind === "transparent" && worldQuads?.transparentDepth) {
+        mesh.userData.worldDepthRole = "source";
+      }
+      group.add(mesh);
+    };
+    if (!worldQuads) {
+      append(buildGeometryFromSerialized(payload[kind], bounds), material);
+      return;
+    }
+    if (!words) return;
+    if (kind === "cutout") {
+      // saved meshes can predate advanced foliage tint support
+      for (let offset = 0; offset < words.length; offset += 4) {
+        if ((words[offset + 3]! & 3) === WORLD_QUAD_TINT_WHITE && LEAF_ATLAS_WORDS.has(words[offset + 2]!)) {
+          words[offset + 3] = (words[offset + 3]! & ~3) | WORLD_QUAD_TINT_LEAVES;
+        }
+      }
+    }
+    const pageWords = WORLD_QUAD_TEXTURE_CAPACITY * 4;
+    for (let offset = 0; offset < words.length; offset += pageWords) {
+      append(createWorldQuadGeometry(words.subarray(offset, offset + pageWords), bounds), offset === 0 ? material : material.clone());
+    }
+  };
+  addMesh("opaque", matOpaque);
+  addMesh("cutout", matCutout);
+  addMesh("transparent", matTransparent);
+  addMesh("water", matWater);
+  addMesh("emissive", matEmissive);
+  if (worldQuads?.transparentDepth) {
+    addMesh("transparent", matTransparent.clone(), worldQuads.transparentDepth.quads, true);
+  }
 
-  if (geoOpaque) group.add(new THREE.Mesh(geoOpaque, matOpaque));
-  if (geoCutout) group.add(new THREE.Mesh(geoCutout, matCutout));
-  if (geoTransparent) group.add(new THREE.Mesh(geoTransparent, matTransparent));
-  if (geoWater) {
-    const mesh = new THREE.Mesh(geoWater, matWater);
-    mesh.renderOrder = 1;
+  for (const [pages, material, depthOnly] of [
+    [worldQuads?.surfaces ?? [], matOpaque, false],
+    [worldQuads?.transparentDepth?.surfaces ?? [], matTransparent, true],
+  ] as const) for (const page of pages) {
+    const geometry = createWorldQuadGeometry(page.quads, bounds);
+    if (!geometry) continue;
+    // keep texture residency from retaining the other decoded mesh buckets
+    const texels = page.texels.byteLength === page.texels.buffer.byteLength ? page.texels : page.texels.slice();
+    const texture = new THREE.DataTexture(texels, page.width, page.height, THREE.RedIntegerFormat, THREE.UnsignedIntType);
+    texture.internalFormat = "R32UI";
+    texture.needsUpdate = true;
+    const mesh = new THREE.Mesh(geometry, material.clone());
+    configureWorldQuadMesh(mesh, worldQuads!.anchor, false, texture);
+    if (depthOnly) {
+      mesh.visible = false;
+      mesh.userData.worldDepthRole = "replacement";
+    }
     group.add(mesh);
   }
-  if (geoEmissive) group.add(new THREE.Mesh(geoEmissive, matEmissive));
 
   return {
     group,
@@ -1108,7 +1146,7 @@ export async function createVoxelMeshPayloadInWorker(
   palette: BlockDefinition[],
   opts?: CreateVoxelGroupAsyncOpts,
 ): Promise<{ payload: VoxelMeshPayload; cacheStatus: VoxelMeshCacheStatus }> {
-  const cacheKey = opts?.cacheKey?.trim();
+  const cacheKey = opts?.worldRegion ? undefined : opts?.cacheKey?.trim();
   if (cacheKey) {
     const cached = await getCachedMeshPayload(cacheKey);
     if (cached) return { payload: cached, cacheStatus: "hit" };
@@ -1188,7 +1226,9 @@ export async function createVoxelMeshPayloadInWorker(
     }
     opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
-    const usableMeshFacts = getUsableMeshFacts(build, opts?.blockLimit);
+    const usableMeshFacts = opts?.worldRegion
+      ? null
+      : getUsableMeshFacts(build, opts?.blockLimit);
     if (usableMeshFacts) {
       const facts = copyVoxelMeshFacts(usableMeshFacts);
       const request: MeshWorkerRequest = {
@@ -1209,16 +1249,37 @@ export async function createVoxelMeshPayloadInWorker(
     // trimmed copy: transferring the live arrays would detach them.
     const blocks = build.packed
       ? copyPackedVoxelBlocks(build.packed, opts?.blockLimit)
-      : encodeTransferableVoxelBlocks(build.blocks);
+      : opts?.worldRegion && typeof opts.blockLimit === "number" && Number.isFinite(opts.blockLimit)
+        ? packVoxelBlocks(build.blocks.slice(0, Math.max(0, Math.floor(opts.blockLimit))))
+        : encodeTransferableVoxelBlocks(build.blocks);
+    const worldRegion = opts?.worldRegion
+      ? {
+          size: { ...opts.worldRegion.size },
+          ...(opts.worldRegion.halo ? { halo: copyPackedVoxelBlocks(opts.worldRegion.halo) } : {}),
+        }
+      : undefined;
     const request: MeshWorkerRequest = {
       type: "build",
       blocks,
       allowedBlockIds: palette.map((entry) => entry.id),
       // the filled prefix is authoritative; array length alone would let any
       // trailing slack render as blocks at the origin
-      blockLimit: Math.min(blocks.count, opts?.blockLimit ?? Number.POSITIVE_INFINITY),
+      ...(worldRegion
+        ? {}
+        : { blockLimit: Math.min(blocks.count, opts?.blockLimit ?? Number.POSITIVE_INFINITY) }),
+      ...(worldRegion ? { worldRegion } : {}),
     };
-    worker.postMessage(request, [blocks.positions.buffer, blocks.typeIds.buffer]);
+    const transferables: Transferable[] = [
+      blocks.positions.buffer as ArrayBuffer,
+      blocks.typeIds.buffer as ArrayBuffer,
+    ];
+    if (worldRegion?.halo) {
+      transferables.push(
+        worldRegion.halo.positions.buffer as ArrayBuffer,
+        worldRegion.halo.typeIds.buffer as ArrayBuffer,
+      );
+    }
+    worker.postMessage(request, transferables);
   });
   return { payload, cacheStatus };
 }
@@ -1245,6 +1306,28 @@ async function createVoxelGroupAsyncLocal(
   opts?: CreateVoxelGroupAsyncOpts,
   strategy: VoxelMeshStrategy = "local",
 ): Promise<VoxelGroup> {
+  if (opts?.worldRegion) {
+    throwIfAborted(opts.signal);
+    const blocks = packedOrObjectBuild.packed
+      ? copyPackedVoxelBlocks(packedOrObjectBuild.packed, opts.blockLimit)
+      : typeof opts.blockLimit === "number" && Number.isFinite(opts.blockLimit)
+        ? packVoxelBlocks(packedOrObjectBuild.blocks.slice(0, Math.max(0, Math.floor(opts.blockLimit))))
+        : encodeTransferableVoxelBlocks(packedOrObjectBuild.blocks);
+    const payload = buildWorldRegionGreedyMeshPayload(
+      blocks,
+      palette.map((entry) => entry.id),
+      opts.worldRegion,
+    );
+    opts.onStage?.({
+      stage: "mesh_payload_complete",
+      strategy,
+      cacheStatus: "not-used",
+      blockCount: payload.filteredBlockCount,
+    });
+    throwIfAborted(opts.signal);
+    return createVoxelGroupFromMeshPayload(payload, atlasTexture);
+  }
+
   // Main-thread meshing walks block objects. This is the small-build path and
   // the worker-failure fallback, so materializing here costs no more than the
   // object representation this change removes everywhere else.
@@ -1305,7 +1388,6 @@ async function createVoxelGroupAsyncLocal(
   });
 
   configureAtlasTexture(atlasTexture);
-  const waterTexture = getWaterSurfaceTexture(atlasTexture);
 
   const matOpaque = new THREE.MeshLambertMaterial({ map: atlasTexture, vertexColors: true });
   const matCutout = new THREE.MeshLambertMaterial({
@@ -1320,17 +1402,7 @@ async function createVoxelGroupAsyncLocal(
     depthWrite: false,
     vertexColors: true,
   });
-  const matWater = new THREE.MeshLambertMaterial({
-    map: waterTexture ?? undefined,
-    color: 0xffffff,
-    transparent: true,
-    opacity: WATER_SURFACE_OPACITY,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    emissive: new THREE.Color(0x0b214f),
-    emissiveIntensity: 0.18,
-    vertexColors: true,
-  });
+  const matWater = createWaterSurfaceMaterial(atlasTexture);
   const matEmissive = new THREE.MeshBasicMaterial({
     map: atlasTexture,
     vertexColors: true,
@@ -1443,7 +1515,7 @@ export async function createVoxelGroupAsync(
   }
 
   try {
-    const workerStrategy: VoxelMeshStrategy = getUsableMeshFacts(build, blockLimit)
+    const workerStrategy: VoxelMeshStrategy = !opts?.worldRegion && getUsableMeshFacts(build, blockLimit)
       ? "worker-facts"
       : "worker";
     opts?.onStage?.({ stage: "mesh_started", strategy: workerStrategy });

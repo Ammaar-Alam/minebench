@@ -9,6 +9,7 @@ import { ServerTiming } from "@/lib/serverTiming";
 import { databaseIdentityFromUrl } from "@/lib/db/identity";
 import { getSupabaseStorageReadiness } from "@/lib/storage/buildPayload";
 import { PUBLIC_SESSION_RETENTION_MS } from "@/lib/publicPresence";
+import { customBuildJsonNumber } from "@/lib/custom-builds/numericMetadata";
 
 export const runtime = "nodejs";
 
@@ -153,11 +154,11 @@ async function getCustomBuildOpsStatus() {
     },
     artifacts: {
       objects: artifactAggregate._count.id,
-      compressedBytes: artifactAggregate._sum.compressedByteSize ?? 0,
-      logicalBytes: artifactAggregate._sum.byteSize ?? 0,
-      storedBytes: artifactAggregate._sum.storedByteSize ?? 0,
+      compressedBytes: customBuildJsonNumber(artifactAggregate._sum.compressedByteSize, "CustomBuildArtifact.compressedByteSize") ?? 0,
+      logicalBytes: customBuildJsonNumber(artifactAggregate._sum.byteSize, "CustomBuildArtifact.byteSize") ?? 0,
+      storedBytes: customBuildJsonNumber(artifactAggregate._sum.storedByteSize, "CustomBuildArtifact.storedByteSize") ?? 0,
     },
-    retainedStoredBytes: retainedAggregate._sum.storedByteSize ?? 0,
+    retainedStoredBytes: customBuildJsonNumber(retainedAggregate._sum.storedByteSize, "CustomBuild.storedByteSize") ?? 0,
     pendingObjectDeletions,
     purgeBacklog:
       dueGenerations + dueCandidates + dueExamples + dueModerationRecords + duePublicSessions,

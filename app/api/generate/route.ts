@@ -1,4 +1,8 @@
+import { isGridSize, MAX_GENERATION_PROMPT_CHARS, type GridSize } from "@/lib/ai/limits";
 import { z } from "zod";
+import { getAuthenticatedUserId } from "@/lib/auth/request";
+import { requireMineBenchAdmin } from "@/lib/gallery/service";
+import { apiServiceError } from "@/lib/gallery/api";
 import { NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
 import {
@@ -69,8 +73,8 @@ const modelRequestSchema = z.union([
 ]);
 
 const reqSchema = z.object({
-  prompt: z.string().max(800),
-  gridSize: z.union([z.literal(64), z.literal(256), z.literal(512)]),
+  prompt: z.string().max(MAX_GENERATION_PROMPT_CHARS, `Keep the prompt to ${MAX_GENERATION_PROMPT_CHARS} characters or fewer.`),
+  gridSize: z.custom<GridSize>(isGridSize),
   palette: z.union([z.literal("simple"), z.literal("advanced")]),
   modelKeys: z.array(z.string()).min(1).max(8).optional(),
   models: z.array(modelRequestSchema).min(1).max(8).optional(),
@@ -108,6 +112,17 @@ export async function POST(req: Request) {
   }
 
   const body = parsed.data as GenerateRequest;
+  const preview = new URL(req.url).searchParams.get("preview") === "1";
+  if (body.gridSize > 512) {
+    if (!preview) return NextResponse.json({ error: "Choose a grid size up to 512." }, { status: 400 });
+    const userId = await getAuthenticatedUserId(req);
+    if (!userId) return NextResponse.json({ error: "Sign in to preview this request." }, { status: 401 });
+    try {
+      await requireMineBenchAdmin(userId);
+    } catch (error) {
+      return apiServiceError(error);
+    }
+  }
   const requestedModels: GenerateModelRequest[] =
     body.models && body.models.length > 0
       ? body.models
@@ -161,7 +176,7 @@ export async function POST(req: Request) {
           },
   }));
 
-  if (new URL(req.url).searchParams.get("preview") === "1") {
+  if (preview) {
     if (generationModels.length !== 1) return NextResponse.json({ error: "Select one model." }, { status: 400 });
     const generationModel = generationModels[0].generationModel;
     const previewKeys = Object.fromEntries(

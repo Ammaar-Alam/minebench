@@ -67,7 +67,7 @@ async function main() {
   for (const [kind, kinds] of [
     ["thumbnail", ["preview_svg"]],
     ["preview", ["preview_mbv4"]],
-    ["viewer", ["viewer_mbf1", "viewer_mbv4"]],
+    ["viewer", ["viewer_world", "viewer_mbf1", "viewer_mbv4"]],
   ] as const) {
     const response = await get(kind, kind === "thumbnail" ? "" : "?format=png");
     assert.equal(response.status, 307);

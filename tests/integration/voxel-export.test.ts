@@ -1,4 +1,4 @@
-import { deepStrictEqual } from "node:assert/strict";
+import { deepStrictEqual, throws } from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,12 +10,19 @@ import {
   buildVoxelGlb,
   buildVoxelStl,
   buildVoxelVox,
+  exportVoxelBuild,
 } from "../../lib/voxel/export";
 import type { VoxelBuild } from "../../lib/voxel/types";
 
 const OUT_DIR = join(tmpdir(), "minebench-export-verify");
 const EXPORT_PERFORMANCE_BUDGET_MS = 2000;
 const enforceExportPerformanceBudget = process.env.MINEBENCH_ENFORCE_EXPORT_PERF_BUDGET === "1";
+
+throws(() => exportVoxelBuild({
+  version: "1.0",
+  blocks: [],
+  boxes: [{ x1: 0, y1: 0, z1: 0, x2: 8191, y2: 8191, z2: 8191, type: "stone" }],
+}, getPalette("simple"), "glb"), /Download its JSON/);
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -165,6 +172,22 @@ async function main() {
   await writeFile(`${OUT_DIR}/fixture.stl`, stl);
   await writeFile(`${OUT_DIR}/fixture.schem`, schem);
   await writeFile(`${OUT_DIR}/fixture.vox`, voxRaw.bytes);
+
+  const highCoordinateGeometry = buildVoxelExportGeometry(
+    {
+      version: "1.0",
+      blocks: [
+        { x: 0, y: 0, z: 0, type: "water" },
+        { x: 0, y: 1024, z: 0, type: "water" },
+        { x: 8191, y: 8191, z: 8191, type: "stone" },
+      ],
+    },
+    palette,
+  );
+  const waterBucket = highCoordinateGeometry.buckets.find((bucket) => bucket.blockId === "water");
+  assert(waterBucket, "high-coordinate export should include water geometry");
+  deepStrictEqual(highCoordinateGeometry.bounds.max, [8191, 8191, 8191]);
+  assert(waterBucket.faceCount === 12, "water faces should not alias across 1024-cell gaps");
 
   const largeBuild = makeHundredThousandBlockBuild();
   const t0 = performance.now();

@@ -92,13 +92,13 @@ async function main() {
   });
   const failures: Failure[] = [];
   const referencedPaths = new Set<string>();
-  let storedBytes = 0;
+  let storedBytes = 0n;
   let pendingDeletions = 0;
 
   for (const generation of generations) {
     if (!generation.ownerId && !generation.removedAt) failures.push({ generationId: generation.publicId, reason: "active generation has no owner" });
     if (generation.deletionPendingAt) pendingDeletions += 1;
-    const artifactBytes = generation.artifacts.reduce((sum, artifact) => sum + artifact.storedByteSize, 0);
+    const artifactBytes = generation.artifacts.reduce((sum, artifact) => sum + artifact.storedByteSize, 0n);
     storedBytes += artifactBytes;
     if (artifactBytes !== generation.storedByteSize) failures.push({ generationId: generation.publicId, reason: `stored-byte total is ${generation.storedByteSize}; artifacts total ${artifactBytes}` });
     for (const artifact of generation.artifacts) {
@@ -112,7 +112,7 @@ async function main() {
       if (deep && bucket === LOCAL_BUILD_STORAGE_BUCKET) {
         try {
           const info = await stat(localObjectPath(artifact.path));
-          if (info.size !== artifact.storedByteSize) failures.push({ generationId: generation.publicId, artifact: artifact.path, reason: `object size is ${info.size}; expected ${artifact.storedByteSize}` });
+          if (BigInt(info.size) !== artifact.storedByteSize) failures.push({ generationId: generation.publicId, artifact: artifact.path, reason: `object size is ${info.size}; expected ${artifact.storedByteSize}` });
         } catch (error) {
           if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") failures.push({ generationId: generation.publicId, artifact: artifact.path, reason: "object is missing" });
           else throw error;
@@ -136,7 +136,7 @@ async function main() {
     }
   }
 
-  console.log(JSON.stringify({ generations: generations.length, artifacts: referencedPaths.size, storedBytes, pendingDeletions, failures: failures.length, deep }, null, 2));
+  console.log(JSON.stringify({ generations: generations.length, artifacts: referencedPaths.size, storedBytes: storedBytes.toString(), pendingDeletions, failures: failures.length, deep }, null, 2));
   for (const failure of failures) console.error(JSON.stringify(failure));
   if (failures.length > 0) process.exitCode = 1;
 }

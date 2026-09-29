@@ -74,6 +74,9 @@ assert.ok(
     yours.includes('/retry`') &&
     yours.includes("loadModelRequestOverrideProfiles") &&
     yours.includes("providerRequestOverridesFromEntries") &&
+    yours.includes("isSavedGenerationRecovery(generation.error?.code, generation.imported)") &&
+    yours.includes("recoveryOnly ? undefined : loadProviderKeysFromStorage()") &&
+    yours.includes("recoveryOnly ? undefined : loadModelRequestOverrideProfiles()") &&
     yours.includes("customHeaders: overrides.headers") &&
     yours.includes("customBody: overrides.body") &&
     !yours.includes("Add the required API key") &&

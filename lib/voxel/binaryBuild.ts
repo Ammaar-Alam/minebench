@@ -3,7 +3,9 @@ import {
   packVoxelBlocks,
   type PackedVoxelBlocks,
 } from "@/lib/voxel/packedBlocks";
+import { MAX_VOXEL_COORDINATE } from "@/lib/voxel/coordinateKeys";
 import type { VoxelBlock } from "@/lib/voxel/types";
+import type { MixedVoxelWorldRegion } from "@/lib/voxel/worldRegions";
 
 // Binary v4 build encoding.
 //
@@ -30,8 +32,8 @@ export const BINARY_BUILD_VERSION = 4;
 export const BINARY_BUILD_MAGIC = 0x4d425634;
 export const BINARY_BUILD_HEADER_BYTES = 16;
 
-// validated builds clamp coordinates into the grid, and the largest grid is 512
-const MAX_COORDINATE = 1023;
+// Uint16 can store more, but MineBench's render/export coordinate contract is 0..8191.
+const MAX_COORDINATE = MAX_VOXEL_COORDINATE;
 const MAX_PALETTE_BYTES = 65535;
 // guards allocation from a corrupt or hostile length before anything is read
 const MAX_BLOCKS = 64_000_000;
@@ -103,6 +105,41 @@ export function encodeBinaryVoxelBuild(
   }
 
   return bytes;
+}
+
+export function encodeBinaryVoxelWorldRegion(region: MixedVoxelWorldRegion, paletteIds: readonly string[], sourceSha: string): Uint8Array {
+  const packed = createPackedVoxelBlocks(region.blockCount);
+  const typeIdByName = new Map<string, number>();
+  const strideZ = region.size.x * region.size.y;
+  let write = 0;
+
+  for (let z = 0; z < region.size.z; z += 1) {
+    for (let y = 0; y < region.size.y; y += 1) {
+      for (let x = 0; x < region.size.x; x += 1) {
+        const material = region.materialIndexes[x + y * region.size.x + z * strideZ]!;
+        if (material === 0) continue;
+        const type = paletteIds[material - 1];
+        if (!type) throw new Error("Mixed region referenced an unknown palette entry");
+        let typeId = typeIdByName.get(type);
+        if (typeId === undefined) {
+          typeId = packed.typeNames.length;
+          packed.typeNames.push(type);
+          typeIdByName.set(type, typeId);
+        }
+        packed.positions[write * 3] = x;
+        packed.positions[write * 3 + 1] = y;
+        packed.positions[write * 3 + 2] = z;
+        packed.typeIds[write] = typeId;
+        write += 1;
+      }
+    }
+  }
+
+  if (write !== region.blockCount) {
+    throw new Error("Mixed region block count changed during encoding");
+  }
+  packed.count = write;
+  return encodeBinaryVoxelBuild(packed, sourceSha);
 }
 
 export function isBinaryVoxelBuild(bytes: Uint8Array): boolean {

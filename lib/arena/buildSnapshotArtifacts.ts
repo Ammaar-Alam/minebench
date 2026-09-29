@@ -17,7 +17,11 @@ import {
   uploadArenaBuildArtifact,
 } from "@/lib/arena/artifactOwnership";
 import { withServerSpanSync } from "@/lib/observability/serverTracing";
-import { packVoxelBlocks } from "@/lib/voxel/packedBlocks";
+import {
+  packVoxelBlocks,
+  toObjectBackedVoxelBuild,
+  voxelBuildBlockCount,
+} from "@/lib/voxel/packedBlocks";
 import { createVoxelMeshFacts, encodeVoxelMeshFacts } from "@/lib/voxel/meshFacts";
 import { gunzipSync, gzipSync } from "node:zlib";
 
@@ -260,7 +264,14 @@ function createSnapshotArtifactPayload(
 }
 
 function encodeSnapshotArtifactPayload(payload: SnapshotArtifactPayload): Uint8Array {
-  return gzipSync(ENCODER.encode(JSON.stringify(payload)));
+  return gzipSync(
+    ENCODER.encode(
+      JSON.stringify({
+        ...payload,
+        voxelBuild: toObjectBackedVoxelBuild(payload.voxelBuild),
+      }),
+    ),
+  );
 }
 
 // same envelope, blocks moved into the binary encoding
@@ -269,14 +280,14 @@ function encodeBinarySnapshotArtifactPayload(payload: SnapshotArtifactPayload): 
   return gzipSync(
     encodeBinaryArtifact(
       { ...envelope, version: voxelBuild.version },
-      voxelBuild.blocks,
+      voxelBuild.packed ?? voxelBuild.blocks,
       payload.checksum,
     ),
   );
 }
 
 function encodeMeshFactsSnapshotArtifactPayload(payload: SnapshotArtifactPayload): Uint8Array {
-  const packed = packVoxelBlocks(payload.voxelBuild.blocks);
+  const packed = payload.voxelBuild.packed ?? packVoxelBlocks(payload.voxelBuild.blocks);
   return gzipSync(encodeVoxelMeshFacts(createVoxelMeshFacts(packed)));
 }
 
@@ -284,7 +295,7 @@ export function expectedSnapshotArtifactTargets(
   prepared: PreparedArenaBuild,
 ): ArenaSnapshotArtifactTarget[] {
   const previewNeeded =
-    prepared.previewBuild.blocks.length < prepared.fullBuild.blocks.length;
+    voxelBuildBlockCount(prepared.previewBuild) < voxelBuildBlockCount(prepared.fullBuild);
   const isSnapshotClass =
     prepared.hints.deliveryClass === "snapshot" ||
     prepared.hints.deliveryClass === "inline";
@@ -297,7 +308,7 @@ export function expectedSnapshotArtifactTargets(
   if (previewNeeded) targets.push({ variant: "preview", format: "binary" });
   // Binary full builds are small enough to serve whole for every class
   targets.push({ variant: "full", format: "binary" });
-  if (prepared.fullBuild.blocks.length >= ARENA_MESH_FACTS_MIN_BLOCKS) {
+  if (voxelBuildBlockCount(prepared.fullBuild) >= ARENA_MESH_FACTS_MIN_BLOCKS) {
     targets.push({ variant: "full", format: "mesh-facts" });
   }
 
