@@ -34,6 +34,10 @@ const SandboxGifExportButton = dynamic(
   },
 );
 
+function viewerUrl(generation: SavedGenerationPayload): string | null {
+  return generation.worldViewerUrl ?? generation.viewerUrl;
+}
+
 function statusLabel(generation: SavedGenerationPayload): string {
   if (generation.status === "succeeded") return "Ready";
   if (generation.stage === "retrying") return "Trying again";
@@ -232,6 +236,7 @@ export function SavedBuildDialog({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const url = viewerUrl(generation);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -239,7 +244,7 @@ export function SavedBuildDialog({
   }, []);
 
   useEffect(() => {
-    if (!generation.viewerUrl) {
+    if (!url) {
       setLoading(false);
       setError("Viewer unavailable");
       return;
@@ -248,7 +253,7 @@ export function SavedBuildDialog({
     setBuild(null);
     setLoading(true);
     setError(null);
-    void fetch(generation.viewerUrl, { cache: "no-store", signal: controller.signal })
+    void fetch(url, { cache: "no-store", signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error("Viewer unavailable");
         return readBuildVariantPayload(response, {
@@ -268,7 +273,7 @@ export function SavedBuildDialog({
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [generation.id, generation.sha256, generation.viewerUrl]);
+  }, [generation.id, generation.sha256, url]);
 
   return (
     <dialog
@@ -394,7 +399,7 @@ export function GalleryYours({
   const [cursor, setCursor] = useState(initialCursor);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(targetGeneration?.viewerUrl ? targetGeneration.id : null);
+  const [selectedId, setSelectedId] = useState<string | null>(targetGeneration && viewerUrl(targetGeneration) ? targetGeneration.id : null);
   const scrolledTargetRef = useRef<string | null>(null);
   const selected = items.find((item) => item.id === selectedId) ?? null;
 
@@ -474,16 +479,16 @@ export function GalleryYours({
         {items.map((generation, index) => (
           <article id={generation.id} key={generation.id} className={`group/card scroll-mt-24 overflow-hidden rounded-md border border-border/80 bg-card/10 transition-[border-color,background-color] hover:border-border hover:bg-card/20 motion-reduce:transition-none mb-card-enter ${index % 2 === 1 ? "mb-card-enter-delay" : ""}`}>
             <div className="grid md:grid-cols-[15rem_minmax(0,1fr)] lg:grid-cols-[18rem_minmax(0,1fr)]">
-              <button type="button" disabled={!generation.viewerUrl} aria-label={`View ${generation.prompt}`} className="group/open relative min-h-52 overflow-hidden border-b border-border/60 bg-bg/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50 disabled:cursor-default md:min-h-full md:border-b-0 md:border-r" onClick={() => setSelectedId(generation.id)}>
-                {generation.thumbnailUrl ? <Image src={generation.thumbnailUrl} alt="" fill unoptimized sizes="(min-width: 1024px) 18rem, (min-width: 768px) 15rem, 100vw" className={`object-contain p-3 motion-reduce:transition-none ${generation.viewerUrl ? "transition-transform duration-300 ease-out group-hover/open:scale-[1.025]" : ""}`} /> : <VoxelEmptyState />}
+              <button type="button" disabled={!viewerUrl(generation)} aria-label={`View ${generation.prompt}`} className="group/open relative min-h-52 overflow-hidden border-b border-border/60 bg-bg/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50 disabled:cursor-default md:min-h-full md:border-b-0 md:border-r" onClick={() => setSelectedId(generation.id)}>
+                {generation.thumbnailUrl ? <Image src={generation.thumbnailUrl} alt="" fill unoptimized sizes="(min-width: 1024px) 18rem, (min-width: 768px) 15rem, 100vw" className={`object-contain p-3 motion-reduce:transition-none ${viewerUrl(generation) ? "transition-transform duration-300 ease-out group-hover/open:scale-[1.025]" : ""}`} /> : <VoxelEmptyState />}
               </button>
               <div className="flex min-w-0 flex-col p-5 sm:p-6">
-                <button type="button" disabled={!generation.viewerUrl} className="group/open w-full rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:cursor-default" onClick={() => setSelectedId(generation.id)}>
+                <button type="button" disabled={!viewerUrl(generation)} className="group/open w-full rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:cursor-default" onClick={() => setSelectedId(generation.id)}>
                   <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-xs text-muted">
                     <span className="flex min-w-0 items-center gap-3"><span className="flex shrink-0 items-center gap-2"><span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${generation.status === "succeeded" ? "bg-accent" : generation.status === "failed" || generation.status === "canceled" ? "bg-danger" : "animate-pulse bg-muted motion-reduce:animate-none"}`} />{statusLabel(generation)}</span><span className="truncate font-medium text-fg/75">{generation.model.label}</span></span>
                     <time className="shrink-0" dateTime={generation.createdAt}>{new Date(generation.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</time>
                   </div>
-                  <h3 className={`mt-3 text-balance font-display text-2xl font-semibold leading-tight tracking-tight text-fg motion-reduce:transition-none ${generation.viewerUrl ? "transition-colors group-hover/open:text-accent" : ""}`}>{generation.prompt}</h3>
+                  <h3 className={`mt-3 text-balance font-display text-2xl font-semibold leading-tight tracking-tight text-fg motion-reduce:transition-none ${viewerUrl(generation) ? "transition-colors group-hover/open:text-accent" : ""}`}>{generation.prompt}</h3>
                   {generation.error && (generation.status === "failed" || generation.status === "canceled") ? <p className="mt-3 text-sm text-danger">{generation.error.message}</p> : null}
                   {generation.status === "succeeded" ? <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11px] tabular-nums text-muted sm:text-xs">{generation.blockCount != null ? <span>{generation.blockCount.toLocaleString()} blocks</span> : null}{formatBuildJsonSize(generation.expandedBytes) ? <span>{formatBuildJsonSize(generation.expandedBytes)} JSON</span> : null}{formatBuildDuration(generation.generationTimeMs) ? <span>{formatBuildDuration(generation.generationTimeMs)}</span> : null}</div> : null}
                 </button>

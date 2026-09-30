@@ -126,7 +126,7 @@ async function main() {
 
   const generation = { id: "cb_queued_import", status: "queued", warnings: ["Prepared on worker"], sha256: toolBuild.world!.manifest.source.sha256 };
   const statusPath = `/api/generations/${generation.id}`;
-  const viewerPath = `${statusPath}/artifacts/viewer`;
+  const viewerPath = `${statusPath}/artifacts/viewer?format=world`;
   const delivery = { version: "1.0", blocks: [], world: { manifest: toOpaqueVoxelWorldManifest(toolBuild.world!.manifest), partBaseUrl: viewerPath } };
   const requests: string[] = [];
   const queued = startWorker(undefined, async (url, init) => {

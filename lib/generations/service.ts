@@ -192,8 +192,12 @@ function serializeGeneration(row: GenerationRow) {
     thumbnailUrl: artifactsAvailable && artifactKinds.has("preview_svg")
       ? `/api/generations/${row.publicId}/artifacts/thumbnail`
       : null,
-    viewerUrl: artifactsAvailable && viewerKind
+    // older clients only consume binary viewer URLs, so worlds use a separate opt-in route
+    viewerUrl: artifactsAvailable && viewerKind && viewerKind !== "viewer_world"
       ? `/api/generations/${row.publicId}/artifacts/viewer`
+      : null,
+    worldViewerUrl: artifactsAvailable && viewerKind === "viewer_world"
+      ? `/api/generations/${row.publicId}/artifacts/viewer?format=world`
       : null,
     downloadUrl: artifactsAvailable && artifactKinds.has("build_json")
       ? `/api/generations/${row.publicId}/download`
@@ -539,7 +543,8 @@ export async function listAdminGenerations(
         ...generation,
         previewUrl: generation.previewUrl ? artifactUrl("preview") : null,
         thumbnailUrl: generation.thumbnailUrl ? artifactUrl("thumbnail") : null,
-        viewerUrl: generation.viewerUrl ? artifactUrl("viewer") : null,
+        viewerUrl: generation.viewerUrl || generation.worldViewerUrl ? artifactUrl("viewer") : null,
+        worldViewerUrl: null,
         downloadUrl: generation.downloadUrl ? artifactUrl("download") : null,
         owner: row.owner ? {
           id: row.owner.id,
@@ -551,7 +556,7 @@ export async function listAdminGenerations(
           row.owner &&
           !row.owner.gallerySuspendedAt &&
           generation.status === "succeeded" &&
-          generation.viewerUrl &&
+          (generation.viewerUrl || generation.worldViewerUrl) &&
           row._count.galleryExamples === 0
         ),
       };
