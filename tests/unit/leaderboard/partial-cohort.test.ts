@@ -22,7 +22,7 @@ mock("../../../lib/prisma", { prisma: {
   modelRankSnapshot: { findFirst: async () => null },
   build: { groupBy: async ({ where }: { where: Prisma.BuildWhereInput }) => {
     assert.equal(where.active, true);
-    assert.deepEqual(where.promptId, { in: ["official", "community"] });
+    assert.deepEqual(where.promptId, { in: ["official"] }, "block metrics stay on benchmark prompts");
     assert.equal(where.gridSize, 256);
     assert.equal(where.palette, "simple");
     assert.equal(where.mode, "precise");
@@ -42,6 +42,7 @@ mock("../../../lib/arena/stats", {
   ...require("../../../lib/arena/stats"),
   getGlobalBradleyTerrySnapshot: async () => ({ byModelId: new Map() }),
   getLeaderboardDispersionByModelId: async () => new Map(),
+  queryCorePromptIds: async () => new Set(["official"]),
 });
 mock("../../../lib/arena/eligibility", {
   ...require("../../../lib/arena/eligibility"),

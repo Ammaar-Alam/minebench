@@ -2,7 +2,7 @@ import { Prisma, type CustomBuildJob } from "@prisma/client";
 import { invalidateArenaBuildMeta } from "@/lib/arena/buildMetaCache";
 import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
-import { deleteRetiredGalleryArenaArtifacts } from "@/lib/gallery/arenaImport";
+import { deleteRetiredGalleryArenaArtifacts, lockEligibleGalleryCandidate } from "@/lib/gallery/arenaImport";
 import { maybePrecomputeArenaArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
 import { ARENA_BUILD_GRID_SIZE, ARENA_BUILD_MODE, ARENA_BUILD_PALETTE } from "@/lib/arena/eligibility";
 import { prisma } from "@/lib/prisma";
@@ -143,13 +143,7 @@ export async function runGalleryArenaImportJob(
     }
   }
   const published = await prisma.$transaction(async (tx) => {
-    // moderation and publication take the candidate lock in the same order
-    await tx.$queryRaw`SELECT id FROM "GalleryCandidate" WHERE id = ${selected.id} FOR UPDATE`;
-    const eligible = await tx.galleryCandidate.findFirst({
-      where: { id: selected.id, officialPromptId: promptId, selectedAt: { not: null }, removedAt: null, adminHiddenAt: null },
-      select: { id: true },
-    });
-    if (!eligible) return;
+    if (!await lockEligibleGalleryCandidate(tx, selected.id, promptId)) return;
     if (preparedBuildId) {
       await tx.$queryRaw`SELECT id FROM "CustomBuild" WHERE id = ${job.customBuildId} FOR UPDATE`;
       const published = await tx.build.updateMany({

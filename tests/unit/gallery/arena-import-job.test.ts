@@ -64,6 +64,16 @@ mock("../../../lib/custom-builds/storage", { deleteCustomBuildArtifact: async ()
 } });
 mock("../../../lib/gallery/arenaImport", { deleteRetiredGalleryArenaArtifacts: async () => {
   cleanup(); deleted.push("derived-artifacts", row().voxelStoragePath);
+}, lockEligibleGalleryCandidate: async (
+  tx: { $queryRaw: (...args: unknown[]) => Promise<unknown>; galleryCandidate: { findFirst: (args: unknown) => Promise<unknown> } },
+  candidateId: string,
+  promptId: string,
+) => {
+  await tx.$queryRaw`SELECT id FROM "GalleryCandidate" WHERE id = ${candidateId} FOR UPDATE`;
+  return Boolean(await tx.galleryCandidate.findFirst({
+    where: { id: candidateId, officialPromptId: promptId, selectedAt: { not: null }, removedAt: null, adminHiddenAt: null },
+    select: { id: true },
+  }));
 } });
 mock("../../../lib/arena/artifactMaintenance", { maybePrecomputeArenaArtifactsForBuild: async () => {
   if (!active && !pending) throw new Error("retired");
