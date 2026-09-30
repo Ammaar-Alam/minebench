@@ -17,6 +17,7 @@ let prepare: () => void = () => {};
 let cleanup: () => void = () => {};
 const deleted: string[] = [];
 let rawDeletionFails = false;
+let sourcePalette = "simple";
 let cleanupTracked = false;
 const row = () => ({ id: "arena-build", active, arenaImportPending: pending,
   voxelSha256: "checksum", voxelStoragePath: "gallery/prompt/model-source-g256-simple-precise.json.gz" });
@@ -25,9 +26,9 @@ const mock = (path: string, exports: unknown) => {
   require.cache[id] = { id, filename: id, loaded: true, exports } as NodeJS.Module;
 };
 const db = {
-  galleryCandidate: { findFirst: async () => ({ id: "candidate" }) },
+  galleryCandidate: { findFirst: async () => ({ id: "candidate", officialPrompt: { gridSize: 256, palette: "simple" } }) },
   customBuild: {
-    findUnique: async () => ({ removedAt: sourceVisible ? null : new Date(0), modelKey: "model",
+    findUnique: async () => ({ removedAt: sourceVisible ? null : new Date(0), modelKey: "model", gridSize: 256, palette: sourcePalette,
       buildSha256: "checksum", blockCount: 1, generationTimeMs: 1,
       artifacts: sourceVisible ? [{ bucket: "builds", path: "source.json.gz", byteSize: 1, sha256: "a".repeat(64), storedByteSize: 1, format: "json.gz", contentType: "application/json", fileName: "build.json.gz" }] : [] }),
     update: async () => { cleanupPending = true; },
@@ -136,6 +137,13 @@ async function main() {
   assert.equal(existing, false, "moderation already deleted the original owner");
   assert.equal(cleanupTracked, true, "late copies retain a durable cleanup ref without a Build row");
   assert.equal(cleanupPending, true);
+
+  // a build made with another setup never joins this prompt
+  rawDeletionFails = false; sourceVisible = true; existing = false; copy = () => {};
+  const createsBefore = creates;
+  sourcePalette = "advanced";
+  await run();
+  assert.equal(creates, createsBefore);
   console.log("gallery arena import moderation, publication and retry checks passed");
 }
 

@@ -128,9 +128,10 @@ const advancedIds = getPalette("advanced").map((block) => block.id);
 assert.deepEqual(simpleIds, [...legacySimpleIds]);
 assert.deepEqual(advancedExtraIds.slice(0, legacyAdvancedIds.length), [...legacyAdvancedIds]);
 assert.equal(simpleIds.length, 25);
-assert.equal(advancedExtraIds.length, 217);
-assert.equal(advancedIds.length, 242);
-assert.ok(advancedIds.length <= 255);
+assert.equal(advancedExtraIds.length, 300);
+assert.equal(advancedIds.length, 325);
+// large-world regions switch to two-byte cells past 255 materials
+assert.ok(advancedIds.length <= 0xffff);
 
 assertIncluded(advancedIds, idsFor("wool"));
 assertIncluded(advancedIds, idsFor("concrete"));

@@ -10,6 +10,7 @@ import {
 import { GalleryAdminGenerations } from "@/components/gallery/GalleryAdminGenerations";
 import { GalleryAdminGenerate } from "@/components/gallery/GalleryAdminGenerate";
 import { MODEL_CATALOG } from "@/lib/ai/modelCatalog";
+import { ARENA_BUILD_SETUPS, formatBuildSetup, type BuildSetup } from "@/lib/arena/buildSetup";
 import { ArenaVoteReview } from "@/components/arena/ArenaVoteReview";
 import type {
   getGalleryAdminDashboard,
@@ -26,7 +27,7 @@ type Mutation =
   | { type: "generation_published"; publicId: string; prompt?: string }
   | { type: "candidate_hidden"; publicId: string; hidden: boolean }
   | { type: "example_hidden"; exampleId: string }
-  | { type: "candidate_selected"; publicId: string; selected: boolean }
+  | { type: "candidate_selected"; publicId: string; selected: boolean; setup?: BuildSetup }
   | { type: "account_suspended"; userId: string; suspended: boolean; reason?: string }
   | { type: "votes_blocked"; personId: string; blocked: boolean }
   | { type: "hosted_generation_limit"; userId: string; limit: number };
@@ -391,6 +392,8 @@ export function GalleryAdminDashboard({ dashboard }: { dashboard: Dashboard }) {
   const [view, setView] = useState<"generations" | "prompts" | "votes">("generations");
   const [generationOwner, setGenerationOwner] = useState<{ id: string; label: string } | null>(null);
   const [promptFilter, setPromptFilter] = useState<PromptFilter>("latest");
+  // arena setup picked before selecting, by prompt
+  const [selectSetups, setSelectSetups] = useState<Record<string, number>>({});
   const [peopleFilter, setPeopleFilter] = useState<PeopleFilter>("online");
   const [promptQuery, setPromptQuery] = useState("");
   const [peopleQuery, setPeopleQuery] = useState("");
@@ -554,6 +557,7 @@ export function GalleryAdminDashboard({ dashboard }: { dashboard: Dashboard }) {
                       <time dateTime={prompt.publishedAt}>{dateTime.format(new Date(prompt.publishedAt))}</time>
                       <span>{prompt.upvoteCount.toLocaleString()} votes</span>
                       {prompt.hidden ? <span className="font-medium text-danger">Hidden</span> : prompt.selected ? <span className="font-medium text-accent">Selected</span> : <span>Live</span>}
+                      {prompt.selected && prompt.setup ? <span>{formatBuildSetup(prompt.setup)}</span> : null}
                       {prompt.reportCount > 0 ? <span className="font-medium text-danger">{prompt.reportCount} {prompt.reportCount === 1 ? "report" : "reports"}</span> : null}
                       {prompt.uploader.suspended ? <span>Contributor suspended</span> : null}
                     </p>
@@ -562,8 +566,16 @@ export function GalleryAdminDashboard({ dashboard }: { dashboard: Dashboard }) {
                     {prompt.selected && !prompt.hidden ? (
                       <GalleryAdminGenerate request={{ candidatePublicId: prompt.publicId }} label="Generate" disabled={Boolean(pendingKey)} />
                     ) : null}
+                    {!prompt.hidden && !prompt.selected ? (
+                      <label>
+                        <span className="sr-only">Arena setup</span>
+                        <select className="mb-field h-10" value={selectSetups[prompt.publicId] ?? 0} onChange={(event) => setSelectSetups((current) => ({ ...current, [prompt.publicId]: Number(event.target.value) }))}>
+                          {ARENA_BUILD_SETUPS.map((setup, index) => <option key={index} value={index}>{formatBuildSetup(setup)}</option>)}
+                        </select>
+                      </label>
+                    ) : null}
                     {!prompt.hidden || prompt.selected ? (
-                      <button type="button" disabled={Boolean(pendingKey)} className={`mb-btn h-10${prompt.selected ? "" : " mb-btn-primary"}`} onClick={() => void mutate({ type: "candidate_selected", publicId: prompt.publicId, selected: !prompt.selected }, key)}>
+                      <button type="button" disabled={Boolean(pendingKey)} className={`mb-btn h-10${prompt.selected ? "" : " mb-btn-primary"}`} onClick={() => void mutate({ type: "candidate_selected", publicId: prompt.publicId, selected: !prompt.selected, ...(prompt.selected ? {} : { setup: ARENA_BUILD_SETUPS[selectSetups[prompt.publicId] ?? 0] }) }, key)}>
                         {pendingKey === key ? "Saving…" : prompt.selected ? "Unselect" : "Select"}
                       </button>
                     ) : null}

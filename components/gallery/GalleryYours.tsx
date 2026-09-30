@@ -19,6 +19,7 @@ import { publishGenerationToGallery } from "@/lib/gallery/client";
 import { downloadSavedGenerationJson } from "@/lib/generations/download";
 import type { SavedGenerationPayload } from "@/lib/generations/service";
 import { isSavedGenerationRecovery } from "@/lib/generations/retry";
+import { formatBuildSetup } from "@/lib/arena/buildSetup";
 import { formatBuildDuration, formatBuildJsonSize } from "@/lib/buildMetrics";
 
 const VoxelViewerCard = dynamic(
@@ -490,7 +491,7 @@ export function GalleryYours({
                   </div>
                   <h3 className={`mt-3 text-balance font-display text-2xl font-semibold leading-tight tracking-tight text-fg motion-reduce:transition-none ${viewerUrl(generation) ? "transition-colors group-hover/open:text-accent" : ""}`}>{generation.prompt}</h3>
                   {generation.error && (generation.status === "failed" || generation.status === "canceled") ? <p className="mt-3 text-sm text-danger">{generation.error.message}</p> : null}
-                  {generation.status === "succeeded" ? <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11px] tabular-nums text-muted sm:text-xs">{generation.blockCount != null ? <span>{generation.blockCount.toLocaleString()} blocks</span> : null}{formatBuildJsonSize(generation.expandedBytes) ? <span>{formatBuildJsonSize(generation.expandedBytes)} JSON</span> : null}{formatBuildDuration(generation.generationTimeMs) ? <span>{formatBuildDuration(generation.generationTimeMs)}</span> : null}</div> : null}
+                  {generation.status === "succeeded" ? <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11px] tabular-nums text-muted sm:text-xs">{generation.blockCount != null ? <span>{generation.blockCount.toLocaleString()} blocks</span> : null}<span>{formatBuildSetup(generation)}</span>{formatBuildJsonSize(generation.expandedBytes) ? <span>{formatBuildJsonSize(generation.expandedBytes)} JSON</span> : null}{formatBuildDuration(generation.generationTimeMs) ? <span>{formatBuildDuration(generation.generationTimeMs)}</span> : null}</div> : null}
                 </button>
                 {generation.retryReason ? (
                   <details className="mt-3 w-full max-w-xl text-xs text-muted">

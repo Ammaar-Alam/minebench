@@ -168,7 +168,8 @@ async function fetchExplorerBuild(buildId: string, signal: AbortSignal): Promise
   } else {
     throw new Error(await readClientErrorResponse(response, "Failed to load build"));
   }
-  return { checksum: payload.checksum, palette: "simple", voxelBuild: payload.voxelBuild };
+  // arena prompts may use either palette, and advanced covers both
+  return { checksum: payload.checksum, palette: "advanced", voxelBuild: payload.voxelBuild };
 }
 
 async function fetchExplorerBuildCatalog(signal: AbortSignal): Promise<ExplorerBuildOption[]> {

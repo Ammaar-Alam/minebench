@@ -1,16 +1,22 @@
+import type { Prisma } from "@prisma/client";
+import { ARENA_BUILD_SETUPS } from "@/lib/arena/buildSetup";
 import { prisma } from "@/lib/prisma";
 
-export const ARENA_BUILD_GRID_SIZE = 256;
-export const ARENA_BUILD_PALETTE = "simple";
 export const ARENA_BUILD_MODE = "precise";
+
+// a build only competes when it was made with its prompt's setup
+export function arenaBuildSetupWhere() {
+  return {
+    mode: ARENA_BUILD_MODE,
+    OR: ARENA_BUILD_SETUPS.map(({ gridSize, palette }) => ({ gridSize, palette, prompt: { gridSize, palette } })),
+  } satisfies Prisma.BuildWhereInput;
+}
 
 function benchmarkBuildWhere(modelKeys: readonly string[] | undefined, publicOnly: boolean) {
   const scoped = Boolean(modelKeys && modelKeys.length > 0);
   return {
     active: true,
-    gridSize: ARENA_BUILD_GRID_SIZE,
-    palette: ARENA_BUILD_PALETTE,
-    mode: ARENA_BUILD_MODE,
+    ...arenaBuildSetupWhere(),
     model: {
       ...(scoped ? { key: { in: [...modelKeys!] } } : { enabled: true }),
       isBaseline: false,
@@ -42,8 +48,8 @@ export async function getArenaEligiblePromptIds(): Promise<string[]> {
     INNER JOIN "Model" model ON model.id = build."modelId"
     INNER JOIN "Prompt" prompt ON prompt.id = build."promptId"
     WHERE build.active = true
-      AND build."gridSize" = ${ARENA_BUILD_GRID_SIZE}
-      AND build."palette" = ${ARENA_BUILD_PALETTE}
+      AND build."gridSize" = prompt."gridSize"
+      AND build."palette" = prompt."palette"
       AND build."mode" = ${ARENA_BUILD_MODE}
       AND model.enabled = true
       AND model."isBaseline" = false

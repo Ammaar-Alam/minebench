@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import type { Prisma } from "@prisma/client";
+import { ARENA_BUILD_SETUPS } from "../../../lib/arena/buildSetup";
 
 const require = createRequire(import.meta.url);
 const mock = (path: string, exports: unknown) => {
@@ -23,8 +24,11 @@ mock("../../../lib/prisma", { prisma: {
   build: { groupBy: async ({ where }: { where: Prisma.BuildWhereInput }) => {
     assert.equal(where.active, true);
     assert.deepEqual(where.promptId, { in: ["official"] }, "block metrics stay on benchmark prompts");
-    assert.equal(where.gridSize, 256);
-    assert.equal(where.palette, "simple");
+    assert.deepEqual(
+      where.OR,
+      ARENA_BUILD_SETUPS.map(({ gridSize, palette }) => ({ gridSize, palette, prompt: { gridSize, palette } })),
+      "builds must match their prompt's setup",
+    );
     assert.equal(where.mode, "precise");
     const measuredOnly = where.blockCount != null;
     if (measuredOnly) assert.deepEqual(where.blockCount, { gt: 0 });

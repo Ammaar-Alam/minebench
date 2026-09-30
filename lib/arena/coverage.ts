@@ -3,6 +3,7 @@ import {
   ARENA_COVERAGE_LOCK_KEY,
   ARENA_VOTE_JOB_DRAIN_LOCK_KEY,
 } from "@/lib/arena/advisoryLocks";
+import { arenaCohortBuildWhere } from "@/lib/arena/eligibility";
 import { prisma } from "@/lib/prisma";
 
 export const ARENA_MATCHUP_STATE_CACHE_TTL_MS = readIntEnv(
@@ -15,9 +16,6 @@ const APPLIED_VOTE_JOB_DEDUPE_WINDOW_MS = Math.max(
   120_000,
 );
 
-const ARENA_GRID_SIZE = 256;
-const ARENA_PALETTE = "simple";
-const ARENA_MODE = "precise";
 const PROMPT_COVERAGE_FLOOR = 2;
 
 type CachedValue<T> = {
@@ -383,14 +381,7 @@ async function queryArenaMatchupSamplingState(): Promise<ArenaMatchupSamplingRes
   const startedAt = performance.now();
   const eligibilityStartedAt = startedAt;
   const rows = await prisma.build.findMany({
-    where: {
-      active: true,
-      gridSize: ARENA_GRID_SIZE,
-      palette: ARENA_PALETTE,
-      mode: ARENA_MODE,
-      model: { enabled: true, isBaseline: false, stealthVariant: null },
-      prompt: { active: true },
-    },
+    where: arenaCohortBuildWhere(),
     select: {
       id: true,
       promptId: true,

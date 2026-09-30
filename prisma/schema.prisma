@@ -460,6 +460,9 @@ model Prompt {
   id        String   @id @default(cuid())
   text      String
   active    Boolean  @default(true)
+  // arena matchups only pair builds made with this setup
+  gridSize  Int      @default(256)
+  palette   String   @default("simple")
   createdAt DateTime @default(now())
 
   builds  Build[]

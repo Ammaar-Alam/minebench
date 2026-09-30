@@ -16,6 +16,7 @@ import {
   type SandboxComparisonSelection,
   normalizeSandboxComparisonSelection,
 } from "@/lib/sandbox/benchmarkComparison";
+import { ARENA_BUILD_MODE, arenaBuildSetupWhere, arenaCohortBuildWhere } from "@/lib/arena/eligibility";
 import { prisma } from "@/lib/prisma";
 import { resolveModelDisplayName } from "@/lib/ai/modelCatalog";
 import {
@@ -25,9 +26,6 @@ import {
 
 export const runtime = "nodejs";
 
-const ARENA_GRID_SIZE = 256;
-const ARENA_PALETTE = "simple";
-const ARENA_MODE = "precise";
 const BENCHMARK_INLINE_MAX_BYTES = Number.parseInt(
   process.env.SANDBOX_BENCHMARK_INLINE_MAX_BYTES ?? process.env.ARENA_MATCHUP_INLINE_MAX_BYTES ?? "0",
   10,
@@ -105,14 +103,7 @@ export async function GET(req: Request) {
 
     const grouped = await prisma.build.groupBy({
       by: ["promptId", "modelId"],
-      where: {
-        active: true,
-        gridSize: ARENA_GRID_SIZE,
-        palette: ARENA_PALETTE,
-        mode: ARENA_MODE,
-        model: { enabled: true, isBaseline: false, stealthVariant: null },
-        prompt: { active: true },
-      },
+      where: arenaCohortBuildWhere(),
     });
 
     const modelIdsByPromptId = new Map<string, Set<string>>();
@@ -136,7 +127,7 @@ export async function GET(req: Request) {
     const promptRows = await prisma.prompt.findMany({
       where: { id: { in: eligiblePromptIds }, active: true },
       orderBy: { createdAt: "asc" },
-      select: { id: true, text: true },
+      select: { id: true, text: true, gridSize: true, palette: true },
     });
 
     const promptOptions: PromptOption[] = promptRows.map((p) => ({
@@ -161,9 +152,7 @@ export async function GET(req: Request) {
           some: {
             active: true,
             promptId: { in: eligiblePromptIds },
-            gridSize: ARENA_GRID_SIZE,
-            palette: ARENA_PALETTE,
-            mode: ARENA_MODE,
+            ...arenaBuildSetupWhere(),
           },
         },
       },
@@ -239,6 +228,7 @@ export async function GET(req: Request) {
         promptOptions.find((p) => compatiblePromptIds.includes(p.id)) ??
         promptOptions[0]
       : promptOptions.find((p) => compatiblePromptIds.includes(p.id)) ?? promptOptions[0];
+    const selectedPromptSetup = promptRows.find((p) => p.id === selectedPrompt.id)!;
 
     const selectedModelKeys = SANDBOX_COMPARISON_SLOTS.flatMap((slot) => {
       const modelKey = selection[slot];
@@ -252,9 +242,7 @@ export async function GET(req: Request) {
       where: {
         active: true,
         promptId: selectedPrompt.id,
-        gridSize: ARENA_GRID_SIZE,
-        palette: ARENA_PALETTE,
-        mode: ARENA_MODE,
+        ...arenaBuildSetupWhere(),
         model: { key: { in: selectedModelKeys } },
       },
       select: {
@@ -407,10 +395,11 @@ export async function GET(req: Request) {
     };
 
     const body: BenchmarkResponse = {
+      // builds always match their prompt's setup
       settings: {
-        gridSize: ARENA_GRID_SIZE,
-        palette: ARENA_PALETTE,
-        mode: ARENA_MODE,
+        gridSize: selectedPromptSetup.gridSize,
+        palette: selectedPromptSetup.palette,
+        mode: ARENA_BUILD_MODE,
       },
       prompts: promptOptions,
       selectedPrompt: {

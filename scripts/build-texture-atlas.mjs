@@ -14,13 +14,20 @@ const TILE_SIZE = 32;
 
 const ALIASES = {
   water: "water_still",
-  lava: "lava_still"
+  lava: "lava_still",
+  magma_block: "magma",
+  dried_kelp_block: "dried_kelp",
+  smooth_quartz: "quartz_block_bottom",
+  smooth_sandstone: "sandstone_top",
+  smooth_red_sandstone: "red_sandstone_top"
 };
 
 const FACE_TEXTURES = {
   bookshelf: { up: "oak_planks", down: "oak_planks" },
   podzol: { down: "dirt" },
   mycelium: { down: "dirt" },
+  crimson_nylium: { up: "crimson_nylium", down: "netherrack" },
+  warped_nylium: { up: "warped_nylium", down: "netherrack" },
   cut_sandstone: { up: "sandstone_top", down: "sandstone_bottom" },
   chiseled_sandstone: { up: "sandstone_top", down: "sandstone_bottom" },
   cut_red_sandstone: { up: "red_sandstone_top", down: "red_sandstone_bottom" },

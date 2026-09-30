@@ -1,7 +1,7 @@
 import type { CustomBuildJob, Prisma } from "@prisma/client";
 import { getAverageBenchmarkCostPerBuildUsd } from "@/lib/ai/modelBenchmarkProfiles";
 import { MODEL_CATALOG, getModelByKey, type ModelKey } from "@/lib/ai/modelCatalog";
-import { ARENA_BUILD_GRID_SIZE, ARENA_BUILD_MODE, ARENA_BUILD_PALETTE } from "@/lib/arena/eligibility";
+import { ARENA_BUILD_MODE, arenaBuildSetupWhere } from "@/lib/arena/eligibility";
 import { sha256Hex } from "@/lib/custom-builds/hash";
 import { generateCustomBuildPublicId } from "@/lib/custom-builds/ids";
 import { isCommunityArenaPrompt } from "@/lib/gallery/arenaImport";
@@ -31,6 +31,8 @@ export type GalleryGenerationPlanItem = PlannedModel & {
   publicId: string;
   promptId: string;
   promptText: string;
+  gridSize: number;
+  palette: string;
 };
 
 const costOf = getAverageBenchmarkCostPerBuildUsd as (key: ModelKey) => number | null;
@@ -86,9 +88,7 @@ export async function coveredModelKeys(
     client.build.findMany({
       where: {
         promptId,
-        gridSize: ARENA_BUILD_GRID_SIZE,
-        palette: ARENA_BUILD_PALETTE,
-        mode: ARENA_BUILD_MODE,
+        ...arenaBuildSetupWhere(),
         NOT: UNPUBLISHED_CLI_BUILD,
       },
       select: { model: { select: { key: true } } },
@@ -129,16 +129,17 @@ export async function planGalleryGenerations(request: GalleryGenerationRequest):
       ...(modelWide ? {} : { publicId: request.candidatePublicId }),
     },
     orderBy: { selectedAt: "desc" },
-    select: { id: true, publicId: true, promptText: true, officialPromptId: true },
+    select: { id: true, publicId: true, promptText: true, officialPrompt: { select: { id: true, gridSize: true, palette: true } } },
   });
   const ranked = await loadRankedModels();
   const plan: GalleryGenerationPlanItem[] = [];
   for (const candidate of candidates) {
-    if (!candidate.officialPromptId || !isCommunityArenaPrompt(candidate.promptText)) continue;
+    const prompt = candidate.officialPrompt;
+    if (!prompt || !isCommunityArenaPrompt(candidate.promptText)) continue;
     const models = planCommunityModels({
       ranked,
       costOf,
-      existing: await coveredModelKeys(candidate.officialPromptId, candidate.publicId),
+      existing: await coveredModelKeys(prompt.id, candidate.publicId),
       top: modelWide ? 1 : request.top ?? DEFAULT_COMMUNITY_TOP,
       maxCostUsd: modelWide ? Number.POSITIVE_INFINITY : request.maxCostUsd ?? DEFAULT_COMMUNITY_MAX_COST_USD,
       explicit: modelWide ? [request.modelKey] : [],
@@ -147,7 +148,9 @@ export async function planGalleryGenerations(request: GalleryGenerationRequest):
       ...model,
       candidateId: candidate.id,
       publicId: candidate.publicId,
-      promptId: candidate.officialPromptId!,
+      promptId: prompt.id,
+      gridSize: prompt.gridSize,
+      palette: prompt.palette,
       promptText: candidate.promptText,
     })));
   }
@@ -212,8 +215,8 @@ function queuedGenerationData(item: GalleryGenerationPlanItem, ownerId: string):
     currentStage: "queued",
     promptText: item.promptText,
     promptSha256: sha256Hex(item.promptText),
-    gridSize: ARENA_BUILD_GRID_SIZE,
-    palette: ARENA_BUILD_PALETTE,
+    gridSize: item.gridSize,
+    palette: item.palette,
     mode: ARENA_BUILD_MODE,
     modelKind: "catalog",
     modelKey: model.key,

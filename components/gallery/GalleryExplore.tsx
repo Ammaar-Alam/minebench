@@ -7,6 +7,7 @@ import { Fragment, memo, useEffect, useDeferredValue, useId, useRef, useState } 
 import type { GalleryCandidatePayload } from "@/lib/gallery/service";
 import { GalleryVoteButton } from "@/components/gallery/GalleryVoteButton";
 import { VoxelEmptyState } from "@/components/voxel/VoxelEmptyState";
+import { formatBuildSetup, sandboxPromptHref } from "@/lib/arena/buildSetup";
 import { formatBuildDuration, formatBuildJsonSize } from "@/lib/buildMetrics";
 
 type GallerySort = "top" | "new" | "official";
@@ -227,11 +228,11 @@ const GalleryCard = memo(function GalleryCard({
             ) : null}
           </p>
         ) : null}
-        {candidate.cover ? <p className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-muted/80">{candidate.cover.blockCount != null ? <span>{candidate.cover.blockCount.toLocaleString()} blocks</span> : null}{jsonSize ? <span>{jsonSize} JSON</span> : null}{duration ? <span>{duration}</span> : null}</p> : null}
+        {candidate.cover ? <p className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-muted/80">{candidate.cover.blockCount != null ? <span>{candidate.cover.blockCount.toLocaleString()} blocks</span> : null}<span>{formatBuildSetup(candidate.cover)}</span>{jsonSize ? <span>{jsonSize} JSON</span> : null}{duration ? <span>{duration}</span> : null}</p> : null}
       </div>
       <div className="flex items-center justify-between border-t border-border/40 px-3 py-1">
         <GalleryVoteButton candidateId={candidate.id} initialCount={candidate.upvoteCount} initialUpvoted={candidate.upvoted} />
-        <Link href={`/sandbox?mode=live&prompt=${encodeURIComponent(candidate.prompt)}`} className="inline-flex min-h-11 items-center px-2 text-sm text-muted transition-colors hover:text-fg motion-reduce:transition-none">Use prompt</Link>
+        <Link href={sandboxPromptHref(candidate.prompt, candidate.arenaSetup)} className="inline-flex min-h-11 items-center px-2 text-sm text-muted transition-colors hover:text-fg motion-reduce:transition-none">Use prompt</Link>
       </div>
       </article>
     </div>

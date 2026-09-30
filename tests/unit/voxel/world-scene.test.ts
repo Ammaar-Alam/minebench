@@ -192,7 +192,7 @@ async function main() {
       assert.equal(internalFaces, 0, "fully adjacent uniform water emits no internal faces");
       assert.equal(shorelineFaces, 2, "partial shoreline coverage and different transparent neighbors retain exposed water faces");
       assert.equal(geometryHash(scene.group.getObjectByName("VoxelWorldUniformRegions")!),
-        "3105a2c6802e9577d45328cb954aa99ba3df07402169579daf3c7ae735e0367e",
+        "cae6cc7590f7ff5ea995d2709203f7194f74885396303b269466d565240fb9d6",
         "water and partial shoreline geometry remain byte-identical");
     } finally {
       scene.dispose();
@@ -217,7 +217,7 @@ async function main() {
       exactBlockCount: regions.reduce((total, region) => total + region.blockCount, 0), regions,
     }, resolvePart: async () => { throw new Error("uniform geometry must not read source parts"); } });
     try {
-      assert.equal(geometryHash(scene.group), "1e1b5b24dc436e08c0e360be196b8947a91d0c67d370bf312d2b0cdfba49a769",
+      assert.equal(geometryHash(scene.group), "aa6ff5d70209a39d94c31affd1e1a6601a585baabd207b53825e0fb7ba9861ba",
         "uneven neighbors, disjoint faces, and material boundaries retain geometry and order");
     } finally {
       scene.dispose();

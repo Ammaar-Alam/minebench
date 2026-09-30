@@ -28,6 +28,7 @@ import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import { GenerationPreflightDialog } from "@/components/sandbox/GenerationPreflightDialog";
 import { GenerationGalleryButton } from "@/components/gallery/GenerationGalleryButton";
 import { isSavedGenerationRecovery } from "@/lib/generations/retry";
+import { sandboxPromptHref } from "@/lib/arena/buildSetup";
 import { readBuildVariantPayload } from "@/lib/arena/clientBuildResponse";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import {
@@ -589,6 +590,8 @@ function customBuildRetryProvider(status: SavedGenerationPayload): keyof Provide
 
 export function SandboxLive({
   initialPrompt,
+  initialGridSize,
+  initialPalette,
   signedIn,
   allowLargeWorlds = false,
   anonymousServerKeysEnabled,
@@ -598,6 +601,8 @@ export function SandboxLive({
   gallerySuspended,
 }: {
   initialPrompt?: string;
+  initialGridSize?: GridSize;
+  initialPalette?: Palette;
   signedIn: boolean;
   allowLargeWorlds?: boolean;
   anonymousServerKeysEnabled: boolean;
@@ -607,8 +612,8 @@ export function SandboxLive({
   gallerySuspended: boolean;
 }) {
   const [prompt, setPrompt] = useState(() => initialPrompt ?? "");
-  const [gridSize, setGridSize] = useState<GridSize>(256);
-  const [palette, setPalette] = useState<Palette>("simple");
+  const [gridSize, setGridSize] = useState<GridSize>(initialGridSize ?? 256);
+  const [palette, setPalette] = useState<Palette>(initialPalette ?? "simple");
   const [providerKeys, setProviderKeys] = useState<ProviderApiKeys>(() => loadProviderKeysFromStorage());
   const [customModel, setCustomModel] = useState<CustomProviderProfile>(() => loadCustomProviderProfile());
   const [modelRequestProfiles, setModelRequestProfiles] = useState<Record<string, RequestOverridesProfile>>(
@@ -651,9 +656,7 @@ export function SandboxLive({
         !providerKeys.gemini?.trim() &&
         !providerKeys.openrouter?.trim())),
   );
-  const signInHref = `/sign-in?next=${encodeURIComponent(
-    `/sandbox?mode=live&prompt=${encodeURIComponent(prompt)}`,
-  )}`;
+  const signInHref = `/sign-in?next=${encodeURIComponent(sandboxPromptHref(prompt, { gridSize, palette }))}`;
   const [apiKeysOpen, setApiKeysOpen] = useState(false);
   const [providerKeysOpen, setProviderKeysOpen] = useState(false);
   const [, forceRender] = useState(0);
