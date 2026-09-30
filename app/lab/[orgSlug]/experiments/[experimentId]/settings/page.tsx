@@ -224,8 +224,8 @@ export default async function EvaluationSettingsPage({
                 checkpoint.source === "UPLOAD" &&
                 (checkpoint.status === "DRAFT" ||
                   checkpoint.status === "GENERATING" ||
-                  checkpoint.status === "READY" ||
-                  (checkpoint.status === "ACTIVE" &&
+                  (checkpoint.status === "READY" && !checkpoint.promptCohortCurrent) ||
+                  ((checkpoint.status === "READY" || checkpoint.status === "ACTIVE") &&
                     checkpoint.latestGenerationRun?.status === "RUNNING")) ? (
                   <Link
                     href={`?checkpoint=${encodeURIComponent(checkpoint.id)}`}

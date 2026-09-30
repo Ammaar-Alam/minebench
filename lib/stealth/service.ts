@@ -13,6 +13,7 @@ import {
   markAuthDeleted,
 } from "@/lib/account/service";
 import { deleteArenaBuildArtifacts } from "@/lib/arena/artifactOwnership";
+import { arenaBuildSetupWhere, getArenaEligiblePromptIds } from "@/lib/arena/eligibility";
 import {
   BENCHMARK_PROMPT_COHORT_ID,
   BENCHMARK_PROMPT_MAP,
@@ -1884,6 +1885,7 @@ export async function activateStealthEvaluation(
   organizationId: string,
   experimentId: string,
 ): Promise<void> {
+  const arenaPromptIds = await getArenaEligiblePromptIds();
   await prisma.$transaction(async (tx) => {
     await assertEvaluationOperator(tx, actor, organizationId);
     const experiment = await lockExperiment(tx, experimentId);
@@ -1919,6 +1921,20 @@ export async function activateStealthEvaluation(
         (run.status !== "SUCCEEDED" && !(variant.source === "UPLOAD" && run.status === "RUNNING"))
       ) {
         throw new Error(`${variant.codename} uses an outdated prompt cohort`);
+      }
+      // an upload may only cover prompts that have since left the Arena
+      if (variant.source === "UPLOAD") {
+        const playable = await tx.build.count({
+          where: {
+            ...arenaBuildSetupWhere(),
+            modelId: variant.modelId,
+            promptId: { in: arenaPromptIds },
+            stealthGenerationResults: { some: { status: "READY" } },
+          },
+        });
+        if (playable === 0) {
+          throw new Error(`${variant.codename} has no builds on current Arena prompts`);
+        }
       }
     }
     const now = new Date();
