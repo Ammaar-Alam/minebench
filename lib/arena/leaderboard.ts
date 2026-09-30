@@ -16,6 +16,7 @@ import {
   getGlobalBradleyTerrySnapshot,
   getLeaderboardDispersionByModelId,
   queryBuiltPromptCountByModelId,
+  queryCorePromptIds,
 } from "@/lib/arena/stats";
 import type { LeaderboardModelBenchmark, LeaderboardResponse } from "@/lib/arena/types";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
@@ -189,7 +190,6 @@ async function queryLeaderboardData(): Promise<LeaderboardResponse> {
         select: { capturedAt: true },
       }),
     ]);
-  const eligiblePromptCount = eligiblePromptIds.length;
   const hasGlobalBaseline = Boolean(baselineAnchor);
 
   const sortedModels = [...models].sort((a, b) => {
@@ -201,6 +201,8 @@ async function queryLeaderboardData(): Promise<LeaderboardResponse> {
   });
   const topBandIds = sortedModels.slice(0, CONTENDER_BAND_SIZE).map((model) => model.id);
 
+  // benchmark block metrics stay on the fixed cohort like consistency and coverage
+  const corePromptIds = [...await queryCorePromptIds(eligiblePromptIds)];
   const [baselineRows, pairCoverageByKey, benchmarkBlocksByModelId, builtPromptCounts] = await Promise.all([
     baselineAnchor
       ? prisma.modelRankSnapshot.findMany({
@@ -211,8 +213,8 @@ async function queryLeaderboardData(): Promise<LeaderboardResponse> {
     topBandIds.length >= 2 && eligiblePromptIds.length > 0
       ? getArenaPairCoverageByKey(topBandIds, eligiblePromptIds)
       : Promise.resolve(new Map<string, PairCoverage>()),
-    getLeaderboardBenchmarkBlocksByModelId(eligiblePromptIds),
-    queryBuiltPromptCountByModelId(eligiblePromptIds),
+    getLeaderboardBenchmarkBlocksByModelId(corePromptIds),
+    queryBuiltPromptCountByModelId(corePromptIds),
   ]);
   const baselineRanksByModelId = new Map(
     baselineRows.map((row) => [row.modelId, row.rank]),
@@ -226,7 +228,7 @@ async function queryLeaderboardData(): Promise<LeaderboardResponse> {
         scoreSpread: null,
         consistency: null,
         coveredPrompts: 0,
-        activePrompts: eligiblePromptCount,
+        activePrompts: corePromptIds.length,
         promptCoverage: 0,
         sampledPrompts: 0,
         sampledVotes: 0,

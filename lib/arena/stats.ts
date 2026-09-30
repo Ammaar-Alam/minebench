@@ -954,7 +954,7 @@ export async function queryBuiltPromptCountByModelId(
 }
 
 // consistency, spread, and coverage stay on the benchmark prompts every model shares
-async function queryCorePromptIds(eligiblePromptIds: string[]): Promise<Set<string>> {
+export async function queryCorePromptIds(eligiblePromptIds: string[]): Promise<Set<string>> {
   const prompts = await prisma.prompt.findMany({
     where: { id: { in: eligiblePromptIds } },
     select: { id: true, text: true },
@@ -1041,7 +1041,9 @@ async function queryLeaderboardDispersionByModelId(): Promise<Map<string, ScoreD
 
   const out = new Map<string, ScoreDispersion>();
   const builtPromptCounts = await queryBuiltPromptCountByModelId([...corePromptIds]);
-  for (const [modelId, samples] of samplesByModelId) {
+  // models without core votes still report core coverage
+  for (const modelId of promptSignal.activeModelIds) {
+    const samples = samplesByModelId.get(modelId) ?? [];
     out.set(modelId, summarizeDispersion(samples, builtPromptCounts.get(modelId) ?? corePromptIds.size));
   }
 

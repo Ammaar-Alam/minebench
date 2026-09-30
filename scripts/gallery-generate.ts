@@ -14,7 +14,7 @@
  * benchmark metrics.
  */
 import "dotenv/config";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -142,7 +142,8 @@ async function publishCommunityBuild(
   const jsonBytes = Buffer.from(JSON.stringify(generated.build, null, 2));
   const sha256 = createHash("sha256").update(jsonBytes).digest("hex");
   const gzipped = gzipSync(jsonBytes);
-  const filePath = path.join(outDir, `${target.modelSlug}.json.gz`);
+  // private per run so concurrent processes never stream each other's bytes
+  const filePath = path.join(outDir, `${target.modelSlug}-${randomUUID()}.json.gz`);
   fs.writeFileSync(filePath, gzipped);
   // content-addressed so concurrent runs never write each other's object
   const source = {
@@ -179,7 +180,9 @@ async function publishCommunityBuild(
     throw error;
   });
   if (!build) {
-    await deleteSupabaseStorageObjects([source]);
+    // identical output shares the content-addressed path, so keep it if the winner uses it
+    const occupant = await prisma.build.findFirst({ where: buildKey, select: { voxelStoragePath: true } });
+    if (occupant?.voxelStoragePath !== source.path) await deleteSupabaseStorageObjects([source]);
     return "occupied";
   }
 
