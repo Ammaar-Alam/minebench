@@ -29,7 +29,7 @@ import { createHash } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 import { generateVoxelBuild, type GenerateVoxelBuildParams } from "../lib/ai/generateVoxelBuild";
-import { claudeCapabilities } from "../lib/ai/claudeModels";
+import { claudeCapabilities, DEFAULT_TASK_BUDGET_TOKENS } from "../lib/ai/claudeModels";
 import { maxBlocksForGrid } from "../lib/ai/limits";
 import { extractBestVoxelBuildJson } from "../lib/ai/jsonExtract";
 import { getModelByKey, MODEL_CATALOG, ModelKey } from "../lib/ai/modelCatalog";
@@ -350,7 +350,7 @@ export function getBatchGenerationModel(
   return {
     ...model,
     customHeaders: { "anthropic-beta": "task-budgets-2026-03-13" },
-    customBody: { output_config: { task_budget: { type: "tokens", total: taskBudget ?? 136_000 } } },
+    customBody: { output_config: { task_budget: { type: "tokens", total: taskBudget ?? DEFAULT_TASK_BUDGET_TOKENS } } },
   };
 }
 
@@ -959,7 +959,7 @@ Options:
   --notools         Disable voxel.exec tool usage (tools are on by default)
   --no-tools        Alias for --notools
   --reasoning <s>   Override model thinking/reasoning level when the selected route supports it
-  --task_budget <n> Anthropic advisory task budget (default 136000 on supported native models; minimum 20000)
+  --task_budget <n> Anthropic advisory task budget (default 128000 on supported native models; minimum 20000)
   --attempts <n>    Max attempts per build (default 6)
   --concurrency <n> Number of concurrent generations (default 1)
   --prompt <str...> Filter prompts by slug (can specify multiple)

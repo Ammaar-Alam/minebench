@@ -43,3 +43,18 @@ restrictions can affect other visitors.
 Removal updates public vote counters, processed coverage, and public leaderboard
 inputs atomically. Pending vote jobs are removed without decrementing unapplied
 counters. Historical Glicko state used for matchup selection is not replayed.
+
+## MineBench generation
+
+Admins can fill selected community prompts with MineBench-owned runs from the
+Prompts view. **Generate** on a selected prompt plans the top 10 ranked models
+whose average benchmark cost is at most 3 USD per build; **Add to prompts** plans
+one model across every selected community prompt that does not have it yet, which
+covers newly benchmarked models. Both show the build count and estimated cost
+before anything is queued, skip models that already have a build, an Arena
+import, or a queued run for the prompt, and serialize concurrent requests per
+prompt.
+
+The generation worker runs these with its own provider keys, which it uses only
+for builds owned by a MineBench admin account. Each successful run is published
+as a MineBench Gallery example and then joins the Arena like any other example.

@@ -43,7 +43,7 @@ import { normalizeGalleryPrompt, normalizeGalleryPromptIdentity, publicGalleryTe
 const STORAGE_FAILSAFE_BYTES = 1024 * 1024 * 1024;
 const GALLERY_AUDIT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const SECRET_TTL_MS = 24 * 60 * 60 * 1000;
-const GENERATE_JOB_MAX_ATTEMPTS = 2;
+export const GENERATE_JOB_MAX_ATTEMPTS = 2;
 const HOSTED_GEMINI_MODEL_KEY = "gemini_3_8_flash";
 const HOSTED_GEMINI_RETRY_MODEL_KEYS = new Set([
   "gemini_3_7_flash",

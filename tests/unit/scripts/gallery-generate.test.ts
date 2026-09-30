@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { ModelKey } from "../../../lib/ai/modelCatalog";
-import { planCommunityModels } from "../../../scripts/gallery-generate";
+import { planCommunityModels } from "../../../lib/gallery/communityGeneration";
 
 const key = (value: string) => value as ModelKey;
 const ranked = ["a", "b", "c", "d", "e"].map((value, index) => ({ key: key(value), rank: index + 1 }));

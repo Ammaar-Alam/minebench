@@ -29,39 +29,22 @@ import { deleteArenaBuildArtifacts } from "../lib/arena/artifactOwnership";
 import { ARENA_BUILD_GRID_SIZE, ARENA_BUILD_MODE, ARENA_BUILD_PALETTE } from "../lib/arena/eligibility";
 import { databaseIdentityFromUrl, supabaseProjectRefFromApiUrl } from "../lib/db/identity";
 import { isCommunityArenaPrompt, lockEligibleGalleryCandidate } from "../lib/gallery/arenaImport";
+import {
+  DEFAULT_COMMUNITY_MAX_COST_USD,
+  DEFAULT_COMMUNITY_TOP,
+  UNPUBLISHED_CLI_BUILD,
+  coveredModelKeys,
+  loadRankedModels,
+  planCommunityModels,
+} from "../lib/gallery/communityGeneration";
 import { prisma } from "../lib/prisma";
 import { deleteSupabaseStorageObjects, uploadSupabaseStorageFile } from "../lib/storage/buildPayload";
 import { getBuildStorageBucketFromEnv, getSupabaseStorageConfig } from "../lib/storage/config";
 import { getBatchGenerationModel } from "./batch-generate";
 import { MODEL_KEY_BY_SLUG, MODEL_SLUG } from "./uploadsCatalog";
 
-const DEFAULT_TOP = 10;
-const DEFAULT_MAX_COST_USD = 3;
 const DEFAULT_CONCURRENCY = 3;
 const MAX_ATTEMPTS = 6;
-
-export type RankedModel = { key: ModelKey; rank: number };
-export type PlannedModel = RankedModel & { costUsd: number | null };
-
-// top ranked models under the price cap, or the explicit list, minus models already built
-export function planCommunityModels(opts: {
-  ranked: RankedModel[];
-  costOf: (key: ModelKey) => number | null;
-  existing: Set<string>;
-  top: number;
-  maxCostUsd: number;
-  explicit: ModelKey[];
-}): PlannedModel[] {
-  const rankOf = new Map(opts.ranked.map((model) => [model.key, model.rank]));
-  const candidates: PlannedModel[] = opts.explicit.length > 0
-    ? [...new Set(opts.explicit)].map((key) => ({ key, rank: rankOf.get(key) ?? Number.POSITIVE_INFINITY, costUsd: opts.costOf(key) }))
-    : opts.ranked.map((model) => ({ ...model, costUsd: opts.costOf(model.key) }));
-  const affordable = candidates.filter(({ costUsd }) =>
-    costUsd == null ? opts.explicit.length > 0 : costUsd <= opts.maxCostUsd,
-  );
-  const picked = opts.explicit.length > 0 ? affordable : affordable.slice(0, opts.top);
-  return picked.filter((model) => !opts.existing.has(model.key));
-}
 
 function readFlag(args: string[], name: string): string | undefined {
   const index = args.indexOf(name);
@@ -88,23 +71,6 @@ function formatUsd(value: number | null): string {
   return value == null ? "unknown" : `$${value.toFixed(2)}`;
 }
 
-async function loadRankedModels(): Promise<RankedModel[]> {
-  const latest = await prisma.modelRankSnapshot.findFirst({
-    orderBy: { capturedAt: "desc" },
-    select: { capturedAt: true },
-  });
-  if (!latest) return [];
-  const rows = await prisma.modelRankSnapshot.findMany({
-    where: { capturedAt: latest.capturedAt, model: { enabled: true, isBaseline: false, stealthVariant: null } },
-    orderBy: { rank: "asc" },
-    select: { rank: true, model: { select: { key: true } } },
-  });
-  const generatable = new Set(MODEL_CATALOG.filter((model) => model.enabled && !model.importOnly).map((model) => model.key));
-  return rows
-    .filter((row) => generatable.has(row.model.key as ModelKey))
-    .map((row) => ({ key: row.model.key as ModelKey, rank: row.rank }));
-}
-
 async function runPool<T>(items: T[], concurrency: number, run: (item: T) => Promise<void>) {
   const queue = [...items];
   await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
@@ -125,9 +91,6 @@ function assertSingleEnvironment(): string {
 }
 
 type PublishTarget = { candidateId: string; promptId: string; publicId: string; modelId: string; modelSlug: string };
-
-// an unpublished CLI row left by a failed cleanup never blocks its slot; the next run finishes the cleanup
-const UNPUBLISHED_CLI_BUILD = { active: false, arenaImportPending: false, voxelStoragePath: { startsWith: "community/" } };
 
 async function discardUnpublished(build: { id: string; voxelSha256: string | null }, source: { bucket: string; path: string }) {
   // never active, so no matchup can reference it; every step is safe to repeat
@@ -218,8 +181,8 @@ async function main() {
     console.log("Usage: pnpm gallery:generate --prompt <text|gallery id> [--top 10] [--max-cost 3] [--models a,b] [--concurrency 3] [--yes]");
     return;
   }
-  const top = Math.floor(readNumber(args, "--top", DEFAULT_TOP));
-  const maxCostUsd = readNumber(args, "--max-cost", DEFAULT_MAX_COST_USD);
+  const top = Math.floor(readNumber(args, "--top", DEFAULT_COMMUNITY_TOP));
+  const maxCostUsd = readNumber(args, "--max-cost", DEFAULT_COMMUNITY_MAX_COST_USD);
   const concurrency = Math.floor(readNumber(args, "--concurrency", DEFAULT_CONCURRENCY));
   const explicit = (readFlag(args, "--models") ?? "").split(",").filter((value) => value.trim()).map(resolveModelKey);
 
@@ -236,28 +199,19 @@ async function main() {
   if (!candidate?.officialPromptId) throw new Error("No selected, visible Gallery prompt matches --prompt");
   if (!isCommunityArenaPrompt(candidate.promptText)) throw new Error("Benchmark prompts are generated with batch:generate");
 
-  // any existing row counts, including pending gallery imports, so nothing is replaced
-  const existingRows = await prisma.build.findMany({
-    where: {
-      promptId: candidate.officialPromptId,
-      gridSize: ARENA_BUILD_GRID_SIZE,
-      palette: ARENA_BUILD_PALETTE,
-      mode: ARENA_BUILD_MODE,
-      NOT: UNPUBLISHED_CLI_BUILD,
-    },
-    select: { model: { select: { key: true } } },
-  });
+  // built, importing, or queued on the worker all count, so nothing is replaced or doubled
+  const covered = await coveredModelKeys(candidate.officialPromptId, candidate.publicId);
   const plan = planCommunityModels({
     ranked: await loadRankedModels(),
     costOf: getAverageBenchmarkCostPerBuildUsd as (key: ModelKey) => number | null,
-    existing: new Set(existingRows.map((row) => row.model.key)),
+    existing: covered,
     top,
     maxCostUsd,
     explicit,
   });
 
   console.log(`Prompt: ${candidate.promptText}`);
-  console.log(`Already built: ${existingRows.length}`);
+  console.log(`Already covered: ${covered.size}`);
   for (const model of plan) {
     const rank = Number.isFinite(model.rank) ? `#${model.rank}` : "unranked";
     console.log(`  ${rank.padStart(9)}  ${MODEL_SLUG[model.key].padEnd(28)} ${formatUsd(model.costUsd)}`);
