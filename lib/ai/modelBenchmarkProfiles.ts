@@ -85,6 +85,7 @@ const OPENAI_PRO_MAX: ModelRunParameters = [
 ];
 
 const MODEL_RUN_PARAMETERS = {
+  openai_gpt_6_1_sol: OPENAI_PRO_MAX,
   openai_gpt_6_sol: OPENAI_PRO_MAX,
   openai_gpt_6_luna: OPENAI_PRO_MAX,
   openai_gpt_6_astra: OPENAI_PRO_MAX,
@@ -348,6 +349,9 @@ const MODEL_BENCHMARK_METADATA: Partial<
   anthropic_claude_sonnet_5_5: {
     totalCost: { usd: 10.06, attemptCount: 16 },
     taskBudget: "136,000 tokens",
+  },
+  openai_gpt_6_1_sol: {
+    totalCost: { usd: 9.77, attemptCount: 18 },
   },
   openai_gpt_6_sol: {
     totalCost: { usd: 7.91, attemptCount: 15 },

@@ -456,7 +456,7 @@ function looksLikeVerbosityConfigError(body: string): boolean {
 }
 
 function defaultTextVerbosity(modelId: string): TextVerbosity | undefined {
-  return modelId.startsWith("gpt-5") || modelId.startsWith("gpt-6-") ? "high" : undefined;
+  return modelId.startsWith("gpt-5") || modelId.startsWith("gpt-6") ? "high" : undefined;
 }
 
 export async function openaiGenerateText(params: {
@@ -500,7 +500,7 @@ export async function openaiGenerateText(params: {
 
   const isGpt5Family = params.modelId.startsWith("gpt-5");
   const isGptOssFamily = params.modelId.startsWith("gpt-oss-");
-  const isGpt6Family = params.modelId.startsWith("gpt-6-");
+  const isGpt6Family = params.modelId.startsWith("gpt-6");
   const usesProReasoning = params.modelId.startsWith("gpt-5.6") || isGpt6Family;
   // Some models are Responses-only (or otherwise not supported in chat/completions).
   // For these, don't fall back to chat/completions because it hides the real failure cause.
