@@ -33,8 +33,8 @@ async function main() {
 
   assert.equal(
     getCustomBuildWorkerConcurrency(),
-    10,
-    "one worker process should overlap ten provider-bound jobs by default",
+    20,
+    "one worker process should overlap twenty provider-bound jobs by default",
   );
   process.env.CUSTOM_BUILD_WORKER_CONCURRENCY = "4";
   assert.equal(getCustomBuildWorkerConcurrency(), 4);

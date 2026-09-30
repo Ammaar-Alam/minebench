@@ -67,7 +67,7 @@ export function getCustomBuildWorkerPollMs(): number {
 }
 
 export function getCustomBuildWorkerConcurrency(): number {
-  return readIntEnv("CUSTOM_BUILD_WORKER_CONCURRENCY", 10, 1, 20);
+  return readIntEnv("CUSTOM_BUILD_WORKER_CONCURRENCY", 20, 1, 20);
 }
 
 export function getCustomBuildWorkerId(): string {
