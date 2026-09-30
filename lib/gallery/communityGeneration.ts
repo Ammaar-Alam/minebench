@@ -98,10 +98,13 @@ export async function coveredModelKeys(
       select: { customBuild: { select: { modelKey: true } } },
     }),
     // retried runs queue a job without the target, so match the build through any of its jobs
+    // the job stays running until the finished build is published
     client.customBuild.findMany({
       where: {
-        status: { in: ["queued", "running"] },
-        jobs: { some: { type: "generate", payload: { path: ["galleryCandidateId"], equals: candidatePublicId } } },
+        AND: [
+          { jobs: { some: { type: "generate", payload: { path: ["galleryCandidateId"], equals: candidatePublicId } } } },
+          { jobs: { some: { type: "generate", status: { in: ["queued", "running"] } } } },
+        ],
       },
       select: { modelKey: true },
     }),
