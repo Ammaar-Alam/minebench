@@ -237,7 +237,9 @@ async function main() {
     updateOrganizationMember,
     updateStealthEvaluation,
   } = await import("../../../lib/stealth/service");
-  const { prepareStealthCohortPrompts } = await import("../../../lib/stealth/cohort");
+  const { prepareStealthCohortPrompts, prepareStealthUploadPrompts } = await import(
+    "../../../lib/stealth/cohort"
+  );
   const { deleteUnacceptedStealthBuild, persistStealthBuild } = await import(
     "../../../lib/stealth/generation"
   );
@@ -1777,7 +1779,7 @@ async function main() {
   const uploadedEvaluation = await createStealthEvaluation(memberActor, organization.id, {
     name: `Uploaded ${suffix}`,
   });
-  const prompts = await prepareStealthCohortPrompts();
+  const prompts = await prepareStealthUploadPrompts();
   const uploadStorageUrl = process.env.SUPABASE_URL;
   const uploadStorageKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const uploadFetch = global.fetch;
@@ -1895,6 +1897,33 @@ async function main() {
     return checkpoint;
   }
 
+  // activation needs a prompt that public models already compete on
+  async function seedArenaOpponents(prompt: { id: string; gridSize: number; palette: string }) {
+    for (const label of ["a", "b"]) {
+      const opponent = await prisma.model.create({
+        data: {
+          key: `arena-opponent-${label}-${prompt.id}`,
+          provider: "Test",
+          modelId: `arena-opponent-${label}-${prompt.id}`,
+          displayName: `Arena opponent ${label}`,
+        },
+      });
+      await prisma.build.create({
+        data: {
+          promptId: prompt.id,
+          modelId: opponent.id,
+          gridSize: prompt.gridSize,
+          palette: prompt.palette,
+          mode: "precise",
+          voxelData: { version: "1.0", blocks: [{ x: 0, y: 0, z: 0, type: "stone" }] },
+          voxelSha256: randomUUID().replaceAll("-", "").repeat(2),
+          blockCount: 1,
+          generationTimeMs: 1,
+        },
+      });
+    }
+  }
+
   let uploaded: Awaited<ReturnType<typeof createStealthUploadCheckpoint>>;
   try {
     uploaded = await completeUploadCheckpoint("Uploaded One", 0, undefined, true);
@@ -1941,6 +1970,125 @@ async function main() {
     );
     await closeStealthEvaluation(memberActor, organization.id, incompleteEvaluation.id);
     await completeUploadCheckpoint("Uploaded Two", 32);
+
+    const communityPrompt = await prisma.prompt.create({
+      data: { text: `Community portrait ${suffix}`, gridSize: 512, palette: "advanced" },
+    });
+    const communityCandidate = await prisma.galleryCandidate.create({
+      data: {
+        publicId: `gal_stealth_${suffix}`,
+        promptText: communityPrompt.text,
+        promptKey: `stealth-community-${suffix}`,
+        uploaderId: admin.id,
+        selectedAt: new Date(),
+        selectedById: admin.id,
+        officialPromptId: communityPrompt.id,
+      },
+    });
+    const partialEvaluation = await createStealthEvaluation(memberActor, organization.id, {
+      name: `Partial upload ${suffix}`,
+    });
+    const partial = await createStealthUploadCheckpoint(
+      memberActor,
+      organization.id,
+      partialEvaluation.id,
+      { codename: "Partial upload" },
+    );
+    const partialResults = await prisma.stealthGenerationResult.findMany({
+      where: { runId: partial.runId },
+    });
+    assert.equal(partialResults.length, prompts.length + 1, "selected community prompts get upload slots");
+    async function queueSlot(promptId: string, x: number) {
+      const result = partialResults.find((entry) => entry.promptId === promptId);
+      assert.ok(result);
+      const target = await createStealthBuildUploadTarget(
+        memberActor,
+        organization.id,
+        partialEvaluation.id,
+        result.id,
+      );
+      uploadedBlocks.set(`https://storage.example.test/storage/v1/object/builds/${target.path}`, x);
+      await queueStealthBuildUpload(memberActor, organization.id, partialEvaluation.id, result.id);
+      return result.id;
+    }
+    async function processSlot(resultId: string, promptId: string) {
+      const workerId = `partial-${suffix}`;
+      assert.equal((await claimNextStealthGenerationJob(workerId, 30))?.id, resultId);
+      await generateStealthPromptForRun({ runId: partial.runId, promptId, workerId });
+      await finishStealthGenerationRun(partial.runId);
+      return prisma.stealthGenerationResult.findUniqueOrThrow({
+        where: { id: resultId },
+        include: { build: { select: { gridSize: true, palette: true } } },
+      });
+    }
+    async function uploadSlot(promptId: string, x: number) {
+      return processSlot(await queueSlot(promptId, x), promptId);
+    }
+    // hiding the prompt after slot creation must not orphan its upload
+    await prisma.galleryCandidate.update({
+      where: { id: communityCandidate.id },
+      data: { adminHiddenAt: new Date() },
+    });
+    const communityResultId = await queueSlot(communityPrompt.id, 300);
+    const pendingPromptId = prompts[1]!.prompt.id;
+    const pendingResultId = await queueSlot(pendingPromptId, 9);
+    // only valid on the community prompt's larger grid
+    const communityResult = await processSlot(communityResultId, communityPrompt.id);
+    assert.equal(communityResult.status, "READY");
+    assert.deepEqual(communityResult.build, { gridSize: 512, palette: "advanced" });
+    const partialVariant = await prisma.stealthVariant.findUniqueOrThrow({
+      where: { id: partial.variantId },
+    });
+    assert.equal(
+      partialVariant.status,
+      "READY",
+      "one accepted upload makes a checkpoint ready while other files process",
+    );
+    assert.equal(partialVariant.generatedBuildCount, 1);
+    await assert.rejects(
+      activateStealthEvaluation(memberActor, organization.id, partialEvaluation.id),
+      /no builds on current Arena prompts/,
+    );
+    await seedArenaOpponents(communityPrompt);
+    await activateStealthEvaluation(memberActor, organization.id, partialEvaluation.id);
+    assert.equal(
+      (await processSlot(pendingResultId, pendingPromptId)).status,
+      "READY",
+      "uploads queued before activation finish after it",
+    );
+    const liveResult = await uploadSlot(prompts[0]!.prompt.id, 7);
+    assert.equal(liveResult.status, "READY", "live upload checkpoints keep accepting builds");
+    const liveVariant = await prisma.stealthVariant.findUniqueOrThrow({
+      where: { id: partial.variantId },
+    });
+    assert.equal(liveVariant.status, "ACTIVE", "live uploads must not demote the checkpoint");
+    assert.equal(liveVariant.generatedBuildCount, 3);
+    // a worker lost after the final acceptance leaves a terminal live run
+    await prisma.stealthGenerationResult.updateMany({
+      where: { runId: partial.runId, status: { not: "READY" } },
+      data: { status: "READY", uploadQueuedAt: null },
+    });
+    await prisma.stealthGenerationRun.update({
+      where: { id: partial.runId },
+      data: { startedAt: new Date(Date.now() - 60 * 60_000) },
+    });
+    await getStealthEvaluationWorkspace(memberActor, organization.id, partialEvaluation.id);
+    assert.equal(
+      (await prisma.stealthGenerationRun.findUniqueOrThrow({ where: { id: partial.runId } })).status,
+      "SUCCEEDED",
+      "workspace reads recover terminal live upload runs",
+    );
+    assert.equal(
+      (await prisma.stealthVariant.findUniqueOrThrow({ where: { id: partial.variantId } })).status,
+      "ACTIVE",
+    );
+    assert.equal(
+      (await prisma.stealthExperiment.findUniqueOrThrow({ where: { id: partialEvaluation.id } }))
+        .status,
+      "ACTIVE",
+    );
+    await closeStealthEvaluation(memberActor, organization.id, partialEvaluation.id);
+    await prisma.galleryCandidate.delete({ where: { id: communityCandidate.id } });
   } finally {
     global.fetch = uploadFetch;
     if (uploadStorageUrl === undefined) delete process.env.SUPABASE_URL;
@@ -1959,6 +2107,7 @@ async function main() {
     2,
     "checkpoint membership stays open until activation",
   );
+  await seedArenaOpponents({ id: prompts[0]!.prompt.id, gridSize: 256, palette: "simple" });
   await activateStealthEvaluation(memberActor, organization.id, uploadedEvaluation.id);
   const active = await prisma.stealthExperiment.findUniqueOrThrow({
     where: { id: uploadedEvaluation.id },

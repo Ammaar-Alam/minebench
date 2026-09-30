@@ -6,6 +6,7 @@ import { GenerationPoller } from "@/components/lab/GenerationPoller";
 import { LabDisclosure } from "@/components/lab/LabDisclosure";
 import { LifecycleActionButton } from "@/components/lab/LifecycleActionButton";
 import { EndpointRequestOverrides } from "@/components/lab/EndpointRequestOverrides";
+import { DEFAULT_ARENA_BUILD_SETUP, formatBuildSetup } from "@/lib/arena/buildSetup";
 import { shouldPollStealthGeneration } from "@/lib/stealth/generationPolling";
 import {
   closeEvaluationAction,
@@ -54,9 +55,12 @@ export default async function EvaluationSettingsPage({
       ? selectedCheckpoint
       : null;
   const uploadCheckpoint =
+    workspace.status !== "CLOSED" &&
+    !workspace.endedAt &&
     selectedCheckpoint?.source === "UPLOAD" &&
     selectedCheckpoint.promptCohortCurrent &&
-    (selectedCheckpoint.status === "DRAFT" || selectedCheckpoint.status === "GENERATING")
+    selectedCheckpoint.latestGenerationRun?.status === "RUNNING" &&
+    ["DRAFT", "GENERATING", "READY", "ACTIVE"].includes(selectedCheckpoint.status)
       ? selectedCheckpoint
       : null;
   const refreshUpload =
@@ -220,7 +224,9 @@ export default async function EvaluationSettingsPage({
                 checkpoint.source === "UPLOAD" &&
                 (checkpoint.status === "DRAFT" ||
                   checkpoint.status === "GENERATING" ||
-                  (checkpoint.status === "READY" && !checkpoint.promptCohortCurrent)) ? (
+                  (checkpoint.status === "READY" && !checkpoint.promptCohortCurrent) ||
+                  ((checkpoint.status === "READY" || checkpoint.status === "ACTIVE") &&
+                    checkpoint.latestGenerationRun?.status === "RUNNING")) ? (
                   <Link
                     href={`?checkpoint=${encodeURIComponent(checkpoint.id)}`}
                     className="inline-flex items-center text-xs font-medium text-accent hover:underline"
@@ -269,8 +275,9 @@ export default async function EvaluationSettingsPage({
           ) : null}
         </div>
 
-        {checkpointSetOpen ? (
+        {checkpointSetOpen || uploadCheckpoint ? (
           <div className="mt-5 overflow-hidden rounded-md border border-border/70">
+            {checkpointSetOpen ? (
             <LabDisclosure
               title={
                 <span className="text-sm font-medium text-fg">
@@ -399,6 +406,7 @@ export default async function EvaluationSettingsPage({
             </div>
           </form>
             </LabDisclosure>
+            ) : null}
             <LabDisclosure
               title={
                 <span className="text-sm font-medium text-fg">
@@ -418,6 +426,11 @@ export default async function EvaluationSettingsPage({
                   slots={uploadCheckpoint.latestGenerationRun.results.map((result) => ({
                     resultId: result.resultId,
                     prompt: result.prompt,
+                    setup:
+                      result.gridSize === DEFAULT_ARENA_BUILD_SETUP.gridSize &&
+                      result.palette === DEFAULT_ARENA_BUILD_SETUP.palette
+                        ? null
+                        : formatBuildSetup(result),
                     status: result.status,
                     error: result.error,
                     uploadPending: result.uploadPending,

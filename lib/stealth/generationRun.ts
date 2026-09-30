@@ -23,10 +23,13 @@ import {
   persistStealthBuild,
 } from "@/lib/stealth/generation";
 import {
+  loadStealthUploadPrompt,
   prepareStealthCohortPrompts,
   STEALTH_COHORT_BUILD,
+  type CohortPrompt,
 } from "@/lib/stealth/cohort";
 import {
+  acceptsStealthUploads,
   assertEvaluationOperator,
   isStealthCheckpointSetOpen,
   lockExperiment,
@@ -123,6 +126,7 @@ class InvalidStealthBuildUploadError extends Error {}
 
 async function loadStealthBuildUpload(
   ref: StealthBuildUploadRef,
+  setup: Pick<CohortPrompt, "gridSize" | "palette">,
   signal?: AbortSignal,
 ) {
   let bytes: Uint8Array;
@@ -152,8 +156,8 @@ async function loadStealthBuildUpload(
   }
   bytes = new Uint8Array();
   const validated = validateOwnedVoxelBuild(parsed, {
-    gridSize: GRID_SIZE,
-    palette: getPalette(PALETTE),
+    gridSize: setup.gridSize,
+    palette: getPalette(setup.palette === "advanced" ? "advanced" : "simple"),
     maxBlocks: MAX_STEALTH_BUILD_BLOCKS,
   });
   if (!validated.ok) throw new InvalidStealthBuildUploadError(validated.error);
@@ -465,7 +469,11 @@ async function acceptStealthGenerationBuild(params: {
     ) {
       return false;
     }
-    if (!experiment || !isStealthCheckpointSetOpen(experiment.status)) return false;
+    const open =
+      run.variant.source === "UPLOAD"
+        ? acceptsStealthUploads(experiment)
+        : isStealthCheckpointSetOpen(experiment.status);
+    if (!open) return false;
     const accepted = await tx.stealthGenerationResult.updateMany({
       where: {
         ...params.resultIdentity,
@@ -499,16 +507,18 @@ export async function generateStealthPromptForRun(params: {
 }): Promise<void> {
   const identity = await prisma.stealthGenerationRun.findUnique({
     where: { id: params.runId },
-    select: { promptCohortId: true },
+    select: { promptCohortId: true, variant: { select: { source: true } } },
   });
   if (!identity) throw new Error("Generation run not found");
   if (identity.promptCohortId !== BENCHMARK_PROMPT_COHORT_ID) {
     throw new Error("The generation prompt cohort has changed");
   }
-  const prompts = await prepareStealthCohortPrompts();
-  const entry = prompts.find((prompt) =>
-    params.promptId ? prompt.prompt.id === params.promptId : prompt.slug === params.promptSlug,
-  );
+  const entry =
+    identity.variant.source === "UPLOAD" && params.promptId
+      ? await loadStealthUploadPrompt(params.promptId)
+      : (await prepareStealthCohortPrompts()).find((prompt) =>
+          params.promptId ? prompt.prompt.id === params.promptId : prompt.slug === params.promptSlug,
+        );
   if (!entry) throw new Error("Prompt not found");
   const resultIdentity = { runId: params.runId, promptId: entry.prompt.id };
   const resultKey = { runId_promptId: resultIdentity };
@@ -593,8 +603,8 @@ export async function generateStealthPromptForRun(params: {
       promptId_modelId_gridSize_palette_mode: {
         promptId: entry.prompt.id,
         modelId: run.variant.modelId,
-        gridSize: GRID_SIZE,
-        palette: PALETTE,
+        gridSize: entry.gridSize,
+        palette: entry.palette,
         mode: MODE,
       },
     },
@@ -651,7 +661,7 @@ export async function generateStealthPromptForRun(params: {
       uploadedBuild = await withStealthGenerationHeartbeat(run.id, entry.prompt.id, async () => {
         await params.acquireBuildProcessing?.();
         throwIfGenerationWorkerLeaseLost(params.signal);
-        return loadStealthBuildUpload(run.upload!, params.signal);
+        return loadStealthBuildUpload(run.upload!, entry, params.signal);
       });
     } catch (error) {
       throwIfGenerationWorkerLeaseLost(params.signal);
@@ -685,6 +695,8 @@ export async function generateStealthPromptForRun(params: {
         promptText: entry.text,
         build: uploadedBuild,
         generationTimeMs: 0,
+        gridSize: entry.gridSize,
+        palette: entry.palette,
       });
     });
     const accepted = await acceptStealthGenerationBuild({
@@ -918,9 +930,19 @@ export async function finishStealthGenerationRun(runId: string): Promise<void> {
     const results = await tx.stealthGenerationResult.findMany({
       where: { runId: run.id },
       orderBy: { updatedAt: "asc" },
-      select: { status: true, attempts: true, error: true },
+      select: { status: true, attempts: true, error: true, uploadQueuedAt: true },
     });
     const progress = summarizeGenerationResults(results);
+    // upload slots nobody has filled yet are not in flight
+    const unfinished =
+      run.variant.source === "UPLOAD"
+        ? results.filter(
+            (result) =>
+              result.status === "GENERATING" ||
+              result.status === "VALIDATING" ||
+              (result.status === "QUEUED" && result.uploadQueuedAt),
+          ).length
+        : progress.unfinishedPromptCount;
     const runProgress = {
       completedBuildCount: progress.completedBuildCount,
       failedBuildCount: progress.failedBuildCount,
@@ -933,18 +955,24 @@ export async function finishStealthGenerationRun(runId: string): Promise<void> {
       generationFailureCount: progress.failedBuildCount,
       lastGenerationError: progress.lastError,
     };
-    if (progress.unfinishedPromptCount > 0) {
+    const live = run.variant.status === "ACTIVE";
+    if (unfinished > 0) {
       await tx.stealthGenerationRun.update({ where: { id: run.id }, data: runProgress });
       if (experiment.status !== "CLOSED") {
+        // accepted uploads stay usable while other files process
+        const uploadReady =
+          run.variant.source === "UPLOAD" && !live && progress.completedBuildCount > 0;
         await tx.stealthVariant.updateMany({
           where: { id: run.variantId, status: { not: "WITHDRAWN" } },
-          data: variantProgress,
+          data: { ...variantProgress, ...(uploadReady ? { status: "READY" as const } : {}) },
         });
+        if (uploadReady) await syncExperimentReadiness(tx, run.variant.experimentId);
       }
       return;
     }
     const complete =
       progress.completedBuildCount === run.expectedBuildCount && progress.failedBuildCount === 0;
+    // partial uploads are usable and their run stays open for more files
     if (run.variant.source === "UPLOAD" && !complete) {
       await tx.stealthGenerationRun.update({ where: { id: run.id }, data: runProgress });
       if (experiment.status !== "CLOSED") {
@@ -952,7 +980,7 @@ export async function finishStealthGenerationRun(runId: string): Promise<void> {
           where: { id: run.variantId, status: { not: "WITHDRAWN" } },
           data: {
             ...variantProgress,
-            status: progress.completedBuildCount > 0 ? "GENERATING" : "DRAFT",
+            status: live ? "ACTIVE" : progress.completedBuildCount > 0 ? "READY" : "DRAFT",
           },
         });
         await syncExperimentReadiness(tx, run.variant.experimentId);
@@ -977,7 +1005,13 @@ export async function finishStealthGenerationRun(runId: string): Promise<void> {
       where: { id: run.variantId, status: { not: "WITHDRAWN" } },
       data: {
         ...variantProgress,
-        status: complete ? "READY" : progress.completedBuildCount > 0 ? "GENERATING" : "DRAFT",
+        status: live
+          ? "ACTIVE"
+          : complete
+            ? "READY"
+            : progress.completedBuildCount > 0
+              ? "GENERATING"
+              : "DRAFT",
         endpointEnabled: !complete,
         cohortGeneratedAt: complete ? new Date() : null,
       },

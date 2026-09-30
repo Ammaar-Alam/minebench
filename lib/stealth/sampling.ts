@@ -5,6 +5,7 @@ import type {
   EligibleModel,
   EligiblePrompt,
 } from "@/lib/arena/coverage";
+import { arenaBuildSetupWhere } from "@/lib/arena/eligibility";
 import { weightedPick } from "@/lib/arena/sampling";
 import { prisma } from "@/lib/prisma";
 import {
@@ -14,9 +15,6 @@ import {
 } from "@/lib/stealth/policy";
 
 const CACHE_TTL_MS = 15_000;
-const ARENA_GRID_SIZE = 256;
-const ARENA_PALETTE = "simple";
-const ARENA_MODE = "precise";
 
 type VariantSnapshot = {
   id: string;
@@ -82,11 +80,11 @@ async function querySnapshot(): Promise<StealthSamplingSnapshot> {
           id: true,
           key: true,
           builds: {
+            // live uploads persist a Build before its result is accepted
             where: {
-              gridSize: ARENA_GRID_SIZE,
-              palette: ARENA_PALETTE,
-              mode: ARENA_MODE,
+              ...arenaBuildSetupWhere(),
               prompt: { active: true },
+              stealthGenerationResults: { some: { status: "READY" } },
             },
             select: {
               id: true,

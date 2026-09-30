@@ -7,6 +7,7 @@ import { Upload } from "tus-js-client";
 type BuildSlot = {
   resultId: string;
   prompt: string;
+  setup: string | null;
   status: string;
   error: string | null;
   uploadPending: boolean;
@@ -135,7 +136,7 @@ export function CheckpointBuildUploads({
   return (
     <div className="space-y-4">
       <div className="flex items-baseline justify-between gap-4">
-        <p className="text-sm text-muted">Upload one build for each prompt</p>
+        <p className="text-sm text-muted">Upload builds for any prompts</p>
         <span className="font-mono text-xs tabular-nums text-fg">{ready}/{slots.length}</span>
       </div>
       <div className="divide-y divide-border/50 overflow-hidden rounded-md border border-border/70">
@@ -155,6 +156,9 @@ export function CheckpointBuildUploads({
               </span>
               <div className="min-w-0">
                 <p className="truncate text-sm text-fg">{slot.prompt}</p>
+                {slot.setup ? (
+                  <p className="mt-0.5 font-mono text-[10px] text-muted2">{slot.setup}</p>
+                ) : null}
                 <p className={`mt-1 text-xs ${message ? "text-danger" : "text-muted"}`}>
                   {message || slotLabel(slot, state)}
                 </p>

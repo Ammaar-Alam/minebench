@@ -68,6 +68,17 @@ export async function seedPrivateSamplingFixture(
       generationTimeMs: 1,
     },
   });
+  await db.stealthGenerationRun.create({
+    data: {
+      variantId: variant.id,
+      status: "SUCCEEDED",
+      promptCohortId: "fixture",
+      configuration: {},
+      expectedBuildCount: 1,
+      completedBuildCount: 1,
+      results: { create: { promptId: prompt.id, buildId: privateBuild.id, status: "READY" } },
+    },
+  });
 
   const publicState: ArenaMatchupSamplingState = {
     prompts: [{ id: prompt.id, text: prompt.text, modelIds: [publicModel.id] }],
