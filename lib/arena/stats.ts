@@ -6,6 +6,7 @@ import {
   resolveModelSlug,
 } from "@/lib/ai/modelCatalog";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
+import { isCommunityArenaPrompt } from "@/lib/gallery/arenaImport";
 import {
   BT_CONVERGENCE_EPSILON,
   BT_EDGE_PRIOR_POINTS,
@@ -173,6 +174,7 @@ export type ScoreDispersion = {
 export type ModelPromptBreakdown = {
   promptId: string;
   promptText: string;
+  community: boolean;
   votes: number;
   averageScore: number;
   promptStrengthPercentile: number | null;
@@ -951,6 +953,15 @@ export async function queryBuiltPromptCountByModelId(
   return new Map(rows.map((row) => [row.modelId, row._count._all]));
 }
 
+// consistency, spread, and coverage stay on the benchmark prompts every model shares
+async function queryCorePromptIds(eligiblePromptIds: string[]): Promise<Set<string>> {
+  const prompts = await prisma.prompt.findMany({
+    where: { id: { in: eligiblePromptIds } },
+    select: { id: true, text: true },
+  });
+  return new Set(prompts.filter((prompt) => !isCommunityArenaPrompt(prompt.text)).map((prompt) => prompt.id));
+}
+
 async function queryLeaderboardDispersionByModelId(): Promise<Map<string, ScoreDispersion>> {
   const promptSignal = await getPromptSignalSnapshot();
   const activePromptCount = promptSignal.eligiblePromptIds.length;
@@ -1013,8 +1024,10 @@ async function queryLeaderboardDispersionByModelId(): Promise<Map<string, ScoreD
       FROM per_prompt
     `;
 
+  const corePromptIds = await queryCorePromptIds(promptSignal.eligiblePromptIds);
   const samplesByModelId = new Map<string, PromptScoreSample[]>();
   for (const row of rows) {
+    if (!corePromptIds.has(row.promptId)) continue;
     const samples = samplesByModelId.get(row.modelId) ?? [];
     const promptStrength = promptSignal.byPromptModel.get(promptModelKey(row.promptId, row.modelId));
     samples.push({
@@ -1027,9 +1040,9 @@ async function queryLeaderboardDispersionByModelId(): Promise<Map<string, ScoreD
   }
 
   const out = new Map<string, ScoreDispersion>();
-  const builtPromptCounts = await queryBuiltPromptCountByModelId(promptSignal.eligiblePromptIds);
+  const builtPromptCounts = await queryBuiltPromptCountByModelId([...corePromptIds]);
   for (const [modelId, samples] of samplesByModelId) {
-    out.set(modelId, summarizeDispersion(samples, builtPromptCounts.get(modelId) ?? activePromptCount));
+    out.set(modelId, summarizeDispersion(samples, builtPromptCounts.get(modelId) ?? corePromptIds.size));
   }
 
   return out;
@@ -1260,6 +1273,7 @@ async function queryModelDetailStats(modelKeyOrSlug: string): Promise<ModelDetai
     }
   >();
 
+  const corePromptIds = await queryCorePromptIds(promptSignal.eligiblePromptIds);
   for (const row of promptRows) {
     const votes = toNumber(row.votes);
     const averageScore = toNumber(row.averageScore);
@@ -1277,6 +1291,7 @@ async function queryModelDetailStats(modelKeyOrSlug: string): Promise<ModelDetai
       draws: toNumber(row.draws),
       bothBad: toNumber(row.bothBad),
     });
+    if (!corePromptIds.has(row.promptId)) continue;
     promptSamples.push({
       promptId: row.promptId,
       averageScore,
@@ -1285,8 +1300,8 @@ async function queryModelDetailStats(modelKeyOrSlug: string): Promise<ModelDetai
     });
   }
 
-  const builtPromptCounts = await queryBuiltPromptCountByModelId(promptSignal.eligiblePromptIds, model.id);
-  const dispersion = summarizeDispersion(promptSamples, builtPromptCounts.get(model.id) ?? activePromptCount);
+  const builtPromptCounts = await queryBuiltPromptCountByModelId([...corePromptIds], model.id);
+  const dispersion = summarizeDispersion(promptSamples, builtPromptCounts.get(model.id) ?? corePromptIds.size);
 
   const buildByPromptId = new Map<
     string,
@@ -1324,10 +1339,11 @@ async function queryModelDetailStats(modelKeyOrSlug: string): Promise<ModelDetai
     .map((promptId) => {
       const promptStats = promptStatsById.get(promptId);
       const buildEntry = buildByPromptId.get(promptId);
+      const promptText = promptStats?.promptText ?? buildEntry?.promptText ?? "Untitled prompt";
       return {
         promptId,
-        promptText:
-          promptStats?.promptText ?? buildEntry?.promptText ?? "Untitled prompt",
+        promptText,
+        community: isCommunityArenaPrompt(promptText),
         votes: promptStats?.votes ?? 0,
         averageScore: promptStats?.averageScore ?? 0,
         promptStrengthPercentile: promptStats?.promptStrengthPercentile ?? null,
