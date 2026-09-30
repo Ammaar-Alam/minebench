@@ -1058,6 +1058,8 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
       ),
     [corePrompts],
   );
+  // the modal and shared build links cover every card on the page
+  const modalPrompts = useMemo(() => [...promptBreakdown, ...communityPrompts], [promptBreakdown, communityPrompts]);
   const maxPromptVotes = Math.max(1, ...promptBreakdown.map((prompt) => prompt.votes));
   const renderPromptCard = (prompt: ModelPromptBreakdown, index: number) => {
     const voteDensity = prompt.votes / maxPromptVotes;
@@ -1224,7 +1226,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
     }
 
     const requestedPrompt =
-      promptBreakdown.find((prompt) => prompt.build?.buildId === requestedBuildId) ?? null;
+      modalPrompts.find((prompt) => prompt.build?.buildId === requestedBuildId) ?? null;
     if (requestedPrompt) {
       setActivePrompt(requestedPrompt);
       return;
@@ -1240,7 +1242,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
     if (nextPath !== currentPath) {
       window.history.replaceState(null, "", nextPath);
     }
-  }, [pathname, promptBreakdown, requestedBuildId]);
+  }, [pathname, modalPrompts, requestedBuildId]);
 
   useEffect(() => {
     if (!activePrompt) return;
@@ -1255,8 +1257,8 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
 
   const activePromptIndex = useMemo(() => {
     if (!activePrompt) return -1;
-    return promptBreakdown.findIndex((p) => p.promptId === activePrompt.promptId);
-  }, [activePrompt, promptBreakdown]);
+    return modalPrompts.findIndex((p) => p.promptId === activePrompt.promptId);
+  }, [activePrompt, modalPrompts]);
 
   const modalExportTargets: SandboxGifExportTarget[] = useMemo(() => {
     if (!activePrompt?.build) return [];
@@ -1276,13 +1278,13 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
 
   const handlePromptPrev = useCallback(() => {
     if (activePromptIndex <= 0) return;
-    setPromptWithUrl(promptBreakdown[activePromptIndex - 1]);
-  }, [activePromptIndex, promptBreakdown, setPromptWithUrl]);
+    setPromptWithUrl(modalPrompts[activePromptIndex - 1]);
+  }, [activePromptIndex, modalPrompts, setPromptWithUrl]);
 
   const handlePromptNext = useCallback(() => {
-    if (activePromptIndex < 0 || activePromptIndex >= promptBreakdown.length - 1) return;
-    setPromptWithUrl(promptBreakdown[activePromptIndex + 1]);
-  }, [activePromptIndex, promptBreakdown, setPromptWithUrl]);
+    if (activePromptIndex < 0 || activePromptIndex >= modalPrompts.length - 1) return;
+    setPromptWithUrl(modalPrompts[activePromptIndex + 1]);
+  }, [activePromptIndex, modalPrompts, setPromptWithUrl]);
 
   // focus close on open, return focus to the prompt card on close so keyboard
   // users resume where they were. only fires on the open/close transitions so
@@ -2037,7 +2039,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
             <div className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-3 sm:gap-3 sm:px-4">
               <PromptLateralNav
                 index={activePromptIndex}
-                total={promptBreakdown.length}
+                total={modalPrompts.length}
                 onPrev={handlePromptPrev}
                 onNext={handlePromptNext}
                 enabled={activePrompt != null}
