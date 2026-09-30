@@ -10,7 +10,7 @@ import { invalidateArenaCoverageCache } from "@/lib/arena/coverage";
 import { invalidateArenaStatsCache } from "@/lib/arena/stats";
 import { DEFAULT_ARENA_BUILD_SETUP, isArenaBuildSetup, type BuildSetup } from "@/lib/arena/buildSetup";
 import { arenaCohortBuildWhere } from "@/lib/arena/eligibility";
-import { deleteRetiredGalleryArenaArtifacts, isCommunityArenaPrompt, lockEligibleGalleryCandidate, queueGalleryArenaImports } from "@/lib/gallery/arenaImport";
+import { deleteRetiredGalleryArenaArtifacts, galleryArenaCopyPathWhere, isCommunityArenaPrompt, lockEligibleGalleryCandidate, queueGalleryArenaImports } from "@/lib/gallery/arenaImport";
 import {
   sendGalleryAccountNotification,
   sendGalleryAdminNotification,
@@ -1496,7 +1496,7 @@ export async function hideGalleryExample(
       data: { adminHiddenAt: now, purgeAt, previewRetained: true },
     });
     const builds = await tx.build.findMany({
-      where: { voxelStoragePath: { startsWith: "gallery/", endsWith: `-${example.customBuildId}-g256-simple-precise.json.gz` } },
+      where: { voxelStoragePath: galleryArenaCopyPathWhere(example.customBuildId) },
       select: { id: true, voxelSha256: true, voxelStorageBucket: true, voxelStoragePath: true },
     });
     await tx.build.updateMany({ where: { id: { in: builds.map(({ id }) => id) } }, data: { active: false, arenaImportPending: false } });

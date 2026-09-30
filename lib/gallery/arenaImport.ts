@@ -35,6 +35,11 @@ export async function lockEligibleGalleryCandidate(
   }));
 }
 
+// Arena copies of a Gallery build, whatever setup their prompt uses
+export function galleryArenaCopyPathWhere(customBuildId: string) {
+  return { startsWith: "gallery/", contains: `-${customBuildId}-g` };
+}
+
 export async function deleteRetiredGalleryArenaArtifacts(
   customBuildId: string,
   deleteArtifact: typeof deleteCustomBuildArtifact = deleteCustomBuildArtifact,
@@ -43,7 +48,7 @@ export async function deleteRetiredGalleryArenaArtifacts(
     where: {
       active: false,
       arenaImportPending: false,
-      voxelStoragePath: { startsWith: "gallery/", contains: `-${customBuildId}-g` },
+      voxelStoragePath: galleryArenaCopyPathWhere(customBuildId),
     },
     select: { id: true, promptId: true, voxelSha256: true, voxelStorageBucket: true, voxelStoragePath: true },
   });
