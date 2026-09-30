@@ -168,6 +168,15 @@ function releaseKey(modelId: string): string | null {
   return `${family}-${major}.${minor}`;
 }
 
+// One advisory task budget for every Claude release that supports it
+export const DEFAULT_TASK_BUDGET_TOKENS = 128_000;
+
+export function defaultTaskBudgetBody(modelId: string): { output_config: { task_budget: { type: "tokens"; total: number } } } | undefined {
+  return claudeCapabilities(modelId).taskBudgets
+    ? { output_config: { task_budget: { type: "tokens", total: DEFAULT_TASK_BUDGET_TOKENS } } }
+    : undefined;
+}
+
 export function claudeCapabilities(modelId: string): ClaudeCapabilities {
   const key = releaseKey(modelId);
   const release = key ? CLAUDE_RELEASES[key] : undefined;

@@ -18,6 +18,7 @@ import { startCustomBuildCleanup } from "@/lib/custom-builds/cleanup";
 import { isTerminalCustomBuildGenerateError, runCustomBuildGenerateJob } from "@/lib/custom-builds/generateJob";
 import { createCustomBuildProcessingGate } from "@/lib/custom-builds/processingGate";
 import { runGalleryArenaImportJob } from "@/lib/gallery/arenaImportJob";
+import { publishMineBenchGeneration } from "@/lib/gallery/communityGeneration";
 import { startNotificationDelivery } from "@/lib/notifications/delivery";
 import {
   CustomBuildLeaseLostError,
@@ -222,6 +223,10 @@ async function runJob(
         },
       });
       throwIfCustomBuildLeaseLost(signal);
+      // ponytail: a failed auto-publish leaves the finished run for manual publishing from the admin page
+      await publishMineBenchGeneration(job).catch((error) => {
+        console.warn(`custom build job ${job.id} gallery publish skipped: ${redactSensitiveText(error)}`);
+      });
       return;
     }
     if (job.type === "arena_import") {

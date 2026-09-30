@@ -4,6 +4,7 @@ import { GRID_SIZES, PUBLIC_GRID_SIZES, isGridSize, MAX_GENERATION_PROMPT_CHARS,
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { MODEL_CATALOG, ModelKey } from "@/lib/ai/modelCatalog";
+import { DEFAULT_TASK_BUDGET_TOKENS, defaultTaskBudgetBody } from "@/lib/ai/claudeModels";
 import type { GenerateEvent, GenerateModelRequest, ProviderApiKeys } from "@/lib/ai/types";
 import {
   customProviderRequestConfigFromProfile,
@@ -1013,7 +1014,9 @@ export function SandboxLive({
         model.requestProfile.headers,
         model.requestProfile.body,
       );
-      if (model.modelKey === "anthropic_claude_opus_5_5" && providerKeys.anthropic?.trim()) {
+      const catalogModel = MODEL_CATALOG.find((entry) => entry.key === model.modelKey);
+      if (catalogModel?.provider === "anthropic" && !catalogModel.forceOpenRouter
+        && defaultTaskBudgetBody(catalogModel.modelId) && providerKeys.anthropic?.trim()) {
         const outputConfig = overrides.body?.output_config;
         if (outputConfig !== undefined && (!outputConfig || typeof outputConfig !== "object" || Array.isArray(outputConfig))) {
           throw new Error("output_config must be an object.");
@@ -1026,7 +1029,7 @@ export function SandboxLive({
           body: {
             ...overrides.body,
             output_config: {
-              task_budget: { type: "tokens", total: 128_000 },
+              task_budget: { type: "tokens", total: DEFAULT_TASK_BUDGET_TOKENS },
               ...(outputConfig as Record<string, unknown> | undefined),
             },
           },

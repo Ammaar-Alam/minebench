@@ -3,6 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { publishAdminGeneration } from "@/lib/generations/service";
+import type { ModelKey } from "@/lib/ai/modelCatalog";
+import { planGalleryGenerations, queueGalleryGenerations, type GalleryGenerationRequest } from "@/lib/gallery/communityGeneration";
 import { getCurrentAccount } from "@/lib/auth/account";
 import { getArenaVotePage, getArenaVoteReview, setArenaVoteSessionBlocked } from "@/lib/arena/voteReview";
 import { removePublicArenaVotes } from "@/lib/arena/voteModeration";
@@ -144,6 +146,47 @@ export async function blockArenaReviewSession(sessionId: string, blocked: boolea
     const { label } = await setArenaVoteSessionBlocked(await adminId(), parsed.data.sessionId, parsed.data.blocked, parsed.data.reviewedSince, parsed.data.reviewedUntil, parsed.data.reviewedUserId);
     refreshGalleryAdmin();
     return { ok: true as const, label };
+  } catch (error) {
+    return { ok: false as const, error: actionError(error) };
+  }
+}
+
+const generationRequestSchema = z.union([
+  z.object({ candidatePublicId: z.string().min(1).max(100) }).strict(),
+  z.object({ modelKey: z.string().min(1).max(100) }).strict(),
+]);
+
+function parseGenerationRequest(input: unknown): GalleryGenerationRequest | null {
+  const parsed = generationRequestSchema.safeParse(input);
+  if (!parsed.success) return null;
+  return "modelKey" in parsed.data ? { modelKey: parsed.data.modelKey as ModelKey } : parsed.data;
+}
+
+export async function previewGalleryGeneration(input: unknown) {
+  const request = parseGenerationRequest(input);
+  if (!request) return { ok: false as const, error: "Check the generation request." };
+  try {
+    await adminId();
+    const plan = await planGalleryGenerations(request);
+    return {
+      ok: true as const,
+      builds: plan.length,
+      prompts: new Set(plan.map((item) => item.publicId)).size,
+      costUsd: plan.reduce((sum, item) => sum + (item.costUsd ?? 0), 0),
+    };
+  } catch (error) {
+    return { ok: false as const, error: actionError(error) };
+  }
+}
+
+// the plan is recomputed at queue time so a stale preview never queues covered models
+export async function queueGalleryGeneration(input: unknown) {
+  const request = parseGenerationRequest(input);
+  if (!request) return { ok: false as const, error: "Check the generation request." };
+  try {
+    const result = await queueGalleryGenerations(await adminId(), request);
+    refreshGalleryAdmin();
+    return { ok: true as const, ...result };
   } catch (error) {
     return { ok: false as const, error: actionError(error) };
   }

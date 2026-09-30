@@ -21,7 +21,7 @@ runProviderConfigTest("batch task budget", {
     } }) }],
   }));
   const configurations: string[] = [];
-  for (const taskBudget of [undefined, 128_000]) {
+  for (const taskBudget of [undefined, 100_000]) {
     const traces: string[] = [];
     const result = await generateVoxelBuild({
       model: getBatchGenerationModel("anthropic_claude_opus_5_5", false, taskBudget),
@@ -37,7 +37,7 @@ runProviderConfigTest("batch task budget", {
     assert.equal(request.body.max_tokens, 128_000);
     const output = request.body.output_config as { effort: string; task_budget: unknown; format: { type: string } };
     assert.equal(output.effort, "xhigh");
-    assert.deepEqual(output.task_budget, { type: "tokens", total: taskBudget ?? 136_000 });
+    assert.deepEqual(output.task_budget, { type: "tokens", total: taskBudget ?? 128_000 });
     assert.equal(output.format.type, "json_schema");
     assert.equal(Object.hasOwn(request.body, "temperature"), false);
     assert.ok(traces.some((trace) => trace.includes(`Anthropic task budget in use: ${JSON.stringify(output.task_budget)}`)));

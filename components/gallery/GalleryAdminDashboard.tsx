@@ -8,11 +8,15 @@ import {
   mutateGalleryAdmin,
 } from "@/app/admin/gallery/actions";
 import { GalleryAdminGenerations } from "@/components/gallery/GalleryAdminGenerations";
+import { GalleryAdminGenerate } from "@/components/gallery/GalleryAdminGenerate";
+import { MODEL_CATALOG } from "@/lib/ai/modelCatalog";
 import { ArenaVoteReview } from "@/components/arena/ArenaVoteReview";
 import type {
   getGalleryAdminDashboard,
   getGalleryAdminPerson,
 } from "@/lib/gallery/service";
+
+const GENERATABLE_MODELS = MODEL_CATALOG.filter((model) => model.enabled && !model.importOnly);
 
 type Dashboard = Awaited<ReturnType<typeof getGalleryAdminDashboard>>;
 type Person = Awaited<ReturnType<typeof getGalleryAdminPerson>>;
@@ -396,6 +400,7 @@ export function GalleryAdminDashboard({ dashboard }: { dashboard: Dashboard }) {
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [suspendTarget, setSuspendTarget] = useState<{ userId: string; email: string } | null>(null);
+  const [generationModel, setGenerationModel] = useState<string>(GENERATABLE_MODELS[0]?.key ?? "");
   const [refreshing, startTransition] = useTransition();
   const personRequest = useRef(0);
 
@@ -517,6 +522,15 @@ export function GalleryAdminDashboard({ dashboard }: { dashboard: Dashboard }) {
               <input className="mb-field h-10" type="search" placeholder="Search prompts" value={promptQuery} onChange={(event) => setPromptQuery(event.target.value)} />
             </label>
           </div>
+          <div className="flex flex-wrap items-center gap-2 border-b border-border py-3">
+            <label className="min-w-0 flex-1 sm:max-w-72">
+              <span className="sr-only">Model to add to community prompts</span>
+              <select className="mb-field h-10" value={generationModel} onChange={(event) => setGenerationModel(event.target.value)}>
+                {GENERATABLE_MODELS.map((model) => <option key={model.key} value={model.key}>{model.displayName}</option>)}
+              </select>
+            </label>
+            <GalleryAdminGenerate key={generationModel} request={{ modelKey: generationModel }} label="Add to prompts" disabled={!generationModel} />
+          </div>
           <div className="flex flex-wrap gap-5 border-b border-border py-2" aria-label="Prompt filters">
             {(["latest", "reported", "hidden", "selected"] as const).map((filter) => (
               <FilterButton key={filter} active={promptFilter === filter} onClick={() => setPromptFilter(filter)}>
@@ -545,6 +559,9 @@ export function GalleryAdminDashboard({ dashboard }: { dashboard: Dashboard }) {
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2 xl:justify-end">
+                    {prompt.selected && !prompt.hidden ? (
+                      <GalleryAdminGenerate request={{ candidatePublicId: prompt.publicId }} label="Generate" disabled={Boolean(pendingKey)} />
+                    ) : null}
                     {!prompt.hidden || prompt.selected ? (
                       <button type="button" disabled={Boolean(pendingKey)} className={`mb-btn h-10${prompt.selected ? "" : " mb-btn-primary"}`} onClick={() => void mutate({ type: "candidate_selected", publicId: prompt.publicId, selected: !prompt.selected }, key)}>
                         {pendingKey === key ? "Saving…" : prompt.selected ? "Unselect" : "Select"}

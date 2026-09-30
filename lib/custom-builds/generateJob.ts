@@ -5,6 +5,7 @@ import {
   requestOverrideSecretValues,
   type SavedGenerationRequestConfig,
 } from "@/lib/ai/customProviderConfig";
+import { defaultTaskBudgetBody } from "@/lib/ai/claudeModels";
 import type { Provider } from "@/lib/ai/modelCatalog";
 import { isVoxelBuildResourceError, processVoxelBuildResponse, voxelBuildProcessingLimit, type ProcessVoxelBuildResponse } from "@/lib/ai/processVoxelBuildResponse";
 import { generateVoxelBuild, type GenerateVoxelBuildParams } from "@/lib/ai/generateVoxelBuild";
@@ -51,6 +52,9 @@ type GenerateJobPayload = {
   stubBuild?: unknown;
   openaiResponseId?: string;
   freshGeneration?: boolean;
+  // MineBench-owned runs use the worker's provider keys instead of a submitted credential
+  serverKeys?: boolean;
+  galleryCandidateId?: string;
 };
 
 type GenerateVoxelBuildModel = NonNullable<GenerateVoxelBuildParams["model"]>;
@@ -289,6 +293,62 @@ function emitCustomBuildEvent(customBuildId: string, type: string, data: Prisma.
   });
 }
 
+async function loadSubmittedCredential(customBuildId: string) {
+  const secret = await prisma.customBuildSecret.findUnique({
+    where: { customBuildId },
+  });
+  if (!secret || secret.deletedAt) {
+    throw new Error("provider_key_expired");
+  }
+  if (secret.expiresAt.getTime() <= Date.now()) {
+    throw new Error("provider_key_expired");
+  }
+  const providerKey = decryptProviderKey({
+    provider: secret.provider,
+    keyCiphertext: secret.keyCiphertext,
+    keyIv: secret.keyIv,
+    keyAuthTag: secret.keyAuthTag ?? "",
+    keyVersion: secret.keyVersion,
+  }, customBuildId);
+  const customConfig =
+    secret.endpointCiphertext && secret.endpointIv && secret.endpointAuthTag
+      ? deserializeSavedGenerationRequestConfig(
+          decryptSecretValue(
+            {
+              ciphertext: secret.endpointCiphertext,
+              iv: secret.endpointIv,
+              authTag: secret.endpointAuthTag,
+              keyVersion: secret.keyVersion,
+            },
+            customBuildId,
+          ),
+        )
+      : undefined;
+  return { providerKey, customConfig, providerKeys: providerKeysForSecret(secret.provider, providerKey) };
+}
+
+async function isMineBenchOwnedBuild(customBuild: CustomBuild): Promise<boolean> {
+  if (!customBuild.ownerId) return false;
+  return Boolean(await prisma.user.findFirst({
+    where: { id: customBuild.ownerId, isMineBenchAdmin: true, deletedAt: null },
+    select: { id: true },
+  }));
+}
+
+// the shared task budget applies on the direct Anthropic route only
+function serverKeyRequestConfig(customBuild: CustomBuild): SavedGenerationRequestConfig | undefined {
+  if (customBuild.modelProvider !== "anthropic" || customBuild.modelKind !== "catalog") return undefined;
+  if (!process.env.ANTHROPIC_API_KEY?.trim()) return undefined;
+  const body = defaultTaskBudgetBody(customBuild.modelId);
+  return body ? { body } : undefined;
+}
+
+function serverProviderKeyValues(): string[] {
+  return Object.entries(process.env).flatMap(([name, value]) =>
+    name.endsWith("_API_KEY") && value?.trim() ? [value.trim()] : [],
+  );
+}
+
 async function generateBuild(
   customBuild: CustomBuild,
   job: CustomBuildJob,
@@ -316,41 +376,16 @@ async function generateBuild(
     };
   }
 
-  const secret = await prisma.customBuildSecret.findUnique({
-    where: { customBuildId: customBuild.id },
-  });
-  if (!secret || secret.deletedAt) {
-    throw new Error("provider_key_expired");
+  const serverKeys = payload.serverKeys === true;
+  if (serverKeys && !await isMineBenchOwnedBuild(customBuild)) {
+    throw new Error("Worker provider keys are reserved for MineBench-owned generations");
   }
-  if (secret.expiresAt.getTime() <= Date.now()) {
-    throw new Error("provider_key_expired");
-  }
-  const providerKey = decryptProviderKey({
-    provider: secret.provider,
-    keyCiphertext: secret.keyCiphertext,
-    keyIv: secret.keyIv,
-    keyAuthTag: secret.keyAuthTag ?? "",
-    keyVersion: secret.keyVersion,
-  }, customBuild.id);
-  const customConfig =
-    secret.endpointCiphertext && secret.endpointIv && secret.endpointAuthTag
-      ? deserializeSavedGenerationRequestConfig(
-          decryptSecretValue(
-            {
-              ciphertext: secret.endpointCiphertext,
-              iv: secret.endpointIv,
-              authTag: secret.endpointAuthTag,
-              keyVersion: secret.keyVersion,
-            },
-            customBuild.id,
-          ),
-        )
-      : undefined;
+  const credential = serverKeys ? null : await loadSubmittedCredential(customBuild.id);
+  const customConfig = credential ? credential.customConfig : serverKeyRequestConfig(customBuild);
   const gridSize = assertGridSize(customBuild.gridSize);
   const palette = customBuild.palette === "advanced" ? "advanced" : "simple";
-  const providerKeys = providerKeysForSecret(secret.provider, providerKey);
   const configuredSecrets = [
-    providerKey,
+    ...(credential ? [credential.providerKey] : serverProviderKeyValues()),
     ...requestOverrideSecretValues(customConfig ?? {}),
   ];
   let providerAttempts = 0;
@@ -364,8 +399,8 @@ async function generateBuild(
       prompt: customBuild.promptText,
       gridSize,
       palette,
-      providerKeys,
-      allowServerKeys: false,
+      providerKeys: credential?.providerKeys,
+      allowServerKeys: serverKeys,
       preferOpenRouter: customBuild.preferOpenRouter,
       reasoning: customBuild.reasoning ?? undefined,
       abortSignal: providerSignal,
