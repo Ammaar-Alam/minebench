@@ -27,6 +27,7 @@ const mutationSchema = z.discriminatedUnion("type", [
     type: z.literal("candidate_selected"),
     publicId: z.string().min(1).max(100),
     selected: z.boolean(),
+    setup: z.object({ gridSize: z.number().int(), palette: z.enum(["simple", "advanced"]) }).optional(),
   }),
   z.object({
     type: z.literal("account_suspended"),
@@ -75,7 +76,7 @@ export async function mutateGalleryAdmin(input: unknown) {
         await hideGalleryExample(actorId, parsed.data.exampleId);
         break;
       case "candidate_selected":
-        await setGalleryCandidateSelected(actorId, parsed.data.publicId, parsed.data.selected);
+        await setGalleryCandidateSelected(actorId, parsed.data.publicId, parsed.data.selected, parsed.data.setup);
         break;
       case "account_suspended":
         await setGalleryPublishingSuspension(actorId, parsed.data.userId, {

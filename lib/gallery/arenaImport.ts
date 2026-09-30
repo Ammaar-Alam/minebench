@@ -1,6 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { deleteArenaBuildArtifacts } from "@/lib/arena/artifactOwnership";
-import { ARENA_BUILD_GRID_SIZE, ARENA_BUILD_MODE, ARENA_BUILD_PALETTE } from "@/lib/arena/eligibility";
+import { ARENA_BUILD_MODE } from "@/lib/arena/eligibility";
 import { BENCHMARK_PROMPT_MAP } from "@/lib/benchmark/prompts";
 import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
 import { prisma } from "@/lib/prisma";
@@ -43,7 +43,7 @@ export async function deleteRetiredGalleryArenaArtifacts(
     where: {
       active: false,
       arenaImportPending: false,
-      voxelStoragePath: { startsWith: "gallery/", endsWith: `-${customBuildId}-g256-simple-precise.json.gz` },
+      voxelStoragePath: { startsWith: "gallery/", contains: `-${customBuildId}-g` },
     },
     select: { id: true, promptId: true, voxelSha256: true, voxelStorageBucket: true, voxelStoragePath: true },
   });
@@ -83,19 +83,15 @@ export async function queueGalleryArenaImports(
   candidateId: string,
   promptId: string,
 ): Promise<number> {
+  const prompt = await tx.prompt.findUnique({ where: { id: promptId }, select: { gridSize: true, palette: true } });
+  if (!prompt) return 0;
+  const setup = { gridSize: prompt.gridSize, palette: prompt.palette, mode: ARENA_BUILD_MODE };
   const examples = await tx.galleryExample.findMany({
     where: {
       candidateId,
       removedAt: null,
       adminHiddenAt: null,
-      customBuild: {
-        status: "succeeded",
-        modelKind: "catalog",
-        removedAt: null,
-        gridSize: ARENA_BUILD_GRID_SIZE,
-        palette: ARENA_BUILD_PALETTE,
-        mode: ARENA_BUILD_MODE,
-      },
+      customBuild: { status: "succeeded", modelKind: "catalog", removedAt: null, ...setup },
     },
     orderBy: { createdAt: "asc" },
     select: { customBuildId: true, customBuild: { select: { modelKey: true } } },
@@ -103,7 +99,7 @@ export async function queueGalleryArenaImports(
   // models already in the arena or mid-import keep their build
   const [built, importing] = await Promise.all([
     tx.build.findMany({
-      where: { promptId, gridSize: ARENA_BUILD_GRID_SIZE, palette: ARENA_BUILD_PALETTE, mode: ARENA_BUILD_MODE },
+      where: { promptId, ...setup },
       select: { model: { select: { key: true } } },
     }),
     tx.customBuildJob.findMany({

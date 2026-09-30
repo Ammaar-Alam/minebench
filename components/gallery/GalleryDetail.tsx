@@ -1,6 +1,7 @@
 "use client";
 
 import { isGridSize } from "@/lib/ai/limits";
+import { formatBuildSetup } from "@/lib/arena/buildSetup";
 import Image from "next/image";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -535,13 +536,13 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
       </nav>
 
       <header ref={promptRef} className="relative mt-6 max-w-4xl sm:mt-8">
-        <div className="flex flex-wrap items-center gap-3 text-xs uppercase tracking-[0.12em] text-muted"><span>By {candidate.attribution}</span>{candidate.selected ? <span className="text-accent">Official prompt</span> : null}</div>
+        <div className="flex flex-wrap items-center gap-3 text-xs uppercase tracking-[0.12em] text-muted"><span>By {candidate.attribution}</span>{candidate.selected ? <span className="text-accent">Official prompt</span> : null}{candidate.arenaSetup ? <span className="font-mono normal-case tracking-normal">{formatBuildSetup(candidate.arenaSetup)}</span> : null}</div>
         <div className="mt-3 h-32 overflow-hidden text-3xl sm:text-4xl lg:text-5xl">
           <h1 ref={promptTextRef} className={`break-words font-display font-semibold leading-[1.2] tracking-tight text-fg ${promptTruncated ? "line-clamp-5" : ""}`}>{candidate.prompt}</h1>
         </div>
         <div className="mt-6 flex flex-wrap items-center gap-2">
           <GalleryVoteButton candidateId={candidate.id} initialCount={candidate.upvoteCount} initialUpvoted={candidate.upvoted} />
-          <Link href={`/sandbox?mode=live&prompt=${encodeURIComponent(candidate.prompt)}`} className="mb-btn mb-btn-primary h-11">Use prompt</Link>
+          <Link href={`/sandbox?mode=live&prompt=${encodeURIComponent(candidate.prompt)}${candidate.arenaSetup ? `&gridSize=${candidate.arenaSetup.gridSize}&palette=${candidate.arenaSetup.palette}` : ""}`} className="mb-btn mb-btn-primary h-11">Use prompt</Link>
           {candidate.arenaPromptId ? <Link href={`/sandbox?promptId=${encodeURIComponent(candidate.arenaPromptId)}`} className="mb-btn h-11">Arena builds</Link> : null}
           {promptTruncated ? (
             <button ref={promptToggleRef} type="button" aria-expanded={promptOpen} aria-controls={`gallery-prompt-${candidate.id}`} onClick={() => setPromptOpen((open) => !open)} className="inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 text-sm font-medium text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none">

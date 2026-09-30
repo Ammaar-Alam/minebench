@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { PUBLIC_GRID_SIZES } from "@/lib/ai/limits";
 import { SandboxBenchmark } from "@/components/sandbox/SandboxBenchmark";
 import { SandboxLive } from "@/components/sandbox/SandboxLive";
 import {
@@ -103,6 +104,9 @@ export function Sandbox({
   const searchKey = searchParams.toString();
   const livePrompt =
     searchParams.get("prompt") ?? (searchKey ? undefined : initialPrompt);
+  // a Gallery prompt opens with the setup its arena builds use
+  const liveGridSize = Number(searchParams.get("gridSize"));
+  const livePalette = searchParams.get("palette");
   const [mode, setMode] = useState<SandboxUrlMode>(() =>
     readSandboxUrlMode(new URLSearchParams(searchKey)),
   );
@@ -143,6 +147,8 @@ export function Sandbox({
         <SandboxLive
           key={livePrompt ?? "default"}
           initialPrompt={livePrompt}
+          initialGridSize={PUBLIC_GRID_SIZES.find((size) => size === liveGridSize)}
+          initialPalette={livePalette === "advanced" || livePalette === "simple" ? livePalette : undefined}
           signedIn={signedIn}
           allowLargeWorlds={allowLargeWorlds}
           anonymousServerKeysEnabled={anonymousServerKeysEnabled}

@@ -97,6 +97,8 @@ export type ArenaMatchup = {
   a: {
     model: ArenaModelReveal | null;
     build: RenderableVoxelBuild | null;
+    gridSize: number;
+    palette: "simple" | "advanced";
     buildRef?: ArenaBuildRef;
     previewRef?: ArenaBuildRef;
     serverValidated?: boolean;
@@ -105,6 +107,8 @@ export type ArenaMatchup = {
   b: {
     model: ArenaModelReveal | null;
     build: RenderableVoxelBuild | null;
+    gridSize: number;
+    palette: "simple" | "advanced";
     buildRef?: ArenaBuildRef;
     previewRef?: ArenaBuildRef;
     serverValidated?: boolean;

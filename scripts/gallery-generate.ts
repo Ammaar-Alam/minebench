@@ -22,11 +22,12 @@ import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import { Prisma } from "@prisma/client";
 import { generateVoxelBuild } from "../lib/ai/generateVoxelBuild";
+import { isGridSize } from "../lib/ai/limits";
 import { getAverageBenchmarkCostPerBuildUsd } from "../lib/ai/modelBenchmarkProfiles";
 import { MODEL_CATALOG, type ModelKey } from "../lib/ai/modelCatalog";
 import { maybePrecomputeArenaArtifactsForBuild } from "../lib/arena/artifactMaintenance";
 import { deleteArenaBuildArtifacts } from "../lib/arena/artifactOwnership";
-import { ARENA_BUILD_GRID_SIZE, ARENA_BUILD_MODE, ARENA_BUILD_PALETTE } from "../lib/arena/eligibility";
+import { ARENA_BUILD_MODE } from "../lib/arena/eligibility";
 import { databaseIdentityFromUrl, supabaseProjectRefFromApiUrl } from "../lib/db/identity";
 import { isCommunityArenaPrompt, lockEligibleGalleryCandidate } from "../lib/gallery/arenaImport";
 import {
@@ -90,7 +91,7 @@ function assertSingleEnvironment(): string {
   return database.projectRef;
 }
 
-type PublishTarget = { candidateId: string; promptId: string; publicId: string; modelId: string; modelSlug: string };
+type PublishTarget = { candidateId: string; promptId: string; publicId: string; modelId: string; modelSlug: string; gridSize: number; palette: string };
 
 async function discardUnpublished(build: { id: string; voxelSha256: string | null }, source: { bucket: string; path: string }) {
   // never active, so no matchup can reference it; every step is safe to repeat
@@ -114,15 +115,15 @@ async function publishCommunityBuild(
   // content-addressed so concurrent runs never write each other's object
   const source = {
     bucket: getBuildStorageBucketFromEnv(),
-    path: `community/${target.publicId}/${target.modelSlug}-${sha256.slice(0, 16)}-g256-simple-precise.json.gz`,
+    path: `community/${target.publicId}/${target.modelSlug}-${sha256.slice(0, 16)}-g${target.gridSize}-${target.palette}-${ARENA_BUILD_MODE}.json.gz`,
   };
   await uploadSupabaseStorageFile({ ...source, filePath, byteSize: gzipped.byteLength, contentType: "application/gzip" });
 
   const buildKey = {
     promptId: target.promptId,
     modelId: target.modelId,
-    gridSize: ARENA_BUILD_GRID_SIZE,
-    palette: ARENA_BUILD_PALETTE,
+    gridSize: target.gridSize,
+    palette: target.palette,
     mode: ARENA_BUILD_MODE,
   };
   const leftover = await prisma.build.findFirst({
@@ -194,13 +195,17 @@ async function main() {
       adminHiddenAt: null,
       officialPromptId: { not: null },
     },
-    select: { id: true, publicId: true, promptText: true, officialPromptId: true },
+    select: { id: true, publicId: true, promptText: true, officialPrompt: { select: { id: true, gridSize: true, palette: true } } },
   });
-  if (!candidate?.officialPromptId) throw new Error("No selected, visible Gallery prompt matches --prompt");
+  const prompt = candidate?.officialPrompt;
+  if (!candidate || !prompt) throw new Error("No selected, visible Gallery prompt matches --prompt");
+  if (!isGridSize(prompt.gridSize)) throw new Error(`Unsupported prompt grid size ${prompt.gridSize}`);
+  const gridSize = prompt.gridSize;
+  const palette = prompt.palette === "advanced" ? "advanced" : "simple";
   if (!isCommunityArenaPrompt(candidate.promptText)) throw new Error("Benchmark prompts are generated with batch:generate");
 
   // built, importing, or queued on the worker all count, so nothing is replaced or doubled
-  const covered = await coveredModelKeys(candidate.officialPromptId, candidate.publicId);
+  const covered = await coveredModelKeys(prompt.id, candidate.publicId);
   const plan = planCommunityModels({
     ranked: await loadRankedModels(),
     costOf: getAverageBenchmarkCostPerBuildUsd as (key: ModelKey) => number | null,
@@ -243,7 +248,7 @@ async function main() {
     // a slot filled since planning is skipped before spending
     if (await prisma.build.findFirst({
       where: {
-        promptId: candidate.officialPromptId!, modelId, gridSize: ARENA_BUILD_GRID_SIZE, palette: ARENA_BUILD_PALETTE, mode: ARENA_BUILD_MODE,
+        promptId: prompt.id, modelId, gridSize, palette, mode: ARENA_BUILD_MODE,
         NOT: UNPUBLISHED_CLI_BUILD,
       },
       select: { id: true },
@@ -256,8 +261,8 @@ async function main() {
     const result = await generateVoxelBuild({
       model: getBatchGenerationModel(key, false),
       prompt: candidate.promptText,
-      gridSize: ARENA_BUILD_GRID_SIZE,
-      palette: ARENA_BUILD_PALETTE,
+      gridSize,
+      palette,
       maxAttempts: MAX_ATTEMPTS,
       enableTools: true,
       onRetry: (attempt, reason) => console.log(`    ↻ ${modelSlug} retry ${attempt}${reason ? `: ${reason}` : ""}`),
@@ -268,7 +273,7 @@ async function main() {
     }
     try {
       const outcome = await publishCommunityBuild(
-        { candidateId: candidate.id, promptId: candidate.officialPromptId!, publicId: candidate.publicId, modelId, modelSlug },
+        { candidateId: candidate.id, promptId: prompt.id, publicId: candidate.publicId, modelId, modelSlug, gridSize, palette },
         result,
         outDir,
       );

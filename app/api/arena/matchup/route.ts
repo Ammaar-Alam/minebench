@@ -1038,6 +1038,8 @@ export async function GET(req: Request) {
       previewRef: { buildId: blindBuildAccess.a, variant: "preview", checksum: null },
       serverValidated: Boolean(preparedA || (shouldInlineA && persistedInitialBuildA)),
       buildLoadHints: preparedA?.hints ?? shellHintsA,
+      gridSize: buildA.gridSize,
+      palette: buildA.palette === "advanced" ? "advanced" : "simple",
     },
     b: {
       model: null,
@@ -1051,6 +1053,8 @@ export async function GET(req: Request) {
       previewRef: { buildId: blindBuildAccess.b, variant: "preview", checksum: null },
       serverValidated: Boolean(preparedB || (shouldInlineB && persistedInitialBuildB)),
       buildLoadHints: preparedB?.hints ?? shellHintsB,
+      gridSize: buildB.gridSize,
+      palette: buildB.palette === "advanced" ? "advanced" : "simple",
     },
   };
   if (!picked.stealthVariantId) {

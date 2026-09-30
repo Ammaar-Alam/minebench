@@ -28,6 +28,7 @@ import {
   voxelBuildBlockCount,
   type RenderableVoxelBuild,
 } from "@/lib/voxel/packedBlocks";
+import { isGridSize } from "@/lib/ai/limits";
 import { getPalette } from "@/lib/blocks/palettes";
 import {
   createVoxelMeshPayloadInWorker,
@@ -2142,7 +2143,7 @@ export function Arena() {
               warmEntry.started = true;
               const { payload: meshPayload } = await createVoxelMeshPayloadInWorker(
                 payload.voxelBuild!,
-                getPalette("simple"),
+                getPalette(matchupValue[side].palette === "advanced" ? "advanced" : "simple"),
                 { signal: warmController.signal, blockLimit: blockCount },
               );
               return meshPayload;
@@ -3011,6 +3012,8 @@ export function Arena() {
                   />
                 }
                 voxelBuild={matchup?.a.build ?? null}
+                gridSize={isGridSize(matchup?.a.gridSize) ? matchup.a.gridSize : 256}
+                palette={matchup?.a.palette === "advanced" ? "advanced" : "simple"}
                 expectedBlockCount={matchup ? getExpectedBlocksForLane(matchup.a) : undefined}
                 meshCacheKey={matchup ? getLaneMeshCacheKey(matchup.a) : null}
                 getPremeshedPayloadPromise={
@@ -3079,6 +3082,8 @@ export function Arena() {
                   />
                 }
                 voxelBuild={matchup?.b.build ?? null}
+                gridSize={isGridSize(matchup?.b.gridSize) ? matchup.b.gridSize : 256}
+                palette={matchup?.b.palette === "advanced" ? "advanced" : "simple"}
                 expectedBlockCount={matchup ? getExpectedBlocksForLane(matchup.b) : undefined}
                 meshCacheKey={matchup ? getLaneMeshCacheKey(matchup.b) : null}
                 getPremeshedPayloadPromise={

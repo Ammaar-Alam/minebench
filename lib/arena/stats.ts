@@ -24,10 +24,9 @@ import {
   thetaToRating,
   varianceToStandardError,
 } from "@/lib/arena/rating";
+import { DEFAULT_ARENA_BUILD_SETUP } from "@/lib/arena/buildSetup";
 import {
-  ARENA_BUILD_GRID_SIZE,
-  ARENA_BUILD_MODE,
-  ARENA_BUILD_PALETTE,
+  arenaBuildSetupWhere,
   arenaCohortBuildWhere,
   getArenaEligiblePromptIds,
 } from "@/lib/arena/eligibility";
@@ -261,7 +260,7 @@ function variance(values: number[]): number | null {
 
 function normalizeGridSize(value: number): 64 | 256 | 512 {
   if (value === 64 || value === 256 || value === 512) return value;
-  return ARENA_BUILD_GRID_SIZE;
+  return DEFAULT_ARENA_BUILD_SETUP.gridSize;
 }
 
 function normalizePalette(value: string): "simple" | "advanced" {
@@ -1236,9 +1235,7 @@ async function queryModelDetailStats(modelKeyOrSlug: string): Promise<ModelDetai
       where: {
         active: true,
         modelId: model.id,
-        gridSize: ARENA_BUILD_GRID_SIZE,
-        palette: ARENA_BUILD_PALETTE,
-        mode: ARENA_BUILD_MODE,
+        ...arenaBuildSetupWhere(),
         promptId: { in: promptSignal.eligiblePromptIds },
       },
       select: {

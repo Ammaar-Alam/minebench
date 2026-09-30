@@ -4,7 +4,7 @@ import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import { deleteRetiredGalleryArenaArtifacts, lockEligibleGalleryCandidate } from "@/lib/gallery/arenaImport";
 import { maybePrecomputeArenaArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
-import { ARENA_BUILD_GRID_SIZE, ARENA_BUILD_MODE, ARENA_BUILD_PALETTE } from "@/lib/arena/eligibility";
+import { ARENA_BUILD_MODE } from "@/lib/arena/eligibility";
 import { prisma } from "@/lib/prisma";
 import { copySupabaseStorageObject, isMissingBuildPayloadError } from "@/lib/storage/buildPayload";
 import { getBuildStorageBucketFromEnv } from "@/lib/storage/config";
@@ -23,15 +23,18 @@ export async function runGalleryArenaImportJob(
   // unselected or hidden prompts stay out of the arena
   const selected = await prisma.galleryCandidate.findFirst({
     where: { officialPromptId: promptId, selectedAt: { not: null }, removedAt: null, adminHiddenAt: null },
-    select: { id: true },
+    select: { id: true, officialPrompt: { select: { gridSize: true, palette: true } } },
   });
-  if (!selected) return;
+  if (!selected?.officialPrompt) return;
+  const { gridSize, palette } = selected.officialPrompt;
 
   const source = await prisma.customBuild.findUnique({
     where: { id: job.customBuildId },
     select: {
       removedAt: true,
       modelKey: true,
+      gridSize: true,
+      palette: true,
       blockCount: true,
       buildSha256: true,
       generationTimeMs: true,
@@ -46,18 +49,13 @@ export async function runGalleryArenaImportJob(
   const model = source?.modelKey
     ? await prisma.model.findUnique({ where: { key: source.modelKey }, select: { id: true, isBaseline: true } })
     : null;
-  if (!source || !model || model.isBaseline) return;
+  // only builds made with the prompt's setup compete on it
+  if (!source || !model || model.isBaseline || source.gridSize !== gridSize || source.palette !== palette) return;
 
-  const buildKey = {
-    promptId,
-    modelId: model.id,
-    gridSize: ARENA_BUILD_GRID_SIZE,
-    palette: ARENA_BUILD_PALETTE,
-    mode: ARENA_BUILD_MODE,
-  };
+  const buildKey = { promptId, modelId: model.id, gridSize, palette, mode: ARENA_BUILD_MODE };
   const bucket = getBuildStorageBucketFromEnv();
   // source-specific so a reused path always carries the same payload
-  const path = `gallery/${promptId}/${source.modelKey}-${job.customBuildId}-g256-simple-precise.json.gz`;
+  const path = `gallery/${promptId}/${source.modelKey}-${job.customBuildId}-g${gridSize}-${palette}-${ARENA_BUILD_MODE}.json.gz`;
   const existing = await prisma.build.findFirst({ where: buildKey });
   // never replace a build this import did not create, retries resume their own
   if (existing && !existing.active && !existing.arenaImportPending) return;

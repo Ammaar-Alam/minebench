@@ -589,6 +589,8 @@ function customBuildRetryProvider(status: SavedGenerationPayload): keyof Provide
 
 export function SandboxLive({
   initialPrompt,
+  initialGridSize,
+  initialPalette,
   signedIn,
   allowLargeWorlds = false,
   anonymousServerKeysEnabled,
@@ -598,6 +600,8 @@ export function SandboxLive({
   gallerySuspended,
 }: {
   initialPrompt?: string;
+  initialGridSize?: GridSize;
+  initialPalette?: Palette;
   signedIn: boolean;
   allowLargeWorlds?: boolean;
   anonymousServerKeysEnabled: boolean;
@@ -607,8 +611,8 @@ export function SandboxLive({
   gallerySuspended: boolean;
 }) {
   const [prompt, setPrompt] = useState(() => initialPrompt ?? "");
-  const [gridSize, setGridSize] = useState<GridSize>(256);
-  const [palette, setPalette] = useState<Palette>("simple");
+  const [gridSize, setGridSize] = useState<GridSize>(initialGridSize ?? 256);
+  const [palette, setPalette] = useState<Palette>(initialPalette ?? "simple");
   const [providerKeys, setProviderKeys] = useState<ProviderApiKeys>(() => loadProviderKeysFromStorage());
   const [customModel, setCustomModel] = useState<CustomProviderProfile>(() => loadCustomProviderProfile());
   const [modelRequestProfiles, setModelRequestProfiles] = useState<Record<string, RequestOverridesProfile>>(

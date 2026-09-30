@@ -20,6 +20,7 @@ import {
   type VoxelExplorerBuild,
 } from "@/components/voxel/VoxelExplorerLauncher";
 import { MAX_BLOCKS_BY_GRID, type GridSize } from "@/lib/ai/limits";
+import { formatBuildSetup } from "@/lib/arena/buildSetup";
 import { getPalette } from "@/lib/blocks/palettes";
 import { formatBuildDuration, formatBuildJsonSize } from "@/lib/buildMetrics";
 import type { VoxelMeshPayload } from "@/lib/voxel/mesh";
@@ -351,6 +352,7 @@ export function VoxelViewerCard({
               {build ? (
                 <div className="mt-1.5 flex flex-wrap items-center gap-y-1 font-mono text-[11px] tabular-nums text-muted sm:text-xs [&>span+span]:before:mx-2 [&>span+span]:before:text-border [&>span+span]:before:content-['·']">
                   <span className="whitespace-nowrap">{blockCount.toLocaleString()} blocks</span>
+                  <span className="whitespace-nowrap">{formatBuildSetup({ gridSize, palette })}</span>
                   {jsonSize ? <span className="whitespace-nowrap">{jsonSize} JSON</span> : null}
                   {timing ? <span className="whitespace-nowrap">{timing}</span> : null}
                   {metrics?.attempts ? (

@@ -8,6 +8,7 @@ import { voxelWorldPartSourceSha256 } from "@/lib/custom-builds/worldArtifacts";
 import { invalidateArenaBuildMeta } from "@/lib/arena/buildMetaCache";
 import { invalidateArenaCoverageCache } from "@/lib/arena/coverage";
 import { invalidateArenaStatsCache } from "@/lib/arena/stats";
+import { DEFAULT_ARENA_BUILD_SETUP, isArenaBuildSetup, type BuildSetup } from "@/lib/arena/buildSetup";
 import { arenaCohortBuildWhere } from "@/lib/arena/eligibility";
 import { deleteRetiredGalleryArenaArtifacts, isCommunityArenaPrompt, lockEligibleGalleryCandidate, queueGalleryArenaImports } from "@/lib/gallery/arenaImport";
 import {
@@ -102,7 +103,7 @@ const candidateSelect = {
   selectedAt: true,
   officialPromptId: true,
   officialPrompt: {
-    select: { active: true, _count: { select: { builds: { where: arenaCohortBuildWhere() } } } },
+    select: { active: true, gridSize: true, palette: true, _count: { select: { builds: { where: arenaCohortBuildWhere() } } } },
   },
   postAnonymously: true,
   uploader: {
@@ -237,6 +238,9 @@ function publicCandidate(
     upvoteCount: candidate.upvoteCount,
     upvoted,
     selected: Boolean(candidate.selectedAt),
+    arenaSetup: candidate.selectedAt && candidate.officialPrompt
+      ? { gridSize: candidate.officialPrompt.gridSize, palette: candidate.officialPrompt.palette }
+      : null,
     // only link once Compare can show this prompt
     arenaPromptId: candidate.selectedAt && candidate.officialPrompt?.active && candidate.officialPrompt._count.builds >= 2
       ? candidate.officialPromptId
@@ -928,8 +932,14 @@ export async function requireMineBenchAdmin(userId: string) {
   if (!admin) throw new GalleryServiceError("forbidden", "MineBench admin access required.");
 }
 
-export async function setGalleryCandidateSelected(adminId: string, publicId: string, selected: boolean) {
+export async function setGalleryCandidateSelected(
+  adminId: string,
+  publicId: string,
+  selected: boolean,
+  setup: BuildSetup = DEFAULT_ARENA_BUILD_SETUP,
+) {
   await requireMineBenchAdmin(adminId);
+  if (!isArenaBuildSetup(setup)) throw new GalleryServiceError("invalid_setup", "Choose a supported grid and palette.");
   const now = new Date();
   const result = await prisma.$transaction(async (tx) => {
     const locked = await tx.$queryRaw<Array<{ id: string }>>`
@@ -968,7 +978,8 @@ export async function setGalleryCandidateSelected(adminId: string, publicId: str
     const prompt = selected
       ? await tx.prompt.upsert({
           where: { text: candidate.promptText },
-          create: { text: candidate.promptText, active: false },
+          // an existing prompt keeps the setup its builds were made with
+          create: { text: candidate.promptText, active: false, gridSize: setup.gridSize, palette: setup.palette },
           update: {},
           select: { id: true },
         })
@@ -1605,6 +1616,7 @@ export async function getGalleryAdminDashboard(
         publishedAt: true,
         selectedAt: true,
         adminHiddenAt: true,
+        officialPrompt: { select: { gridSize: true, palette: true } },
         uploaderId: true,
         uploader: {
           select: {
@@ -1751,6 +1763,7 @@ export async function getGalleryAdminDashboard(
       upvoteCount: prompt.upvoteCount,
       publishedAt: prompt.publishedAt.toISOString(),
       selected: Boolean(prompt.selectedAt),
+      setup: prompt.officialPrompt ? { gridSize: prompt.officialPrompt.gridSize, palette: prompt.officialPrompt.palette } : null,
       hidden: Boolean(prompt.adminHiddenAt),
       reportCount: prompt._count.moderationRecords,
       uploader: {
