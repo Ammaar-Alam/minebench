@@ -28,6 +28,7 @@ import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import { GenerationPreflightDialog } from "@/components/sandbox/GenerationPreflightDialog";
 import { GenerationGalleryButton } from "@/components/gallery/GenerationGalleryButton";
 import { isSavedGenerationRecovery } from "@/lib/generations/retry";
+import { sandboxPromptHref } from "@/lib/arena/buildSetup";
 import { readBuildVariantPayload } from "@/lib/arena/clientBuildResponse";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import {
@@ -655,9 +656,7 @@ export function SandboxLive({
         !providerKeys.gemini?.trim() &&
         !providerKeys.openrouter?.trim())),
   );
-  const signInHref = `/sign-in?next=${encodeURIComponent(
-    `/sandbox?mode=live&prompt=${encodeURIComponent(prompt)}`,
-  )}`;
+  const signInHref = `/sign-in?next=${encodeURIComponent(sandboxPromptHref(prompt, { gridSize, palette }))}`;
   const [apiKeysOpen, setApiKeysOpen] = useState(false);
   const [providerKeysOpen, setProviderKeysOpen] = useState(false);
   const [, forceRender] = useState(0);
