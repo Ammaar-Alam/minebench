@@ -11,15 +11,29 @@ Saved builds remain outside Gallery until their owner publishes them or an admin
 reviews and publishes them anonymously. The original owner keeps control and can
 remove the example from Gallery. Admins should review the prompt and build for
 personal or sensitive content before publishing; anonymous attribution only hides
-the contributor name. Gallery votes and examples are separate from Arena rankings
-and benchmark results.
-MineBench reviews the highest-voted prompt proposals and can promote them into
-the official benchmark; votes guide that editorial decision rather than
-changing the benchmark automatically.
+the contributor name. Gallery votes never enter Arena rankings.
+MineBench reviews the highest-voted prompt proposals and can select them; votes
+guide that editorial decision rather than changing the Arena automatically.
 
 The MineBench account also publishes new runs of existing official prompts.
 Each example keeps its original run date, so the Gallery can show later retests
 and run-to-run variation without replacing the canonical benchmark build.
+
+## Community prompts in the Arena
+
+Selecting a community prompt adds it to the Arena. Each catalog model's first
+published example at the standard grid, palette, and mode is copied into an
+Arena build, and examples published later join automatically. Unselecting or
+hiding the prompt removes it from matchups; its existing votes are kept.
+
+Votes on community prompts count toward ratings, records, and head-to-head
+results. The fixed benchmark prompt set stays unchanged: consistency, spread,
+coverage, the prompt strength curve, and benchmark block metrics use only
+benchmark prompts, and model pages list community prompts in their own section.
+A ranking limited to benchmark prompts can be recomputed from stored votes.
+
+To add fresh runs from the leaderboard's top models to a selected community
+prompt, see `pnpm gallery:generate` in [Operations](./operations.md).
 
 See [Architecture](./architecture.md) for the data and generation flow.
 

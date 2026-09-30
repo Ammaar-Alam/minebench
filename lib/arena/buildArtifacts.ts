@@ -1,6 +1,8 @@
 import { isGridSize, type GridSize } from "@/lib/ai/limits";
 import { encodeVoxelPositionKey } from "@/lib/voxel/coordinateKeys";
 import { createHash } from "node:crypto";
+import { Readable } from "node:stream";
+import { createGunzip } from "node:zlib";
 import { Prisma } from "@prisma/client";
 import { getPalette } from "@/lib/blocks/palettes";
 import {
@@ -17,7 +19,8 @@ import {
   type RenderableVoxelBuild,
 } from "@/lib/voxel/packedBlocks";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
-import { resolveBuildPayload } from "@/lib/storage/buildPayload";
+import { fetchStoredBuildBytes, resolveBuildPayload } from "@/lib/storage/buildPayload";
+import { parseVoxelBuildStream } from "@/lib/voxel/sourceStream";
 import { normalizeArenaBuildChecksum } from "@/lib/arena/buildChecksum";
 
 export type ArenaBuildVariant = "preview" | "full";
@@ -599,22 +602,58 @@ async function awaitPreparedWithCallerAbort(
   }
 }
 
+async function* storedSourceChunks(bytes: Uint8Array, counter: { bytes: number }): AsyncGenerator<Uint8Array> {
+  const gzipped = bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
+  const chunks: AsyncIterable<Uint8Array> | Iterable<Uint8Array> = gzipped
+    ? Readable.from([bytes]).pipe(createGunzip())
+    : (function* () {
+        for (let offset = 0; offset < bytes.byteLength; offset += 1 << 20) yield bytes.subarray(offset, offset + (1 << 20));
+      })();
+  for await (const chunk of chunks) {
+    counter.bytes += chunk.byteLength;
+    yield chunk;
+  }
+}
+
+// stored sources stream into packed blocks so the decompressed JSON never becomes one string or object graph
+async function parseStoredBuildStream(
+  source: ArenaBuildSource,
+  opts?: PrepareArenaBuildOptions,
+): Promise<{ build: VoxelBuild; decodedBytes: number } | null> {
+  if (source.voxelData || !source.voxelStorageBucket || !source.voxelStoragePath) return null;
+  const bytes = await fetchStoredBuildBytes(
+    { bucket: source.voxelStorageBucket, path: source.voxelStoragePath, encoding: source.voxelStorageEncoding },
+    { signal: opts?.signal },
+  );
+  const counter = { bytes: 0 };
+  try {
+    return { build: await parseVoxelBuildStream(storedSourceChunks(bytes, counter)), decodedBytes: counter.bytes };
+  } catch {
+    // older wrapped or non-canonical payloads take the permissive decoder
+    return null;
+  }
+}
+
 async function parseAndValidateBuild(
   source: ArenaBuildSource,
   opts?: PrepareArenaBuildOptions,
 ): Promise<ParsedArenaBuild> {
   throwIfAborted(opts?.signal);
-  const payload = await resolveBuildPayload(source, { signal: opts?.signal });
+  const streamed = await parseStoredBuildStream(source, opts);
+  const payload = streamed?.build ?? await resolveBuildPayload(source, { signal: opts?.signal });
   throwIfAborted(opts?.signal);
-  const payloadEstimatedBytes = shouldEstimatePayloadBytes(source)
-    ? estimatePayloadBytes(payload)
-    : null;
+  const payloadEstimatedBytes = !shouldEstimatePayloadBytes(source)
+    ? null
+    : streamed
+      ? streamed.decodedBytes
+      : estimatePayloadBytes(payload);
 
   const validated = validateVoxelBuild(payload, {
     gridSize: normalizeGridSize(source.gridSize),
     palette: getPalette(normalizePalette(source.palette)),
     // Arena path intentionally avoids hard max-block enforcement.
     maxBlocks: Number.MAX_SAFE_INTEGER,
+    ...(streamed ? { output: "packed" as const } : {}),
   });
 
   if (validated.ok) {
@@ -622,6 +661,8 @@ async function parseAndValidateBuild(
     return { build: validated.value.build, payloadEstimatedBytes };
   }
 
+  // the stream parser already enforced the same structural rules
+  if (streamed) return { build: streamed.build, payloadEstimatedBytes };
   const parsed = parseVoxelBuildSpec(payload);
   if (!parsed.ok) {
     throw new Error(`Build payload is invalid: ${parsed.error}`);

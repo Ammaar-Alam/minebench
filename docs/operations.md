@@ -201,6 +201,20 @@ The command is read-only unless `--yes` is added. A confirmed import creates or
 reuses a saved generation, publishes it as a dated Gallery example, and marks
 the candidate as an official prompt. It does not replace the benchmark build.
 
+To fill a selected community prompt with fresh Arena builds:
+
+```bash
+pnpm gallery:generate --prompt "An accurate globe"
+```
+
+The plan picks the top 10 ranked models whose average benchmark cost is at most
+3 USD per build, skips models that already have a build for the
+prompt, and prints each model with the estimated total. Nothing is generated
+unless `--yes` is added. `--top`, `--max-cost`, `--models a,b`, and
+`--concurrency` adjust the plan. Runs use benchmark generation settings, publish
+into the environment named by `DATABASE_URL` and the Supabase storage settings
+(which must be the same project), and never enter benchmark metrics.
+
 ### Admin Routes
 
 Bearer `ADMIN_TOKEN` required.

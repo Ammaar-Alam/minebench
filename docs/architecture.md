@@ -81,6 +81,17 @@ coverage verification, metric refresh, and activation. The same native artifact
 maintenance runs when new builds are imported, so future builds do not require
 a separate MBF1 migration.
 
+Preparation streams stored sources straight into packed block arrays and
+validates them in place, so the decompressed JSON never becomes one string or a
+block object graph. Stream artifacts are gzip-compressed as they are produced.
+Peak heap therefore stays bounded as builds grow: a million fully visible blocks
+prepare every artifact within a 128 MB heap.
+
+Selected community Gallery prompts reach the Arena through the same worker.
+Each import copies the example's source into Arena storage, prepares its
+artifacts, and publishes the build only while the prompt is still selected and
+visible.
+
 Derived objects are immutable and checksum-addressed. `ArenaBuildArtifact`
 rows record which build owns each Storage object so lifecycle cleanup can remove
 unreferenced artifacts without guessing from path names.

@@ -5,32 +5,14 @@ import {
   prepareArenaBuild,
 } from "@/lib/arena/buildArtifacts";
 import { estimateArenaBuildBytes, isArtifactEligibleBuild } from "@/lib/arena/buildDeliveryPolicy";
-import type { ArenaBuildStreamEvent } from "@/lib/arena/types";
 import {
-  encodeArenaBuildStreamEvent,
+  gzipArenaBuildStreamEvents,
   iterateArenaBuildStreamEvents,
   uploadArenaBuildStreamArtifact,
 } from "@/lib/arena/buildStream";
 import { ensureArenaBuildSnapshotArtifacts } from "@/lib/arena/buildSnapshotArtifacts";
 import { invalidateArenaBuildMeta } from "@/lib/arena/buildMetaCache";
 import { prisma } from "@/lib/prisma";
-
-function chunkBytes(events: Iterable<ArenaBuildStreamEvent>) {
-  const encoded: Uint8Array[] = [];
-  let total = 0;
-  for (const event of events) {
-    const bytes = encodeArenaBuildStreamEvent(event);
-    encoded.push(bytes);
-    total += bytes.length;
-  }
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const part of encoded) {
-    out.set(part, offset);
-    offset += part.length;
-  }
-  return out;
-}
 
 function resolveSourceBytes(source: ArenaBuildSource): number | null {
   const fromMetadata = estimateArenaBuildBytes({
@@ -91,7 +73,7 @@ async function maybePrecomputeArenaStreamArtifactsForPrepared(
   let uploaded = 0;
   for (const variant of ["full", "preview"] as const) {
     const variantBuild = pickBuildVariant(prepared, variant);
-    const bytes = chunkBytes(
+    const bytes = await gzipArenaBuildStreamEvents(
       iterateArenaBuildStreamEvents({
         buildId: prepared.buildId,
         variant,
