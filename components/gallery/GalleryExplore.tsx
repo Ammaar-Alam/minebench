@@ -7,7 +7,7 @@ import { Fragment, memo, useEffect, useDeferredValue, useId, useRef, useState } 
 import type { GalleryCandidatePayload } from "@/lib/gallery/service";
 import { GalleryVoteButton } from "@/components/gallery/GalleryVoteButton";
 import { VoxelEmptyState } from "@/components/voxel/VoxelEmptyState";
-import { formatBuildSetup } from "@/lib/arena/buildSetup";
+import { formatBuildSetup, sandboxPromptHref } from "@/lib/arena/buildSetup";
 import { formatBuildDuration, formatBuildJsonSize } from "@/lib/buildMetrics";
 
 type GallerySort = "top" | "new" | "official";
@@ -232,7 +232,7 @@ const GalleryCard = memo(function GalleryCard({
       </div>
       <div className="flex items-center justify-between border-t border-border/40 px-3 py-1">
         <GalleryVoteButton candidateId={candidate.id} initialCount={candidate.upvoteCount} initialUpvoted={candidate.upvoted} />
-        <Link href={`/sandbox?mode=live&prompt=${encodeURIComponent(candidate.prompt)}`} className="inline-flex min-h-11 items-center px-2 text-sm text-muted transition-colors hover:text-fg motion-reduce:transition-none">Use prompt</Link>
+        <Link href={sandboxPromptHref(candidate.prompt, candidate.arenaSetup)} className="inline-flex min-h-11 items-center px-2 text-sm text-muted transition-colors hover:text-fg motion-reduce:transition-none">Use prompt</Link>
       </div>
       </article>
     </div>

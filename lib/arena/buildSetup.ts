@@ -17,3 +17,13 @@ export function isArenaBuildSetup(setup: BuildSetup): boolean {
 export function formatBuildSetup({ gridSize, palette }: BuildSetup): string {
   return `${gridSize} · ${palette === "advanced" ? "Advanced" : "Simple"}`;
 }
+
+// Sandbox opens a prompt with the setup its arena builds use
+export function sandboxPromptHref(prompt: string, setup: BuildSetup | null): string {
+  const params = new URLSearchParams({ mode: "live", prompt });
+  if (setup) {
+    params.set("gridSize", String(setup.gridSize));
+    params.set("palette", setup.palette);
+  }
+  return `/sandbox?${params}`;
+}
