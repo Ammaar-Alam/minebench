@@ -21,9 +21,13 @@ and run-to-run variation without replacing the canonical benchmark build.
 
 ## Community prompts in the Arena
 
-Selecting a community prompt adds it to the Arena. Each catalog model's first
-published example at the standard grid, palette, and mode is copied into an
-Arena build, and examples published later join automatically. Unselecting or
+Selecting a community prompt adds it to the Arena. The admin picks its grid size
+and palette when selecting it (256 and simple by default; 512 and advanced are
+also available), and the prompt keeps that setup. Each catalog model's first
+published example made with the prompt's setup is copied into an Arena build,
+and examples published later join automatically. Examples made with another
+setup stay in the Gallery only. The prompt page shows the setup, and **Use
+prompt** opens Sandbox with it. Unselecting or
 hiding the prompt removes it from matchups; its existing votes are kept.
 
 Votes on community prompts count toward ratings, records, and head-to-head

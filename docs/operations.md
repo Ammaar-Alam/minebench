@@ -6,9 +6,10 @@ Use this guide for arena behavior, voxel runtime details, import workflows, and 
 
 ### Arena Settings
 
-- Grid size: `256`
-- Palette: `simple`
+- Grid size: `256` for benchmark prompts; community prompts use `256` or `512`
+- Palette: `simple` for benchmark prompts; community prompts use `simple` or `advanced`
 - Mode: `precise`
+- A build competes only when its grid size and palette match its prompt's, so matchups always compare builds made under the same setup
 
 ### Matchup Sampling and Voting
 
