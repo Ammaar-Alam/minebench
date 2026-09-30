@@ -77,9 +77,13 @@ export async function loadRankedModels(): Promise<RankedModel[]> {
 }
 
 // built, importing, or already generating for this prompt
-export async function coveredModelKeys(promptId: string, candidatePublicId: string): Promise<Set<string>> {
+export async function coveredModelKeys(
+  promptId: string,
+  candidatePublicId: string,
+  client: Prisma.TransactionClient = prisma,
+): Promise<Set<string>> {
   const [built, jobs] = await Promise.all([
-    prisma.build.findMany({
+    client.build.findMany({
       where: {
         promptId,
         gridSize: ARENA_BUILD_GRID_SIZE,
@@ -89,7 +93,7 @@ export async function coveredModelKeys(promptId: string, candidatePublicId: stri
       },
       select: { model: { select: { key: true } } },
     }),
-    prisma.customBuildJob.findMany({
+    client.customBuildJob.findMany({
       where: {
         status: { in: ["queued", "running"] },
         OR: [
@@ -175,43 +179,56 @@ export async function queueGalleryGenerations(adminId: string, request: GalleryG
   await requireMineBenchAdmin(adminId);
   const publisher = await loadMineBenchGalleryPublisher();
   const plan = await planGalleryGenerations(request);
-  for (const item of plan) {
-    const model = getModelByKey(item.key);
-    await prisma.customBuild.create({
-      data: {
-        publicId: generateCustomBuildPublicId(),
-        ownerId: publisher.id,
-        status: "queued",
-        currentStage: "queued",
-        promptText: item.promptText,
-        promptSha256: sha256Hex(item.promptText),
-        gridSize: ARENA_BUILD_GRID_SIZE,
-        palette: ARENA_BUILD_PALETTE,
-        mode: ARENA_BUILD_MODE,
-        modelKind: "catalog",
-        modelKey: model.key,
-        modelProvider: model.provider,
-        modelId: model.modelId,
-        modelDisplayName: model.displayName,
-        openRouterModelId: model.openRouterModelId,
-        preferOpenRouter: false,
-        jobs: {
-          create: {
-            type: "generate",
-            status: "queued",
-            maxAttempts: GENERATE_JOB_MAX_ATTEMPTS,
-            // user generations go first
-            priority: -1,
-            payload: { serverKeys: true, galleryCandidateId: item.publicId },
-          },
-        },
-        events: { create: { seq: 1, type: "queued", data: { stage: "queued" } } },
-      },
-    });
+  const byCandidate = new Map<string, GalleryGenerationPlanItem[]>();
+  for (const item of plan) byCandidate.set(item.candidateId, [...(byCandidate.get(item.candidateId) ?? []), item]);
+  const queued: GalleryGenerationPlanItem[] = [];
+  for (const [candidateId, items] of byCandidate) {
+    // concurrent requests serialize on the candidate and recheck coverage, so nothing is paid for twice
+    queued.push(...await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "GalleryCandidate" WHERE id = ${candidateId} FOR UPDATE`;
+      const covered = await coveredModelKeys(items[0].promptId, items[0].publicId, tx);
+      const fresh = items.filter((item) => !covered.has(item.key));
+      for (const item of fresh) await tx.customBuild.create({ data: queuedGenerationData(item, publisher.id) });
+      return fresh;
+    }));
   }
   return {
-    queued: plan.length,
-    costUsd: plan.reduce((sum, item) => sum + (item.costUsd ?? 0), 0),
+    queued: queued.length,
+    costUsd: queued.reduce((sum, item) => sum + (item.costUsd ?? 0), 0),
+  };
+}
+
+function queuedGenerationData(item: GalleryGenerationPlanItem, ownerId: string): Prisma.CustomBuildUncheckedCreateInput {
+  const model = getModelByKey(item.key);
+  return {
+    publicId: generateCustomBuildPublicId(),
+    ownerId,
+    status: "queued",
+    currentStage: "queued",
+    promptText: item.promptText,
+    promptSha256: sha256Hex(item.promptText),
+    gridSize: ARENA_BUILD_GRID_SIZE,
+    palette: ARENA_BUILD_PALETTE,
+    mode: ARENA_BUILD_MODE,
+    modelKind: "catalog",
+    modelKey: model.key,
+    modelProvider: model.provider,
+    modelId: model.modelId,
+    modelDisplayName: model.displayName,
+    openRouterModelId: model.openRouterModelId,
+    // OpenRouter-only catalog models keep their route, matching Sandbox resolution
+    preferOpenRouter: Boolean(model.forceOpenRouter),
+    jobs: {
+      create: {
+        type: "generate",
+        status: "queued",
+        maxAttempts: GENERATE_JOB_MAX_ATTEMPTS,
+        // user generations go first
+        priority: -1,
+        payload: { serverKeys: true, galleryCandidateId: item.publicId },
+      },
+    },
+    events: { create: { seq: 1, type: "queued", data: { stage: "queued" } } },
   };
 }
 
