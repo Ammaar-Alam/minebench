@@ -524,9 +524,10 @@ async function readCustomBuildViewer(
   status: SavedGenerationPayload,
   signal?: AbortSignal,
 ): Promise<VoxelBuild | null> {
-  if (!status.viewerUrl) return null;
+  const viewerUrl = status.worldViewerUrl ?? status.viewerUrl;
+  if (!viewerUrl) return null;
   try {
-    const res = await fetch(status.viewerUrl, { cache: "no-store", signal, redirect: "follow" });
+    const res = await fetch(viewerUrl, { cache: "no-store", signal, redirect: "follow" });
     if (!res.ok) {
       throw new CustomBuildViewerReadError(
         "Viewer unavailable",
