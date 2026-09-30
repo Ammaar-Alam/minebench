@@ -215,6 +215,8 @@ export async function assertSavedGenerationStorageAvailable(ownerId: string): Pr
   const retained = await prisma.customBuild.aggregate({
     where: {
       ownerId,
+      // admin accounts hold MineBench's own Gallery runs
+      owner: { isMineBenchAdmin: false },
       removedAt: null,
       storedByteSize: { gt: 0 },
     },

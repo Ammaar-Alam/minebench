@@ -82,7 +82,7 @@ export async function coveredModelKeys(
   candidatePublicId: string,
   client: Prisma.TransactionClient = prisma,
 ): Promise<Set<string>> {
-  const [built, jobs] = await Promise.all([
+  const [built, imports, generating] = await Promise.all([
     client.build.findMany({
       where: {
         promptId,
@@ -94,19 +94,21 @@ export async function coveredModelKeys(
       select: { model: { select: { key: true } } },
     }),
     client.customBuildJob.findMany({
+      where: { status: { in: ["queued", "running"] }, type: "arena_import", payload: { path: ["promptId"], equals: promptId } },
+      select: { customBuild: { select: { modelKey: true } } },
+    }),
+    // retried runs queue a job without the target, so match the build through any of its jobs
+    client.customBuild.findMany({
       where: {
         status: { in: ["queued", "running"] },
-        OR: [
-          { type: "arena_import", payload: { path: ["promptId"], equals: promptId } },
-          { type: "generate", payload: { path: ["galleryCandidateId"], equals: candidatePublicId } },
-        ],
+        jobs: { some: { type: "generate", payload: { path: ["galleryCandidateId"], equals: candidatePublicId } } },
       },
-      select: { customBuild: { select: { modelKey: true } } },
+      select: { modelKey: true },
     }),
   ]);
   return new Set([
     ...built.map(({ model }) => model.key),
-    ...jobs.flatMap(({ customBuild }) => (customBuild.modelKey ? [customBuild.modelKey] : [])),
+    ...[...imports.map(({ customBuild }) => customBuild), ...generating].flatMap(({ modelKey }) => (modelKey ? [modelKey] : [])),
   ]);
 }
 
@@ -238,13 +240,18 @@ function galleryPublishTarget(payload: Prisma.JsonValue | null): string | null {
 }
 
 // a finished MineBench run becomes a Gallery example, which queues its arena import
-export async function publishMineBenchGeneration(job: Pick<CustomBuildJob, "customBuildId" | "payload">): Promise<void> {
-  const candidatePublicId = galleryPublishTarget(job.payload);
-  if (!candidatePublicId) return;
+export async function publishMineBenchGeneration(job: Pick<CustomBuildJob, "customBuildId">): Promise<void> {
   const build = await prisma.customBuild.findUnique({
     where: { id: job.customBuildId },
-    select: { status: true, ownerId: true, publicId: true },
+    select: {
+      status: true,
+      ownerId: true,
+      publicId: true,
+      // retries queue a fresh job, so the target lives on the first one
+      jobs: { where: { type: "generate" }, orderBy: { createdAt: "asc" }, take: 1, select: { payload: true } },
+    },
   });
-  if (build?.status !== "succeeded" || !build.ownerId) return;
+  const candidatePublicId = galleryPublishTarget(build?.jobs[0]?.payload ?? null);
+  if (!candidatePublicId || build?.status !== "succeeded" || !build.ownerId) return;
   await addGalleryExample(build.ownerId, candidatePublicId, { generationId: build.publicId, postAnonymously: false });
 }
