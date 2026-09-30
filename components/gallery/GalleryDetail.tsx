@@ -542,7 +542,7 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
         </div>
         <div className="mt-6 flex flex-wrap items-center gap-2">
           <GalleryVoteButton candidateId={candidate.id} initialCount={candidate.upvoteCount} initialUpvoted={candidate.upvoted} />
-          <Link href={sandboxPromptHref(candidate.prompt, candidate.arenaSetup)} className="mb-btn mb-btn-primary h-11">Use prompt</Link>
+          <Link href={sandboxPromptHref(candidate.prompt, candidate.arenaSetup ?? candidate.cover)} className="mb-btn mb-btn-primary h-11">Use prompt</Link>
           {candidate.arenaPromptId ? <Link href={`/sandbox?promptId=${encodeURIComponent(candidate.arenaPromptId)}`} className="mb-btn h-11">Arena builds</Link> : null}
           {promptTruncated ? (
             <button ref={promptToggleRef} type="button" aria-expanded={promptOpen} aria-controls={`gallery-prompt-${candidate.id}`} onClick={() => setPromptOpen((open) => !open)} className="inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 text-sm font-medium text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none">
