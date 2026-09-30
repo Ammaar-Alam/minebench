@@ -232,7 +232,7 @@ const GalleryCard = memo(function GalleryCard({
       </div>
       <div className="flex items-center justify-between border-t border-border/40 px-3 py-1">
         <GalleryVoteButton candidateId={candidate.id} initialCount={candidate.upvoteCount} initialUpvoted={candidate.upvoted} />
-        <Link href={sandboxPromptHref(candidate.prompt, candidate.arenaSetup)} className="inline-flex min-h-11 items-center px-2 text-sm text-muted transition-colors hover:text-fg motion-reduce:transition-none">Use prompt</Link>
+        <Link href={sandboxPromptHref(candidate.prompt, candidate.arenaSetup ?? candidate.cover)} className="inline-flex min-h-11 items-center px-2 text-sm text-muted transition-colors hover:text-fg motion-reduce:transition-none">Use prompt</Link>
       </div>
       </article>
     </div>
