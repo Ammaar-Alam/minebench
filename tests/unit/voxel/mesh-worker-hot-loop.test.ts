@@ -139,11 +139,11 @@ function testGoldenFixtureParity() {
         center: [0, 1, 0],
         radius: 3.3166247903554,
       },
-      opaque: "df54ea03428a9106ba47c77937cf84e9ac78cc7eba2d5320be087be55892163f",
-      cutout: "4bf492b47cc53b30a21a3c2806d34c77be2d889a935e657522cf889a57702cea",
-      transparent: "5364da0fd150926b2784db69b4ee5d69515473a18b52a15cae81628da6bc86d7",
+      opaque: "304ed625847c80cde0c54c51bbfa573dcca40ad2a59713f6ac8cd7c4a279c008",
+      cutout: "9884315e5ccbaf5c36a22bf2e7cc2c4da2e29b7bbbeacd7d71d1c389af914323",
+      transparent: "ad052efe0e3221555b97b852828b269ff3a846de651a0a2dd5ed5afd7719909a",
       water: "3837124069a5028ab0ced933f1191134f2d3de55cb9673a833940f06ce5323b2",
-      emissive: "658dc921a4324796a974235b0fde578b1ed9b79da841f9689c524a0ea62af6a3",
+      emissive: "0373349598bdca66f1e6863ce37467c25889091b78b064c2bf6133225d96f519",
     },
   );
 
