@@ -66,7 +66,7 @@ function protectionBypassHeaders(): Record<string, string> {
 const DEFAULT_STORAGE_BUCKET = "builds";
 const DEFAULT_STORAGE_PREFIX = "imports";
 
-export interface Job {
+interface Job {
   promptSlug: string;
   promptText: string | null;
   modelKey: ModelKey;
@@ -786,7 +786,7 @@ async function finalizeStorageImport(
   return { ok: false, error: `Finalize import failed (HTTP ${resp.status}): ${text}` };
 }
 
-export async function uploadBuild(
+async function uploadBuild(
   job: Job,
   generationTimeMs?: number,
 ): Promise<{ ok: boolean; buildId?: string; error?: string }> {

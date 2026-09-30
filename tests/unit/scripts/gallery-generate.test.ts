@@ -14,5 +14,7 @@ assert.deepEqual(keys(planCommunityModels({ ranked, costOf, existing: new Set(),
 assert.deepEqual(keys(planCommunityModels({ ranked, costOf, existing: new Set(["a"]), top: 3, maxCostUsd: 3, explicit: [] })), ["c", "e"]);
 // explicit models keep the cap for known costs and allow unknown ones
 assert.deepEqual(keys(planCommunityModels({ ranked, costOf, existing: new Set(), top: 10, maxCostUsd: 3, explicit: [key("b"), key("d"), key("e")] })), ["d", "e"]);
+// repeated explicit models plan once
+assert.deepEqual(keys(planCommunityModels({ ranked, costOf, existing: new Set(), top: 10, maxCostUsd: 3, explicit: [key("e"), key("e"), key("c")] })), ["e", "c"]);
 
 console.log("gallery generate planning checks passed");

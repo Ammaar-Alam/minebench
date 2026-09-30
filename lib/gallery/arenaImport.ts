@@ -22,6 +22,19 @@ export function pickArenaImportSources<T extends { customBuild: { modelKey: stri
   });
 }
 
+// moderation and publication take the candidate lock in the same order
+export async function lockEligibleGalleryCandidate(
+  tx: Prisma.TransactionClient,
+  candidateId: string,
+  promptId: string,
+): Promise<boolean> {
+  await tx.$queryRaw`SELECT id FROM "GalleryCandidate" WHERE id = ${candidateId} FOR UPDATE`;
+  return Boolean(await tx.galleryCandidate.findFirst({
+    where: { id: candidateId, officialPromptId: promptId, selectedAt: { not: null }, removedAt: null, adminHiddenAt: null },
+    select: { id: true },
+  }));
+}
+
 export async function deleteRetiredGalleryArenaArtifacts(
   customBuildId: string,
   deleteArtifact: typeof deleteCustomBuildArtifact = deleteCustomBuildArtifact,

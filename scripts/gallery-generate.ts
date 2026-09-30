@@ -8,22 +8,31 @@
  *   pnpm gallery:generate --prompt <gallery id> --top 5 --max-cost 1
  *   pnpm gallery:generate --prompt <gallery id> --models gpt-6-sol,gemini-3-8-flash --yes
  *
- * Each model runs once with benchmark generation settings and uploads through the
- * same import path as batch:generate. Runs never enter benchmark metrics.
+ * Each model runs once with benchmark generation settings. Builds publish into the
+ * database and storage of the current environment through the same pending then
+ * candidate-locked publication as Gallery arena imports. Runs never enter
+ * benchmark metrics.
  */
 import "dotenv/config";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
+import { Prisma } from "@prisma/client";
 import { generateVoxelBuild } from "../lib/ai/generateVoxelBuild";
 import { getAverageBenchmarkCostPerBuildUsd } from "../lib/ai/modelBenchmarkProfiles";
 import { MODEL_CATALOG, type ModelKey } from "../lib/ai/modelCatalog";
+import { maybePrecomputeArenaArtifactsForBuild } from "../lib/arena/artifactMaintenance";
+import { deleteArenaBuildArtifacts } from "../lib/arena/artifactOwnership";
 import { ARENA_BUILD_GRID_SIZE, ARENA_BUILD_MODE, ARENA_BUILD_PALETTE } from "../lib/arena/eligibility";
-import { isCommunityArenaPrompt } from "../lib/gallery/arenaImport";
+import { databaseIdentityFromUrl, supabaseProjectRefFromApiUrl } from "../lib/db/identity";
+import { isCommunityArenaPrompt, lockEligibleGalleryCandidate } from "../lib/gallery/arenaImport";
 import { prisma } from "../lib/prisma";
-import { getBatchGenerationModel, uploadBuild, type Job } from "./batch-generate";
-import { galleryDatabaseTarget } from "./gallery-cli";
+import { deleteSupabaseStorageObjects, uploadSupabaseStorageFile } from "../lib/storage/buildPayload";
+import { getBuildStorageBucketFromEnv, getSupabaseStorageConfig } from "../lib/storage/config";
+import { getBatchGenerationModel } from "./batch-generate";
 import { MODEL_KEY_BY_SLUG, MODEL_SLUG } from "./uploadsCatalog";
 
 const DEFAULT_TOP = 10;
@@ -45,7 +54,7 @@ export function planCommunityModels(opts: {
 }): PlannedModel[] {
   const rankOf = new Map(opts.ranked.map((model) => [model.key, model.rank]));
   const candidates: PlannedModel[] = opts.explicit.length > 0
-    ? opts.explicit.map((key) => ({ key, rank: rankOf.get(key) ?? Number.POSITIVE_INFINITY, costUsd: opts.costOf(key) }))
+    ? [...new Set(opts.explicit)].map((key) => ({ key, rank: rankOf.get(key) ?? Number.POSITIVE_INFINITY, costUsd: opts.costOf(key) }))
     : opts.ranked.map((model) => ({ ...model, costUsd: opts.costOf(model.key) }));
   const affordable = candidates.filter(({ costUsd }) =>
     costUsd == null ? opts.explicit.length > 0 : costUsd <= opts.maxCostUsd,
@@ -103,6 +112,92 @@ async function runPool<T>(items: T[], concurrency: number, run: (item: T) => Pro
   }));
 }
 
+// selection, existing-build checks, and publication must share one environment
+function assertSingleEnvironment(): string {
+  const database = databaseIdentityFromUrl(process.env.DATABASE_URL ?? "");
+  const storageRef = supabaseProjectRefFromApiUrl(getSupabaseStorageConfig().url);
+  if (!database?.projectRef || database.projectRef !== storageRef) {
+    throw new Error(
+      `DATABASE_URL (${database?.projectRef ?? "unknown"}) and Supabase storage (${storageRef ?? "unknown"}) must be the same project`,
+    );
+  }
+  return database.projectRef;
+}
+
+type PublishTarget = { candidateId: string; promptId: string; publicId: string; modelId: string; modelSlug: string };
+
+async function discardUnpublished(build: { id: string; voxelSha256: string | null }, source: { bucket: string; path: string }) {
+  // never active, so no matchup can reference it
+  await prisma.build.update({ where: { id: build.id }, data: { active: false, arenaImportPending: false } });
+  await deleteArenaBuildArtifacts({ retiringBuilds: [build], survivingChecksums: new Set(), deleteStorage: deleteSupabaseStorageObjects });
+  await deleteSupabaseStorageObjects([source]);
+  await prisma.build.delete({ where: { id: build.id } });
+}
+
+async function publishCommunityBuild(
+  target: PublishTarget,
+  generated: { build: unknown; blockCount: number; generationTimeMs: number },
+  outDir: string,
+): Promise<"published" | "occupied" | "withdrawn"> {
+  const jsonBytes = Buffer.from(JSON.stringify(generated.build, null, 2));
+  const sha256 = createHash("sha256").update(jsonBytes).digest("hex");
+  const gzipped = gzipSync(jsonBytes);
+  const filePath = path.join(outDir, `${target.modelSlug}.json.gz`);
+  fs.writeFileSync(filePath, gzipped);
+  // content-addressed so concurrent runs never write each other's object
+  const source = {
+    bucket: getBuildStorageBucketFromEnv(),
+    path: `community/${target.publicId}/${target.modelSlug}-${sha256.slice(0, 16)}-g256-simple-precise.json.gz`,
+  };
+  await uploadSupabaseStorageFile({ ...source, filePath, byteSize: gzipped.byteLength, contentType: "application/gzip" });
+
+  const buildKey = {
+    promptId: target.promptId,
+    modelId: target.modelId,
+    gridSize: ARENA_BUILD_GRID_SIZE,
+    palette: ARENA_BUILD_PALETTE,
+    mode: ARENA_BUILD_MODE,
+  };
+  // create-only: a slot filled after planning is kept as is
+  const build = await prisma.build.create({
+    data: {
+      ...buildKey,
+      active: false,
+      arenaImportPending: true,
+      voxelData: Prisma.DbNull,
+      voxelStorageBucket: source.bucket,
+      voxelStoragePath: source.path,
+      voxelStorageEncoding: "gzip",
+      voxelByteSize: jsonBytes.byteLength,
+      voxelCompressedByteSize: gzipped.byteLength,
+      voxelSha256: sha256,
+      blockCount: generated.blockCount,
+      generationTimeMs: generated.generationTimeMs,
+    },
+  }).catch((error: unknown) => {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") return null;
+    throw error;
+  });
+  if (!build) {
+    await deleteSupabaseStorageObjects([source]);
+    return "occupied";
+  }
+
+  let published = false;
+  try {
+    await maybePrecomputeArenaArtifactsForBuild(build);
+    published = await prisma.$transaction(async (tx) => {
+      if (!await lockEligibleGalleryCandidate(tx, target.candidateId, target.promptId)) return false;
+      await tx.build.update({ where: { id: build.id }, data: { active: true, arenaImportPending: false } });
+      await tx.prompt.update({ where: { id: target.promptId }, data: { active: true } });
+      return true;
+    });
+  } finally {
+    if (!published) await discardUnpublished(build, source);
+  }
+  return published ? "published" : "withdrawn";
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const promptArg = readFlag(args, "--prompt")?.trim();
@@ -123,7 +218,7 @@ async function main() {
       adminHiddenAt: null,
       officialPromptId: { not: null },
     },
-    select: { publicId: true, promptText: true, officialPromptId: true },
+    select: { id: true, publicId: true, promptText: true, officialPromptId: true },
   });
   if (!candidate?.officialPromptId) throw new Error("No selected, visible Gallery prompt matches --prompt");
   if (!isCommunityArenaPrompt(candidate.promptText)) throw new Error("Benchmark prompts are generated with batch:generate");
@@ -147,9 +242,7 @@ async function main() {
     explicit,
   });
 
-  const siteUrl = (process.env.MINEBENCH_SITE_URL ?? "https://minebench.ai").replace(/\/+$/, "");
   console.log(`Prompt: ${candidate.promptText}`);
-  console.log(`Database: ${galleryDatabaseTarget()}  Import target: ${siteUrl}`);
   console.log(`Already built: ${existingRows.length}`);
   for (const model of plan) {
     const rank = Number.isFinite(model.rank) ? `#${model.rank}` : "unranked";
@@ -158,22 +251,36 @@ async function main() {
   const total = plan.reduce((sum, model) => sum + (model.costUsd ?? 0), 0);
   console.log(`Estimated cost: $${total.toFixed(2)} for ${plan.length} build${plan.length === 1 ? "" : "s"}`);
   if (plan.length === 0 || !args.includes("--yes")) {
-    if (plan.length > 0) console.log("Plan only. Add --yes to generate and upload.");
+    if (plan.length > 0) console.log("Plan only. Add --yes to generate and publish.");
     return;
   }
+  // fail before any paid generation when publication cannot happen
+  console.log(`Publishing to project ${assertSingleEnvironment()}, bucket ${getBuildStorageBucketFromEnv()}`);
+  const modelIds = new Map((await prisma.model.findMany({
+    where: { key: { in: plan.map(({ key }) => key) }, enabled: true, isBaseline: false },
+    select: { id: true, key: true },
+  })).map((model) => [model.key, model.id]));
 
   const outDir = path.join(os.tmpdir(), "minebench-gallery-generate", candidate.publicId);
   fs.mkdirSync(outDir, { recursive: true });
   const failures: string[] = [];
+  const outcomes = { published: 0, occupied: 0, withdrawn: 0 };
   await runPool(plan, concurrency, async ({ key }) => {
     const modelSlug = MODEL_SLUG[key];
-    const job: Job = {
-      promptSlug: `community/${candidate.publicId}`,
-      promptText: candidate.promptText,
-      modelKey: key,
-      modelSlug,
-      filePath: path.join(outDir, `${modelSlug}.json`),
-    };
+    const modelId = modelIds.get(key);
+    if (!modelId) {
+      failures.push(`${modelSlug}: not enabled in this environment`);
+      return;
+    }
+    // a slot filled since planning is skipped before spending
+    if (await prisma.build.findFirst({
+      where: { promptId: candidate.officialPromptId!, modelId, gridSize: ARENA_BUILD_GRID_SIZE, palette: ARENA_BUILD_PALETTE, mode: ARENA_BUILD_MODE },
+      select: { id: true },
+    })) {
+      outcomes.occupied += 1;
+      console.log(`  – ${modelSlug} occupied`);
+      return;
+    }
     console.log(`  → ${modelSlug} generating`);
     const result = await generateVoxelBuild({
       model: getBatchGenerationModel(key, false),
@@ -188,16 +295,20 @@ async function main() {
       failures.push(`${modelSlug}: ${result.error}`);
       return;
     }
-    fs.writeFileSync(job.filePath, JSON.stringify(result.build, null, 2));
-    const uploaded = await uploadBuild(job, result.generationTimeMs);
-    if (!uploaded.ok) {
-      failures.push(`${modelSlug}: ${uploaded.error} (saved at ${job.filePath})`);
-      return;
+    try {
+      const outcome = await publishCommunityBuild(
+        { candidateId: candidate.id, promptId: candidate.officialPromptId!, publicId: candidate.publicId, modelId, modelSlug },
+        result,
+        outDir,
+      );
+      outcomes[outcome] += 1;
+      console.log(`  ${outcome === "published" ? "✓" : "–"} ${modelSlug} ${outcome}`);
+    } catch (error) {
+      failures.push(`${modelSlug}: ${error instanceof Error ? error.message : String(error)} (saved in ${outDir})`);
     }
-    console.log(`  ✓ ${modelSlug} ${result.blockCount.toLocaleString()} blocks`);
   });
 
-  console.log(`Done: ${plan.length - failures.length}/${plan.length} uploaded`);
+  console.log(`Done: ${outcomes.published} published, ${outcomes.occupied} already built, ${outcomes.withdrawn} withdrawn`);
   for (const failure of failures) console.log(`  ✗ ${failure}`);
   if (failures.length > 0) process.exitCode = 1;
 }
