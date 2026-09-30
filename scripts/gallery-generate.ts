@@ -126,12 +126,15 @@ function assertSingleEnvironment(): string {
 
 type PublishTarget = { candidateId: string; promptId: string; publicId: string; modelId: string; modelSlug: string };
 
+// an unpublished CLI row left by a failed cleanup never blocks its slot; the next run finishes the cleanup
+const UNPUBLISHED_CLI_BUILD = { active: false, arenaImportPending: false, voxelStoragePath: { startsWith: "community/" } };
+
 async function discardUnpublished(build: { id: string; voxelSha256: string | null }, source: { bucket: string; path: string }) {
-  // never active, so no matchup can reference it
-  await prisma.build.update({ where: { id: build.id }, data: { active: false, arenaImportPending: false } });
+  // never active, so no matchup can reference it; every step is safe to repeat
+  await prisma.build.updateMany({ where: { id: build.id, active: false }, data: { arenaImportPending: false } });
   await deleteArenaBuildArtifacts({ retiringBuilds: [build], survivingChecksums: new Set(), deleteStorage: deleteSupabaseStorageObjects });
   await deleteSupabaseStorageObjects([source]);
-  await prisma.build.delete({ where: { id: build.id } });
+  await prisma.build.deleteMany({ where: { id: build.id, ...UNPUBLISHED_CLI_BUILD } });
 }
 
 async function publishCommunityBuild(
@@ -159,6 +162,13 @@ async function publishCommunityBuild(
     palette: ARENA_BUILD_PALETTE,
     mode: ARENA_BUILD_MODE,
   };
+  const leftover = await prisma.build.findFirst({
+    where: { ...buildKey, ...UNPUBLISHED_CLI_BUILD },
+    select: { id: true, voxelSha256: true, voxelStorageBucket: true, voxelStoragePath: true },
+  });
+  if (leftover?.voxelStorageBucket && leftover.voxelStoragePath) {
+    await discardUnpublished(leftover, { bucket: leftover.voxelStorageBucket, path: leftover.voxelStoragePath });
+  }
   // create-only: a slot filled after planning is kept as is
   const build = await prisma.build.create({
     data: {
@@ -233,6 +243,7 @@ async function main() {
       gridSize: ARENA_BUILD_GRID_SIZE,
       palette: ARENA_BUILD_PALETTE,
       mode: ARENA_BUILD_MODE,
+      NOT: UNPUBLISHED_CLI_BUILD,
     },
     select: { model: { select: { key: true } } },
   });
@@ -277,7 +288,10 @@ async function main() {
     }
     // a slot filled since planning is skipped before spending
     if (await prisma.build.findFirst({
-      where: { promptId: candidate.officialPromptId!, modelId, gridSize: ARENA_BUILD_GRID_SIZE, palette: ARENA_BUILD_PALETTE, mode: ARENA_BUILD_MODE },
+      where: {
+        promptId: candidate.officialPromptId!, modelId, gridSize: ARENA_BUILD_GRID_SIZE, palette: ARENA_BUILD_PALETTE, mode: ARENA_BUILD_MODE,
+        NOT: UNPUBLISHED_CLI_BUILD,
+      },
       select: { id: true },
     })) {
       outcomes.occupied += 1;
