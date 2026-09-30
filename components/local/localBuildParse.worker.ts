@@ -301,7 +301,7 @@ async function readQueuedExecution(generation: SavedGenerationPayload, signal: A
   }
   const generationId = generation.id;
   const statusPath = `/api/generations/${encodeURIComponent(generationId)}`;
-  const viewerPath = `${statusPath}/artifacts/viewer`;
+  const viewerPath = `${statusPath}/artifacts/viewer?format=world`;
   let failures = 0;
   for (;;) {
     signal.throwIfAborted();
@@ -411,7 +411,7 @@ function readServerWorld(build: unknown, generationId?: string): RenderableVoxel
   if (!world || typeof world.partBaseUrl !== "string") throw new Error("World delivery URL is missing");
   const url = new URL(world.partBaseUrl, self.location.origin);
   const expectedPath = generationId ? `/api/generations/${encodeURIComponent(generationId)}/artifacts/viewer` : "/api/local/voxel-exec";
-  if (url.origin !== self.location.origin || url.pathname !== expectedPath || (generationId && (url.search || url.hash || url.username || url.password))) {
+  if (url.origin !== self.location.origin || url.pathname !== expectedPath || (generationId && (url.search !== "?format=world" || url.hash || url.username || url.password))) {
     throw new Error("Invalid local world delivery URL");
   }
   const parsed = parseVoxelWorldManifest(world.manifest);

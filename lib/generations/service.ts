@@ -192,8 +192,9 @@ function serializeGeneration(row: GenerationRow) {
     thumbnailUrl: artifactsAvailable && artifactKinds.has("preview_svg")
       ? `/api/generations/${row.publicId}/artifacts/thumbnail`
       : null,
+    // older native clients cannot read world manifests, so worlds require an explicit opt in
     viewerUrl: artifactsAvailable && viewerKind
-      ? `/api/generations/${row.publicId}/artifacts/viewer`
+      ? `/api/generations/${row.publicId}/artifacts/viewer${viewerKind === "viewer_world" ? "?format=world" : ""}`
       : null,
     downloadUrl: artifactsAvailable && artifactKinds.has("build_json")
       ? `/api/generations/${row.publicId}/download`
