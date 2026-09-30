@@ -215,6 +215,7 @@ assert.match(report, /isBaseline: false/);
 assert.match(report, /function safeGenerationError[\s\S]*return error/);
 
 const sampling = read("lib/stealth/sampling.ts");
+assert.match(sampling, /stealthGenerationResults: \{ some: \{ status: "READY" \} \}/);
 assert.match(
   sampling,
   /voteJobs: \{ where: \{ processedAt: null, choice: \{ in: \["A", "B"\] \} \} \}/,

@@ -1360,10 +1360,11 @@ export async function getStealthEvaluationWorkspace(
   await assertEvaluationOperator(prisma, actor, organizationId);
   await prisma.$transaction(async (tx) => {
     const experiment = await lockExperiment(tx, experimentId);
+    // live upload runs still need recovery after a worker crash
     if (
       !experiment ||
       experiment.organizationId !== organizationId ||
-      !isStealthCheckpointSetOpen(experiment.status)
+      !acceptsStealthUploads(experiment)
     ) {
       return;
     }
@@ -1867,7 +1868,10 @@ export async function queueStealthBuildUpload(
     await tx.stealthVariant.update({
       where: { id: variant.id },
       data: {
-        ...(variant.status === "ACTIVE" ? {} : { status: "GENERATING" as const }),
+        // a usable checkpoint stays usable while another file processes
+        ...(CONFIGURABLE_VARIANT_STATUSES.includes(variant.status)
+          ? { status: "GENERATING" as const }
+          : {}),
         lastGenerationError: null,
       },
     });

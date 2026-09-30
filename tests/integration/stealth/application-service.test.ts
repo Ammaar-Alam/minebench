@@ -1971,7 +1971,7 @@ async function main() {
       where: { runId: partial.runId },
     });
     assert.equal(partialResults.length, prompts.length + 1, "selected community prompts get upload slots");
-    async function uploadSlot(promptId: string, x: number) {
+    async function queueSlot(promptId: string, x: number) {
       const result = partialResults.find((entry) => entry.promptId === promptId);
       assert.ok(result);
       const target = await createStealthBuildUploadTarget(
@@ -1982,32 +1982,74 @@ async function main() {
       );
       uploadedBlocks.set(`https://storage.example.test/storage/v1/object/builds/${target.path}`, x);
       await queueStealthBuildUpload(memberActor, organization.id, partialEvaluation.id, result.id);
+      return result.id;
+    }
+    async function processSlot(resultId: string, promptId: string) {
       const workerId = `partial-${suffix}`;
-      assert.equal((await claimNextStealthGenerationJob(workerId, 30))?.id, result.id);
+      assert.equal((await claimNextStealthGenerationJob(workerId, 30))?.id, resultId);
       await generateStealthPromptForRun({ runId: partial.runId, promptId, workerId });
       await finishStealthGenerationRun(partial.runId);
       return prisma.stealthGenerationResult.findUniqueOrThrow({
-        where: { id: result.id },
+        where: { id: resultId },
         include: { build: { select: { gridSize: true, palette: true } } },
       });
     }
+    async function uploadSlot(promptId: string, x: number) {
+      return processSlot(await queueSlot(promptId, x), promptId);
+    }
+    // hiding the prompt after slot creation must not orphan its upload
+    await prisma.galleryCandidate.update({
+      where: { id: communityCandidate.id },
+      data: { adminHiddenAt: new Date() },
+    });
+    const communityResultId = await queueSlot(communityPrompt.id, 300);
+    const pendingPromptId = prompts[1]!.prompt.id;
+    const pendingResultId = await queueSlot(pendingPromptId, 9);
     // only valid on the community prompt's larger grid
-    const communityResult = await uploadSlot(communityPrompt.id, 300);
+    const communityResult = await processSlot(communityResultId, communityPrompt.id);
     assert.equal(communityResult.status, "READY");
     assert.deepEqual(communityResult.build, { gridSize: 512, palette: "advanced" });
     const partialVariant = await prisma.stealthVariant.findUniqueOrThrow({
       where: { id: partial.variantId },
     });
-    assert.equal(partialVariant.status, "READY", "one accepted upload makes a checkpoint ready");
+    assert.equal(
+      partialVariant.status,
+      "READY",
+      "one accepted upload makes a checkpoint ready while other files process",
+    );
     assert.equal(partialVariant.generatedBuildCount, 1);
     await activateStealthEvaluation(memberActor, organization.id, partialEvaluation.id);
+    assert.equal(
+      (await processSlot(pendingResultId, pendingPromptId)).status,
+      "READY",
+      "uploads queued before activation finish after it",
+    );
     const liveResult = await uploadSlot(prompts[0]!.prompt.id, 7);
     assert.equal(liveResult.status, "READY", "live upload checkpoints keep accepting builds");
     const liveVariant = await prisma.stealthVariant.findUniqueOrThrow({
       where: { id: partial.variantId },
     });
     assert.equal(liveVariant.status, "ACTIVE", "live uploads must not demote the checkpoint");
-    assert.equal(liveVariant.generatedBuildCount, 2);
+    assert.equal(liveVariant.generatedBuildCount, 3);
+    // a worker lost after the final acceptance leaves a terminal live run
+    await prisma.stealthGenerationResult.updateMany({
+      where: { runId: partial.runId, status: { not: "READY" } },
+      data: { status: "READY", uploadQueuedAt: null },
+    });
+    await prisma.stealthGenerationRun.update({
+      where: { id: partial.runId },
+      data: { startedAt: new Date(Date.now() - 60 * 60_000) },
+    });
+    await getStealthEvaluationWorkspace(memberActor, organization.id, partialEvaluation.id);
+    assert.equal(
+      (await prisma.stealthGenerationRun.findUniqueOrThrow({ where: { id: partial.runId } })).status,
+      "SUCCEEDED",
+      "workspace reads recover terminal live upload runs",
+    );
+    assert.equal(
+      (await prisma.stealthVariant.findUniqueOrThrow({ where: { id: partial.variantId } })).status,
+      "ACTIVE",
+    );
     assert.equal(
       (await prisma.stealthExperiment.findUniqueOrThrow({ where: { id: partialEvaluation.id } }))
         .status,

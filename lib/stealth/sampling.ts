@@ -80,7 +80,12 @@ async function querySnapshot(): Promise<StealthSamplingSnapshot> {
           id: true,
           key: true,
           builds: {
-            where: { ...arenaBuildSetupWhere(), prompt: { active: true } },
+            // live uploads persist a Build before its result is accepted
+            where: {
+              ...arenaBuildSetupWhere(),
+              prompt: { active: true },
+              stealthGenerationResults: { some: { status: "READY" } },
+            },
             select: {
               id: true,
               promptId: true,

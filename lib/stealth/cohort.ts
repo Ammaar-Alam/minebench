@@ -60,7 +60,7 @@ export async function prepareStealthUploadPrompts(): Promise<CohortPrompt[]> {
   const community = candidates.flatMap(({ publicId, officialPrompt: prompt }) =>
     prompt && isCommunityArenaPrompt(prompt.text) && isArenaBuildSetup(prompt)
       ? [{
-          slug: `community-${publicId}`,
+          slug: communityPromptSlug(publicId),
           text: prompt.text,
           gridSize: prompt.gridSize,
           palette: prompt.palette,
@@ -69,4 +69,40 @@ export async function prepareStealthUploadPrompts(): Promise<CohortPrompt[]> {
       : [],
   );
   return [...benchmark, ...community];
+}
+
+function communityPromptSlug(key: string): string {
+  return `community-${key}`;
+}
+
+// a slot keeps its prompt even if the community selection changes after creation
+export async function loadStealthUploadPrompt(promptId: string): Promise<CohortPrompt | null> {
+  const prompt = await prisma.prompt.findUnique({
+    where: { id: promptId },
+    select: {
+      id: true,
+      text: true,
+      gridSize: true,
+      palette: true,
+      selectedGalleryCandidate: { select: { publicId: true } },
+    },
+  });
+  if (!prompt) return null;
+  const benchmarkSlug = Object.entries(BENCHMARK_PROMPT_MAP).find(([, text]) => text === prompt.text)?.[0];
+  if (benchmarkSlug) {
+    return {
+      slug: benchmarkSlug,
+      text: prompt.text,
+      gridSize: STEALTH_COHORT_BUILD.gridSize,
+      palette: STEALTH_COHORT_BUILD.palette,
+      prompt: { id: prompt.id },
+    };
+  }
+  return {
+    slug: communityPromptSlug(prompt.selectedGalleryCandidate?.publicId ?? prompt.id),
+    text: prompt.text,
+    gridSize: prompt.gridSize,
+    palette: prompt.palette,
+    prompt: { id: prompt.id },
+  };
 }

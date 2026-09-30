@@ -23,8 +23,8 @@ import {
   persistStealthBuild,
 } from "@/lib/stealth/generation";
 import {
+  loadStealthUploadPrompt,
   prepareStealthCohortPrompts,
-  prepareStealthUploadPrompts,
   STEALTH_COHORT_BUILD,
   type CohortPrompt,
 } from "@/lib/stealth/cohort";
@@ -513,13 +513,12 @@ export async function generateStealthPromptForRun(params: {
   if (identity.promptCohortId !== BENCHMARK_PROMPT_COHORT_ID) {
     throw new Error("The generation prompt cohort has changed");
   }
-  const prompts =
-    identity.variant.source === "UPLOAD"
-      ? await prepareStealthUploadPrompts()
-      : await prepareStealthCohortPrompts();
-  const entry = prompts.find((prompt) =>
-    params.promptId ? prompt.prompt.id === params.promptId : prompt.slug === params.promptSlug,
-  );
+  const entry =
+    identity.variant.source === "UPLOAD" && params.promptId
+      ? await loadStealthUploadPrompt(params.promptId)
+      : (await prepareStealthCohortPrompts()).find((prompt) =>
+          params.promptId ? prompt.prompt.id === params.promptId : prompt.slug === params.promptSlug,
+        );
   if (!entry) throw new Error("Prompt not found");
   const resultIdentity = { runId: params.runId, promptId: entry.prompt.id };
   const resultKey = { runId_promptId: resultIdentity };
@@ -956,19 +955,23 @@ export async function finishStealthGenerationRun(runId: string): Promise<void> {
       generationFailureCount: progress.failedBuildCount,
       lastGenerationError: progress.lastError,
     };
+    const live = run.variant.status === "ACTIVE";
     if (unfinished > 0) {
       await tx.stealthGenerationRun.update({ where: { id: run.id }, data: runProgress });
       if (experiment.status !== "CLOSED") {
+        // accepted uploads stay usable while other files process
+        const uploadReady =
+          run.variant.source === "UPLOAD" && !live && progress.completedBuildCount > 0;
         await tx.stealthVariant.updateMany({
           where: { id: run.variantId, status: { not: "WITHDRAWN" } },
-          data: variantProgress,
+          data: { ...variantProgress, ...(uploadReady ? { status: "READY" as const } : {}) },
         });
+        if (uploadReady) await syncExperimentReadiness(tx, run.variant.experimentId);
       }
       return;
     }
     const complete =
       progress.completedBuildCount === run.expectedBuildCount && progress.failedBuildCount === 0;
-    const live = run.variant.status === "ACTIVE";
     // partial uploads are usable and their run stays open for more files
     if (run.variant.source === "UPLOAD" && !complete) {
       await tx.stealthGenerationRun.update({ where: { id: run.id }, data: runProgress });
