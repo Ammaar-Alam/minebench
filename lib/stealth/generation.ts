@@ -196,7 +196,10 @@ export async function persistStealthBuild(params: {
   promptText: string;
   build: RenderableVoxelBuild;
   generationTimeMs: number;
+  gridSize?: number;
+  palette?: string;
 }): Promise<{ id: string; blockCount: number; created: boolean }> {
+  const { gridSize = GRID_SIZE, palette = PALETTE } = params;
   const artifact = await writeCanonicalBuildArtifact(params.build);
   const sha256 = artifact.sourceSha256;
   const blockCount = voxelBuildBlockCount(params.build);
@@ -210,8 +213,8 @@ export async function persistStealthBuild(params: {
       promptId_modelId_gridSize_palette_mode: {
         promptId: prompt.id,
         modelId: params.modelId,
-        gridSize: GRID_SIZE,
-        palette: PALETTE,
+        gridSize,
+        palette,
         mode: MODE,
       },
     };
@@ -251,8 +254,8 @@ export async function persistStealthBuild(params: {
         data: {
           promptId: prompt.id,
           modelId: params.modelId,
-          gridSize: GRID_SIZE,
-          palette: PALETTE,
+          gridSize,
+          palette,
           mode: MODE,
           ...payload.stored,
           voxelByteSize: artifact.byteSize,

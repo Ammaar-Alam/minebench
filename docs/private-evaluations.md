@@ -50,14 +50,18 @@ A checkpoint cohort can be provided in either of two ways:
 
 - **Endpoint-generated:** MineBench calls a supported private checkpoint endpoint
   using the fixed benchmark prompt cohort and standard generation settings.
-- **Uploaded:** the organization uploads one build file for each prompt in the
-  current cohort.
+- **Uploaded:** the organization uploads build files for any benchmark prompts
+  and any community prompts selected for the Arena when the checkpoint is
+  created. Each build uses its prompt's own grid and palette.
 
 Both paths use the same prompt, grid, palette, mode, output validation, checksum,
 storage, and artifact requirements used by MineBench's Arena pipeline. Uploads
 are processed independently, so an invalid build can be replaced without
-re-uploading successful prompts. The checkpoint becomes ready only after every
-prompt succeeds. Accepted builds are immutable; replacing a valid accepted build
+re-uploading successful prompts. An endpoint-generated checkpoint becomes ready
+only after every prompt succeeds. An uploaded checkpoint becomes ready once any
+build is accepted, and its remaining prompts keep accepting builds while the
+evaluation is active or paused. Private matchups use only prompts with an
+accepted build. Accepted builds are immutable; replacing a valid accepted build
 requires a new checkpoint in a new draft evaluation. A checkpoint whose cohort
 has since changed can be refreshed in place. Private cohort preparation
 never changes a prompt's public eligibility. A running endpoint or upload

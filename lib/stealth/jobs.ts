@@ -32,10 +32,20 @@ export async function claimNextStealthGenerationJob(
             AND result."uploadPath" IS NOT NULL
           )
         )
-        AND experiment.status IN (
-          'DRAFT'::"StealthExperimentStatus",
-          'GENERATING'::"StealthExperimentStatus",
-          'READY'::"StealthExperimentStatus"
+        AND (
+          experiment.status IN (
+            'DRAFT'::"StealthExperimentStatus",
+            'GENERATING'::"StealthExperimentStatus",
+            'READY'::"StealthExperimentStatus"
+          )
+          OR (
+            variant.source = 'UPLOAD'::"StealthVariantSource"
+            AND experiment.status IN (
+              'ACTIVE'::"StealthExperimentStatus",
+              'PAUSED'::"StealthExperimentStatus"
+            )
+            AND experiment."endedAt" IS NULL
+          )
         )
         AND (
           SELECT COUNT(*)

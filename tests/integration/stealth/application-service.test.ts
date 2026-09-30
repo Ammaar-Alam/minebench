@@ -237,7 +237,9 @@ async function main() {
     updateOrganizationMember,
     updateStealthEvaluation,
   } = await import("../../../lib/stealth/service");
-  const { prepareStealthCohortPrompts } = await import("../../../lib/stealth/cohort");
+  const { prepareStealthCohortPrompts, prepareStealthUploadPrompts } = await import(
+    "../../../lib/stealth/cohort"
+  );
   const { deleteUnacceptedStealthBuild, persistStealthBuild } = await import(
     "../../../lib/stealth/generation"
   );
@@ -1777,7 +1779,7 @@ async function main() {
   const uploadedEvaluation = await createStealthEvaluation(memberActor, organization.id, {
     name: `Uploaded ${suffix}`,
   });
-  const prompts = await prepareStealthCohortPrompts();
+  const prompts = await prepareStealthUploadPrompts();
   const uploadStorageUrl = process.env.SUPABASE_URL;
   const uploadStorageKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const uploadFetch = global.fetch;
@@ -1941,6 +1943,78 @@ async function main() {
     );
     await closeStealthEvaluation(memberActor, organization.id, incompleteEvaluation.id);
     await completeUploadCheckpoint("Uploaded Two", 32);
+
+    const communityPrompt = await prisma.prompt.create({
+      data: { text: `Community portrait ${suffix}`, gridSize: 512, palette: "advanced" },
+    });
+    const communityCandidate = await prisma.galleryCandidate.create({
+      data: {
+        publicId: `gal_stealth_${suffix}`,
+        promptText: communityPrompt.text,
+        promptKey: `stealth-community-${suffix}`,
+        uploaderId: admin.id,
+        selectedAt: new Date(),
+        selectedById: admin.id,
+        officialPromptId: communityPrompt.id,
+      },
+    });
+    const partialEvaluation = await createStealthEvaluation(memberActor, organization.id, {
+      name: `Partial upload ${suffix}`,
+    });
+    const partial = await createStealthUploadCheckpoint(
+      memberActor,
+      organization.id,
+      partialEvaluation.id,
+      { codename: "Partial upload" },
+    );
+    const partialResults = await prisma.stealthGenerationResult.findMany({
+      where: { runId: partial.runId },
+    });
+    assert.equal(partialResults.length, prompts.length + 1, "selected community prompts get upload slots");
+    async function uploadSlot(promptId: string, x: number) {
+      const result = partialResults.find((entry) => entry.promptId === promptId);
+      assert.ok(result);
+      const target = await createStealthBuildUploadTarget(
+        memberActor,
+        organization.id,
+        partialEvaluation.id,
+        result.id,
+      );
+      uploadedBlocks.set(`https://storage.example.test/storage/v1/object/builds/${target.path}`, x);
+      await queueStealthBuildUpload(memberActor, organization.id, partialEvaluation.id, result.id);
+      const workerId = `partial-${suffix}`;
+      assert.equal((await claimNextStealthGenerationJob(workerId, 30))?.id, result.id);
+      await generateStealthPromptForRun({ runId: partial.runId, promptId, workerId });
+      await finishStealthGenerationRun(partial.runId);
+      return prisma.stealthGenerationResult.findUniqueOrThrow({
+        where: { id: result.id },
+        include: { build: { select: { gridSize: true, palette: true } } },
+      });
+    }
+    // only valid on the community prompt's larger grid
+    const communityResult = await uploadSlot(communityPrompt.id, 300);
+    assert.equal(communityResult.status, "READY");
+    assert.deepEqual(communityResult.build, { gridSize: 512, palette: "advanced" });
+    const partialVariant = await prisma.stealthVariant.findUniqueOrThrow({
+      where: { id: partial.variantId },
+    });
+    assert.equal(partialVariant.status, "READY", "one accepted upload makes a checkpoint ready");
+    assert.equal(partialVariant.generatedBuildCount, 1);
+    await activateStealthEvaluation(memberActor, organization.id, partialEvaluation.id);
+    const liveResult = await uploadSlot(prompts[0]!.prompt.id, 7);
+    assert.equal(liveResult.status, "READY", "live upload checkpoints keep accepting builds");
+    const liveVariant = await prisma.stealthVariant.findUniqueOrThrow({
+      where: { id: partial.variantId },
+    });
+    assert.equal(liveVariant.status, "ACTIVE", "live uploads must not demote the checkpoint");
+    assert.equal(liveVariant.generatedBuildCount, 2);
+    assert.equal(
+      (await prisma.stealthExperiment.findUniqueOrThrow({ where: { id: partialEvaluation.id } }))
+        .status,
+      "ACTIVE",
+    );
+    await closeStealthEvaluation(memberActor, organization.id, partialEvaluation.id);
+    await prisma.galleryCandidate.delete({ where: { id: communityCandidate.id } });
   } finally {
     global.fetch = uploadFetch;
     if (uploadStorageUrl === undefined) delete process.env.SUPABASE_URL;

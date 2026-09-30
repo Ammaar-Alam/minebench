@@ -5,6 +5,7 @@ import {
   type StealthExportPolicy,
   type StealthExperimentStatus,
   type StealthGenerationResultStatus,
+  type StealthVariantSource,
   type StealthVariantStatus,
 } from "@prisma/client";
 import {
@@ -35,7 +36,7 @@ import {
   getStealthBuildStoragePrefix,
 } from "@/lib/stealth/generation";
 import {
-  prepareStealthCohortPrompts,
+  prepareStealthUploadPrompts,
   STEALTH_COHORT_BUILD,
 } from "@/lib/stealth/cohort";
 import {
@@ -166,6 +167,8 @@ export type StealthEvaluationWorkspace = {
         resultId: string;
         promptId: string;
         prompt: string;
+        gridSize: number;
+        palette: string;
         status: StealthGenerationResultStatus;
         attempts: number;
         generationTimeMs: number;
@@ -237,8 +240,26 @@ const CONFIGURABLE_EXPERIMENT_STATUSES: readonly StealthExperimentStatus[] = [
 ];
 const CONFIGURABLE_VARIANT_STATUSES: readonly StealthVariantStatus[] = ["DRAFT", "GENERATING"];
 
+const UPLOADABLE_VARIANT_STATUSES: readonly StealthVariantStatus[] = [
+  "DRAFT",
+  "GENERATING",
+  "READY",
+  "ACTIVE",
+];
+
 export function isStealthCheckpointSetOpen(status: StealthExperimentStatus): boolean {
   return CONFIGURABLE_EXPERIMENT_STATUSES.includes(status);
+}
+
+// upload checkpoints keep taking builds while live, until closing starts
+export function acceptsStealthUploads(experiment: {
+  status: StealthExperimentStatus;
+  endedAt: Date | null;
+}): boolean {
+  return (
+    isStealthCheckpointSetOpen(experiment.status) ||
+    ((experiment.status === "ACTIVE" || experiment.status === "PAUSED") && !experiment.endedAt)
+  );
 }
 
 function isMineBenchAdmin(actor: StealthActor): actor is { minebenchAdmin: true } {
@@ -580,7 +601,7 @@ export async function reclaimStaleStealthGenerationRuns(
     });
     if (complete) {
       await db.stealthVariant.updateMany({
-        where: { id: run.variantId, status: { not: "WITHDRAWN" } },
+        where: { id: run.variantId, status: { notIn: ["WITHDRAWN", "ACTIVE"] } },
         data: {
           status: "READY",
           endpointEnabled: false,
@@ -778,13 +799,24 @@ async function isOutdatedUploadCheckpoint(
   return run?.promptCohortId !== BENCHMARK_PROMPT_COHORT_ID;
 }
 
+// endpoint cohorts must be complete, uploads may cover any subset of prompts
+function hasUsableCohort(variant: {
+  source: StealthVariantSource;
+  expectedBuildCount: number;
+  generatedBuildCount: number;
+}): boolean {
+  return variant.source === "UPLOAD"
+    ? variant.generatedBuildCount > 0
+    : variant.expectedBuildCount > 0 && variant.generatedBuildCount === variant.expectedBuildCount;
+}
+
 export async function syncExperimentReadiness(
   db: Prisma.TransactionClient,
   experimentId: string,
 ): Promise<void> {
   const variants = await db.stealthVariant.findMany({
     where: { experimentId, status: { not: "WITHDRAWN" } },
-    select: { status: true, generatedBuildCount: true, expectedBuildCount: true },
+    select: { source: true, status: true, generatedBuildCount: true, expectedBuildCount: true },
   });
   if (variants.length === 0) {
     await db.stealthExperiment.updateMany({
@@ -793,12 +825,7 @@ export async function syncExperimentReadiness(
     });
     return;
   }
-  const allReady = variants.every(
-    (variant) =>
-      variant.status === "READY" &&
-      variant.expectedBuildCount > 0 &&
-      variant.generatedBuildCount === variant.expectedBuildCount,
-  );
+  const allReady = variants.every((variant) => variant.status === "READY" && hasUsableCohort(variant));
   const generating = variants.some((variant) => variant.status === "GENERATING");
   await db.stealthExperiment.updateMany({
     where: { id: experimentId, status: { in: [...CONFIGURABLE_EXPERIMENT_STATUSES] } },
@@ -1376,7 +1403,7 @@ export async function getStealthEvaluationWorkspace(
               results: {
                 orderBy: { prompt: { text: "asc" } },
                 include: {
-                  prompt: { select: { id: true, text: true } },
+                  prompt: { select: { id: true, text: true, gridSize: true, palette: true } },
                   build: {
                     select: {
                       blockCount: true,
@@ -1419,8 +1446,12 @@ export async function getStealthEvaluationWorkspace(
         generatedBuildCount: variant.generatedBuildCount,
         persistedBuildCount: variant.model._count.builds,
         promptCohortCurrent: latestRun?.promptCohortId === BENCHMARK_PROMPT_COHORT_ID,
-        currentExpectedBuildCount: Object.keys(BENCHMARK_PROMPT_MAP).length,
-        currentGeneratedBuildCount: variant.model.builds.length,
+        currentExpectedBuildCount:
+          variant.source === "UPLOAD"
+            ? variant.expectedBuildCount
+            : Object.keys(BENCHMARK_PROMPT_MAP).length,
+        currentGeneratedBuildCount:
+          variant.source === "UPLOAD" ? variant.generatedBuildCount : variant.model.builds.length,
         generationFailureCount: variant.generationFailureCount,
         lastGenerationError: variant.lastGenerationError
           ? sanitizeOperationalError(variant.lastGenerationError)
@@ -1446,6 +1477,8 @@ export async function getStealthEvaluationWorkspace(
                 resultId: result.id,
                 promptId: result.prompt.id,
                 prompt: result.prompt.text,
+                gridSize: result.prompt.gridSize,
+                palette: result.prompt.palette,
                 status: result.status,
                 attempts: result.attempts,
                 generationTimeMs: result.generationTimeMs,
@@ -1571,7 +1604,7 @@ export async function createStealthUploadCheckpoint(
   input: CreateStealthUploadCheckpointInput,
 ): Promise<{ variantId: string; runId: string }> {
   const codename = normalizeName(input.codename, "Codename", 80);
-  const prompts = await prepareStealthCohortPrompts();
+  const prompts = await prepareStealthUploadPrompts();
   return prisma.$transaction(async (tx) => {
     await assertEvaluationOperator(tx, actor, organizationId);
     const experiment = await lockExperiment(tx, experimentId);
@@ -1673,7 +1706,7 @@ export async function createStealthBuildUploadTarget(
     if (!experiment || experiment.organizationId !== organizationId) {
       throw new Error("Evaluation not found");
     }
-    if (!isStealthCheckpointSetOpen(experiment.status)) {
+    if (!acceptsStealthUploads(experiment)) {
       throw new Error("Evaluation uploads are closed");
     }
     const identity = await tx.stealthGenerationResult.findUnique({
@@ -1686,7 +1719,7 @@ export async function createStealthBuildUploadTarget(
       !variant ||
       variant.experimentId !== experiment.id ||
       variant.source !== "UPLOAD" ||
-      !CONFIGURABLE_VARIANT_STATUSES.includes(variant.status)
+      !UPLOADABLE_VARIANT_STATUSES.includes(variant.status)
     ) {
       throw new Error("Build slot not found");
     }
@@ -1791,7 +1824,7 @@ export async function queueStealthBuildUpload(
     if (
       !experiment ||
       experiment.organizationId !== organizationId ||
-      !isStealthCheckpointSetOpen(experiment.status)
+      !acceptsStealthUploads(experiment)
     ) {
       throw new Error("Evaluation uploads are closed");
     }
@@ -1805,7 +1838,7 @@ export async function queueStealthBuildUpload(
       !variant ||
       variant.experimentId !== experiment.id ||
       variant.source !== "UPLOAD" ||
-      !CONFIGURABLE_VARIANT_STATUSES.includes(variant.status)
+      !UPLOADABLE_VARIANT_STATUSES.includes(variant.status)
     ) {
       throw new Error("Build slot not found");
     }
@@ -1833,7 +1866,10 @@ export async function queueStealthBuildUpload(
     if (queued.count !== 1) throw new Error("Build slot changed; refresh and try again");
     await tx.stealthVariant.update({
       where: { id: variant.id },
-      data: { status: "GENERATING", lastGenerationError: null },
+      data: {
+        ...(variant.status === "ACTIVE" ? {} : { status: "GENERATING" as const }),
+        lastGenerationError: null,
+      },
     });
     await syncExperimentReadiness(tx, experiment.id);
   });
@@ -1856,25 +1892,28 @@ export async function activateStealthEvaluation(
       select: {
         id: true,
         codename: true,
+        source: true,
         status: true,
         modelId: true,
         expectedBuildCount: true,
         generatedBuildCount: true,
         generationRuns: {
-          where: { status: "SUCCEEDED" },
-          orderBy: { completedAt: "desc" },
+          orderBy: { startedAt: "desc" },
           take: 1,
-          select: { promptCohortId: true },
+          select: { status: true, promptCohortId: true },
         },
       },
     });
     if (variants.length === 0) throw new Error("Add a checkpoint first");
     for (const variant of variants) {
       if (variant.status !== "READY") throw new Error(`${variant.codename} is not ready`);
-      if (variant.expectedBuildCount === 0 || variant.generatedBuildCount !== variant.expectedBuildCount) {
-        throw new Error(`${variant.codename} is incomplete`);
-      }
-      if (variant.generationRuns[0]?.promptCohortId !== BENCHMARK_PROMPT_COHORT_ID) {
+      if (!hasUsableCohort(variant)) throw new Error(`${variant.codename} is incomplete`);
+      // upload runs stay open so live checkpoints can take more builds
+      const run = variant.generationRuns[0];
+      if (
+        run?.promptCohortId !== BENCHMARK_PROMPT_COHORT_ID ||
+        (run.status !== "SUCCEEDED" && !(variant.source === "UPLOAD" && run.status === "RUNNING"))
+      ) {
         throw new Error(`${variant.codename} uses an outdated prompt cohort`);
       }
     }

@@ -61,7 +61,7 @@ assert.match(service, /storage\/v1\/upload\/resumable\/sign/);
 assert.match(uploadTarget, /result\.uploadPath \?\?/);
 assert.match(uploadTarget, /createSupabaseSignedUploadToken\(prepared\)/);
 const activation = functionBody(service, "activateStealthEvaluation");
-assert.match(activation, /generationRuns:[\s\S]*status: "SUCCEEDED"/);
+assert.match(activation, /run\.status !== "SUCCEEDED" && !\(variant\.source === "UPLOAD" && run\.status === "RUNNING"\)/);
 assert.match(activation, /promptCohortId !== BENCHMARK_PROMPT_COHORT_ID/);
 const closeEvaluation = functionBody(service, "closeStealthEvaluation");
 assertOrder(

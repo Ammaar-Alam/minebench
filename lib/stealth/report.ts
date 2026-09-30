@@ -383,7 +383,7 @@ export async function getStealthExperimentReport(
           decisiveVotes: finalizedOutcomes.decisiveVotes,
           promptCoverage:
             finalizedPrompts.filter((prompt) => prompt.decisiveVotes > 0).length /
-            Math.max(1, variant.expectedBuildCount),
+            Math.max(1, variant.generatedBuildCount),
           rd: variant.glickoRd,
         }),
         estimatedFieldRank: rank,
