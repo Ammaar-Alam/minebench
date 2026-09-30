@@ -9,7 +9,7 @@ import { invalidateArenaBuildMeta } from "@/lib/arena/buildMetaCache";
 import { invalidateArenaCoverageCache } from "@/lib/arena/coverage";
 import { invalidateArenaStatsCache } from "@/lib/arena/stats";
 import { arenaCohortBuildWhere } from "@/lib/arena/eligibility";
-import { deleteRetiredGalleryArenaArtifacts, isCommunityArenaPrompt, queueGalleryArenaImports } from "@/lib/gallery/arenaImport";
+import { deleteRetiredGalleryArenaArtifacts, isCommunityArenaPrompt, lockEligibleGalleryCandidate, queueGalleryArenaImports } from "@/lib/gallery/arenaImport";
 import {
   sendGalleryAccountNotification,
   sendGalleryAdminNotification,
@@ -682,7 +682,7 @@ export async function addGalleryExample(
   const [candidate, generation] = await Promise.all([
     prisma.galleryCandidate.findFirst({
       where: { publicId: candidatePublicId, ...publicCandidateWhere },
-      select: { id: true, promptText: true, uploaderId: true },
+      select: { id: true, promptText: true, uploaderId: true, selectedAt: true, officialPromptId: true },
     }),
     loadEligibleGeneration(userId, input.generationId, Boolean(adminPublication)),
   ]);
@@ -748,6 +748,13 @@ export async function addGalleryExample(
         userId: candidate.uploaderId, contributorId: userId,
         subjectId: candidatePublicId, exampleId: example.id,
       });
+      // new models on a selected community prompt join the arena like the originals
+      if (
+        candidate.officialPromptId && isCommunityArenaPrompt(candidate.promptText)
+        && await lockEligibleGalleryCandidate(tx, candidate.id, candidate.officialPromptId)
+      ) {
+        await queueGalleryArenaImports(tx, candidate.id, candidate.officialPromptId);
+      }
     }
     return { ...example, created };
   });

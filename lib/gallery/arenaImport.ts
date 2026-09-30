@@ -100,7 +100,22 @@ export async function queueGalleryArenaImports(
     orderBy: { createdAt: "asc" },
     select: { customBuildId: true, customBuild: { select: { modelKey: true } } },
   });
-  const sources = pickArenaImportSources(examples);
+  // models already in the arena or mid-import keep their build
+  const [built, importing] = await Promise.all([
+    tx.build.findMany({
+      where: { promptId, gridSize: ARENA_BUILD_GRID_SIZE, palette: ARENA_BUILD_PALETTE, mode: ARENA_BUILD_MODE },
+      select: { model: { select: { key: true } } },
+    }),
+    tx.customBuildJob.findMany({
+      where: { type: "arena_import", status: { in: ["queued", "running"] }, payload: { path: ["promptId"], equals: promptId } },
+      select: { customBuild: { select: { modelKey: true } } },
+    }),
+  ]);
+  const covered = new Set([
+    ...built.map(({ model }) => model.key),
+    ...importing.flatMap(({ customBuild }) => (customBuild.modelKey ? [customBuild.modelKey] : [])),
+  ]);
+  const sources = pickArenaImportSources(examples).filter(({ customBuild }) => !covered.has(customBuild.modelKey!));
   if (sources.length === 0) return 0;
   await tx.customBuildJob.createMany({
     data: sources.map((source) => ({
