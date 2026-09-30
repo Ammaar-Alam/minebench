@@ -122,8 +122,8 @@ export async function queueGalleryArenaImports(
     data: sources.map((source) => ({
       customBuildId: source.customBuildId,
       type: "arena_import" as const,
-      // user generations go first
-      priority: -1,
+      // a copy takes seconds, so it never waits behind MineBench runs
+      priority: 0,
       payload: { promptId },
     })),
   });
