@@ -15,7 +15,8 @@ import {
   getArenaStreamArtifactLocation,
   uploadArenaBuildArtifact,
 } from "@/lib/arena/artifactOwnership";
-import { gzipSync } from "node:zlib";
+import { once } from "node:events";
+import { createGzip, gzipSync } from "node:zlib";
 
 const ENCODER = new TextEncoder();
 
@@ -220,6 +221,20 @@ export function* iterateArenaBuildChunks(
 
 export function encodeArenaBuildStreamEvent(event: ArenaBuildStreamEvent): Uint8Array {
   return ENCODER.encode(`${JSON.stringify(event)}\n`);
+}
+
+// events gzip as they are produced so the full NDJSON is never held uncompressed
+export async function gzipArenaBuildStreamEvents(events: Iterable<ArenaBuildStreamEvent>): Promise<Uint8Array> {
+  const gzip = createGzip();
+  const compressed: Buffer[] = [];
+  gzip.on("data", (chunk: Buffer) => compressed.push(chunk));
+  const finished = once(gzip, "end");
+  for (const event of events) {
+    if (!gzip.write(encodeArenaBuildStreamEvent(event))) await once(gzip, "drain");
+  }
+  gzip.end();
+  await finished;
+  return Buffer.concat(compressed);
 }
 
 async function readArtifactChunk(
@@ -623,7 +638,9 @@ export async function uploadArenaBuildStreamArtifact(
   const config = getSupabaseStorageConfig();
   const encodedPath = encodeStoragePath(ref.path);
   const url = `${config.url}/storage/v1/object/${encodeURIComponent(ref.bucket)}/${encodedPath}`;
-  const payload = gzipSync(Buffer.from(body.buffer as ArrayBuffer, body.byteOffset, body.byteLength));
+  const alreadyGzipped = body.byteLength >= 2 && body[0] === 0x1f && body[1] === 0x8b;
+  const raw = Buffer.from(body.buffer as ArrayBuffer, body.byteOffset, body.byteLength);
+  const payload = alreadyGzipped ? raw : gzipSync(raw);
   const accepted = await uploadArenaBuildArtifact(
     buildId,
     ref,

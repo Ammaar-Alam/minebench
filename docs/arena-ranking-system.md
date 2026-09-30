@@ -14,6 +14,8 @@ A vote enters the public fit only when:
 
 Private checkpoint matchups are excluded from public ratings, counters, coverage, rank snapshots, and leaderboard eligibility.
 
+Selected community Gallery prompts are Arena prompts, so their votes enter the fit like benchmark prompt votes. The per-prompt dashboard metrics below use only the fixed benchmark prompt set.
+
 ## Bradley-Terry model
 
 For latent abilities \(\theta_A\) and \(\theta_B\):
@@ -117,10 +119,10 @@ Here, `votesA` and `votesB` are decisive votes for each model on the prompt, and
 
 - `Rating`: Bradley-Terry point estimate and 95% confidence interval
 - `Confidence`: interval-width indicator
-- `Coverage`: prompts with sufficient decisive evidence divided by Arena-eligible prompts
-- `Consistency`: prompt-strength tail-gap score
-- `Spread`: standard deviation of retained per-prompt observed scores
-- `Avg score`: unweighted mean of retained per-prompt observed scores
+- `Coverage`: benchmark prompts with sufficient decisive evidence divided by the benchmark prompts the model has builds for
+- `Consistency`: prompt-strength tail-gap score over benchmark prompts
+- `Spread`: standard deviation of retained per-prompt observed scores over benchmark prompts
+- `Avg score`: unweighted mean of retained per-prompt observed scores over benchmark prompts
 - `Record`: wins, losses, and draws
 - `Votes`: rated outcomes plus `BOTH_BAD`
 - `Quality floor`: `max(0, 1 - bothBadCount / totalVotes)`
