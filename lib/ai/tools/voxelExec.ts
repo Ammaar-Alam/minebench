@@ -260,10 +260,11 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
   sandbox.GRID_SIZE = params.gridSize;
   sandbox.PALETTE = params.palette;
 
-  const ctx = vm.createContext(sandbox, {
+  const ctx = vm.createContext(vm.constants?.DONT_CONTEXTIFY ?? sandbox, {
     name: "minebench-voxel-exec",
     codeGeneration: { strings: false, wasm: false },
   });
+  Object.assign(ctx, sandbox);
 
   // Wrap code to reduce accidental top-level await / module syntax issues.
   // lexical helper bindings avoid repeated context-global lookups in large loops

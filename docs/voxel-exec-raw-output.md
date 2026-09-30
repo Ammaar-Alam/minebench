@@ -142,6 +142,10 @@ Relevant runtime controls:
 
 Execution defaults to 30 seconds through grid size 512 and 15 minutes for larger worlds. Custom generations save the raw response before processing and reuse it during recovery.
 
+Node 22.8 and newer use native VM contexts for every grid and model, avoiding
+context-global lookup overhead while retaining the existing script scopes and
+dynamic-code restrictions. Older Node versions retain the existing context path.
+
 Durable expanded-artifact jobs support up to 16,777,216 occupied cells within their grid bounds, with raw point emission limited to twice the applicable cell limit. Exceeding capacity fails the job without clipping its output or requesting another provider response. Spatial worlds use compact region evaluation instead of the expanded-cell path.
 
 ## 6) How raw output becomes a final build
