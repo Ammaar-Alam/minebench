@@ -31,7 +31,7 @@ const SIZE = 512; // css px, the export renderer doubles it to 1024
 // light theme --viewer-bg from app/globals.css
 const BACKGROUND = "hsl(220 20% 97%)";
 // one camera height for every build instead of the arena's height-dependent angle
-const RING_ELEVATION = (35 * Math.PI) / 180;
+const RING_ELEVATION = (30 * Math.PI) / 180;
 const VIEWS: { name: string; rotationY: number; elevation?: number }[] = [
   ...Array.from({ length: 8 }, (_, k) => ({
     name: `r${String(k * 45).padStart(3, "0")}`,
