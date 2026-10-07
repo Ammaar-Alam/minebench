@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import * as THREE from "three";
 import {
+  fitStillView,
   fitDistanceToRotatingBounds,
   minimumOrbitDistance,
   retargetDistanceForAspect,
@@ -133,5 +134,32 @@ rotatedCamera.updateProjectionMatrix();
 rotatedCamera.updateMatrixWorld(true);
 const rotatedDepth = nearbyRotatedPoint.clone().project(rotatedCamera).z;
 assert.ok(rotatedDepth >= -1 && rotatedDepth <= 1, "a quarter-turn world retains blocks half a unit from the camera");
+
+// a still shot fit to a turned box keeps every corner in frame and touches an edge
+const stillBox = new THREE.Box3(new THREE.Vector3(-20, 0, -12), new THREE.Vector3(20, 9, 12));
+const stillTarget = stillBox.getCenter(new THREE.Vector3());
+for (const [rotation, elevation] of [[0, 0.3], [Math.PI / 4, 0.5], [1.1, (85 * Math.PI) / 180]]) {
+  const corners = [0, 1, 2, 3, 4, 5, 6, 7].map((i) =>
+    new THREE.Vector3(
+      i & 1 ? stillBox.max.x : stillBox.min.x,
+      i & 2 ? stillBox.max.y : stillBox.min.y,
+      i & 4 ? stillBox.max.z : stillBox.min.z,
+    ).applyAxisAngle(THREE.Object3D.DEFAULT_UP, rotation).sub(stillTarget),
+  );
+  const direction = new THREE.Vector3(Math.cos(elevation) * Math.SQRT1_2, Math.sin(elevation), Math.cos(elevation) * Math.SQRT1_2);
+  const { distance, shift } = fitStillView(corners, direction, 45, 1);
+  const lookAt = stillTarget.clone().add(new THREE.Vector3(shift.x, shift.y, shift.z));
+  const camera = new THREE.PerspectiveCamera(45, 1);
+  camera.position.copy(lookAt).addScaledVector(direction, distance);
+  camera.lookAt(lookAt);
+  camera.updateMatrixWorld(true);
+  const projected = corners.map((corner) => corner.clone().add(stillTarget).project(camera));
+  const extent = Math.max(...projected.map((p) => Math.max(Math.abs(p.x), Math.abs(p.y))));
+  assert.ok(extent <= 1 + 1e-9, "every corner stays inside the frame");
+  assert.ok(extent > 0.999, "the fit is tight on at least one edge");
+  const middle = (values: number[]) => (Math.min(...values) + Math.max(...values)) / 2;
+  assert.ok(Math.abs(middle(projected.map((p) => p.x))) < 0.02, "the box is centered left to right");
+  assert.ok(Math.abs(middle(projected.map((p) => p.y))) < 0.02, "the box is centered top to bottom");
+}
 
 console.log("voxel framing checks passed");

@@ -20,6 +20,7 @@ import {
 import { createVoxelWorldScene, isVoxelWorldScene } from "@/lib/voxel/worldScene";
 import { VOXEL_VIEWER_WEBGL_ERROR } from "@/lib/voxel/errors";
 import {
+  fitStillView,
   fitDistanceToRotatingBounds,
   minimumOrbitDistance,
   retargetDistanceForAspect,
@@ -74,6 +75,8 @@ export type VoxelViewerHandle = {
     rotationY?: number;
     // radians above the horizon, reframed at the default padding
     elevation?: number;
+    // fit this still view to the build instead of its full spin
+    tight?: boolean;
     width?: number;
     height?: number;
     distanceScale?: number;
@@ -1010,6 +1013,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
           typeof opts?.rotationY === "number" && Number.isFinite(opts.rotationY) ? opts.rotationY : null;
         const elevation =
           typeof opts?.elevation === "number" && Number.isFinite(opts.elevation) ? opts.elevation : null;
+        const tight = opts?.tight === true;
         const source = renderer.domElement;
         const width = Math.max(1, Math.floor(opts?.width ?? source.width));
         const height = Math.max(1, Math.floor(opts?.height ?? source.height));
@@ -1025,20 +1029,38 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         try {
           if (rotationY !== null) vg.group.rotation.y = rotationY;
 
-          if (elevation !== null) {
+          if (elevation !== null || tight) {
             const horizontal = Math.hypot(cameraOffset.x, cameraOffset.z) || 1;
-            const direction = new THREE.Vector3(
-              (cameraOffset.x / horizontal) * Math.cos(elevation),
-              Math.sin(elevation),
-              (cameraOffset.z / horizontal) * Math.cos(elevation),
-            );
-            const fit = fitDistanceToRotatingBounds(
-              getRotatingBoundsFraming(camera, bounds, direction.y),
-              targetAspect,
-            );
-            // same 1.1 padding frameBounds uses
-            camera.position.copy(controls.target).addScaledVector(direction, fit * 1.1 * distanceScale);
-            camera.lookAt(controls.target);
+            const direction =
+              elevation === null
+                ? cameraOffset.clone().normalize()
+                : new THREE.Vector3(
+                    (cameraOffset.x / horizontal) * Math.cos(elevation),
+                    Math.sin(elevation),
+                    (cameraOffset.z / horizontal) * Math.cos(elevation),
+                  );
+            const lookAt = controls.target.clone();
+            let fit: number;
+            if (tight) {
+              const { min, max } = bounds.box;
+              const still = fitStillView(
+                [0, 1, 2, 3, 4, 5, 6, 7].map((i) =>
+                  new THREE.Vector3(i & 1 ? max.x : min.x, i & 2 ? max.y : min.y, i & 4 ? max.z : min.z)
+                    .applyAxisAngle(THREE.Object3D.DEFAULT_UP, vg.group.rotation.y)
+                    .sub(controls.target),
+                ),
+                direction,
+                camera.fov,
+                targetAspect,
+              );
+              lookAt.add(new THREE.Vector3(still.shift.x, still.shift.y, still.shift.z));
+              fit = still.distance * 1.04;
+            } else {
+              // same 1.1 padding frameBounds uses
+              fit = fitDistanceToRotatingBounds(getRotatingBoundsFraming(camera, bounds, direction.y), targetAspect) * 1.1;
+            }
+            camera.position.copy(lookAt).addScaledVector(direction, fit * distanceScale);
+            camera.lookAt(lookAt);
           } else if (distance > 0 && (targetAspect !== previousAspect || distanceScale !== 1)) {
             const targetDistance =
               targetAspect === previousAspect

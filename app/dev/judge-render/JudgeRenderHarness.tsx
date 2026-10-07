@@ -66,7 +66,7 @@ export function JudgeRenderHarness() {
     if (!job || !viewer) return;
     try {
       const images = job.views.map((view) => {
-        const frame = viewer.captureFrame({ ...view, width: job.size, height: job.size });
+        const frame = viewer.captureFrame({ ...view, tight: true, width: job.size, height: job.size });
         if (!frame) throw new Error("Viewer returned no frame");
         // captures are transparent so lay them over the viewer stage color
         const out = document.createElement("canvas");

@@ -5,7 +5,9 @@
  * Each build goes through the same preparation the Arena serves as its full variant,
  * then the local-only /dev/judge-render page captures eight views around it (every 45
  * degrees at the Arena camera height, starting from the Arena's opening angle) and one
- * from above. Starts its own next dev server and drives the installed Chrome headlessly.
+ * from above. Each view is fit to the build as seen from that angle, so a still frame
+ * isn't padded for the whole spin. Starts its own next dev server and drives the
+ * installed Chrome headlessly.
  * Re-running skips builds whose images already exist.
  *
  * Usage:
@@ -25,12 +27,13 @@ import {
 import { LOCAL_BUILD_STORAGE_BUCKET } from "../lib/storage/config";
 
 const PORT = 3217;
-const SIZE = 384; // css px, the export renderer doubles it to 768
+const SIZE = 512; // css px, the export renderer doubles it to 1024
 // light theme --viewer-bg from app/globals.css
 const BACKGROUND = "hsl(220 20% 97%)";
 const VIEWS: { name: string; rotationY: number; elevation?: number }[] = [
   ...Array.from({ length: 8 }, (_, k) => ({ name: `r${String(k * 45).padStart(3, "0")}`, rotationY: (k * Math.PI) / 4 })),
-  { name: "top", rotationY: 0, elevation: (85 * Math.PI) / 180 },
+  // turned 45 degrees so the top view sits square instead of as a diamond
+  { name: "top", rotationY: Math.PI / 4, elevation: (85 * Math.PI) / 180 },
 ];
 const BUILD_TIMEOUT_MS = 10 * 60_000;
 
@@ -91,13 +94,20 @@ async function main() {
 
   fs.writeFileSync(
     path.join(outDir, "views.json"),
-    `${JSON.stringify({ gitCommit: execSync("git rev-parse HEAD").toString().trim(), sizePx: SIZE * 2, background: BACKGROUND, views: VIEWS }, null, 2)}\n`,
+    `${JSON.stringify({ gitCommit: execSync("git rev-parse HEAD").toString().trim(), sizePx: SIZE * 2, framing: "each view fit to the build", background: BACKGROUND, views: VIEWS }, null, 2)}\n`,
   );
   if (todo.length === 0) return;
 
-  const server = spawn("pnpm", ["exec", "next", "dev", "-p", String(PORT)], { stdio: "ignore" });
+  // own process group so stopping it also stops the workers next dev starts
+  const server = spawn("pnpm", ["exec", "next", "dev", "-p", String(PORT)], { stdio: "ignore", detached: true });
   const stopServer = () => {
-    if (server.exitCode === null) server.kill("SIGTERM");
+    if (server.exitCode === null && server.pid) {
+      try {
+        process.kill(-server.pid, "SIGTERM");
+      } catch {
+        // already gone
+      }
+    }
   };
   process.on("exit", stopServer);
 
@@ -177,7 +187,11 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// arena build caches hold open handles, so exit explicitly once rendering is done
+main().then(
+  () => process.exit(process.exitCode ?? 0),
+  (err) => {
+    console.error(err);
+    process.exit(1);
+  },
+);
