@@ -45,6 +45,7 @@ package-lock.json
 voxel-build.json
 .custom-build-storage/
 /custom-builds/
+/judge-data/
 
 # Database
 prisma/dev.db

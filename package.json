@@ -45,6 +45,7 @@
     "gallery:seed-official": "tsx scripts/seed-gallery-official-prompts.ts",
     "tool:convert": "tsx scripts/convert-voxel-tool-call.ts",
     "uploads:sync": "tsx scripts/sync-uploads-from-db.ts",
+    "judge:export": "tsx scripts/export-judge-dataset.ts",
     "prompt": "tsx scripts/prompt.ts",
     "elo:reset": "tsx scripts/reset-elo.ts",
     "elo:recompute": "tsx scripts/recompute-elo.ts",
