@@ -72,6 +72,8 @@ export type VoxelViewerHandle = {
   getRotationY: () => number | null;
   captureFrame: (opts?: {
     rotationY?: number;
+    // radians above the horizon, reframed at the default padding
+    elevation?: number;
     width?: number;
     height?: number;
     distanceScale?: number;
@@ -1001,10 +1003,13 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         const previousY = vg.group.rotation.y;
         const previousAspect = camera.aspect;
         const previousPosition = camera.position.clone();
+        const previousQuaternion = camera.quaternion.clone();
         const previousNear = camera.near;
         const previousFar = camera.far;
         const rotationY =
           typeof opts?.rotationY === "number" && Number.isFinite(opts.rotationY) ? opts.rotationY : null;
+        const elevation =
+          typeof opts?.elevation === "number" && Number.isFinite(opts.elevation) ? opts.elevation : null;
         const source = renderer.domElement;
         const width = Math.max(1, Math.floor(opts?.width ?? source.width));
         const height = Math.max(1, Math.floor(opts?.height ?? source.height));
@@ -1020,7 +1025,21 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         try {
           if (rotationY !== null) vg.group.rotation.y = rotationY;
 
-          if (distance > 0 && (targetAspect !== previousAspect || distanceScale !== 1)) {
+          if (elevation !== null) {
+            const horizontal = Math.hypot(cameraOffset.x, cameraOffset.z) || 1;
+            const direction = new THREE.Vector3(
+              (cameraOffset.x / horizontal) * Math.cos(elevation),
+              Math.sin(elevation),
+              (cameraOffset.z / horizontal) * Math.cos(elevation),
+            );
+            const fit = fitDistanceToRotatingBounds(
+              getRotatingBoundsFraming(camera, bounds, direction.y),
+              targetAspect,
+            );
+            // same 1.1 padding frameBounds uses
+            camera.position.copy(controls.target).addScaledVector(direction, fit * 1.1 * distanceScale);
+            camera.lookAt(controls.target);
+          } else if (distance > 0 && (targetAspect !== previousAspect || distanceScale !== 1)) {
             const targetDistance =
               targetAspect === previousAspect
                 ? distance
@@ -1046,6 +1065,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         } finally {
           vg.group.rotation.y = previousY;
           camera.position.copy(previousPosition);
+          camera.quaternion.copy(previousQuaternion);
           camera.aspect = previousAspect;
           camera.near = previousNear;
           camera.far = previousFar;

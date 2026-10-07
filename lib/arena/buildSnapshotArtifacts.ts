@@ -249,7 +249,7 @@ export function getSnapshotArtifactRef(
   return getArenaSnapshotArtifactRef(buildId, variant, checksum, format);
 }
 
-function createSnapshotArtifactPayload(
+export function createSnapshotArtifactPayload(
   prepared: PreparedArenaBuild,
   variant: ArenaBuildVariant,
 ): SnapshotArtifactPayload {
@@ -275,7 +275,7 @@ function encodeSnapshotArtifactPayload(payload: SnapshotArtifactPayload): Uint8A
 }
 
 // same envelope, blocks moved into the binary encoding
-function encodeBinarySnapshotArtifactPayload(payload: SnapshotArtifactPayload): Uint8Array {
+export function encodeBinarySnapshotArtifactPayload(payload: SnapshotArtifactPayload): Uint8Array {
   const { voxelBuild, ...envelope } = payload;
   return gzipSync(
     encodeBinaryArtifact(

@@ -102,6 +102,9 @@ importers:
       eslint-config-next:
         specifier: ^15.0.0
         version: 15.5.9(eslint@9.39.2(jiti@1.21.7))(typescript@5.9.3)
+      playwright-core:
+        specifier: ^1.64.0
+        version: 1.64.0
       prisma:
         specifier: ^6.0.0
         version: 6.19.1(typescript@5.9.3)
@@ -2155,6 +2158,11 @@ packages:
 
   pkg-types@2.3.0:
     resolution: {integrity: sha512-SIqCzDRg0s9npO5XQ3tNZioRY1uK06lA41ynBC1YmFTmnY6FjUjVt6s4LoADmwoig1qqD0oK8h1p/8mlMx8Oig==}
+
+  playwright-core@1.64.0:
+    resolution: {integrity: sha512-T9r+MZkTECl2+oUcZ26YgZzTrYidTsIhYYkJix+6iDOymOb1FB2RLLSOxRGnZGv5DStt+aduIVbt+E8WygXYpg==}
+    engines: {node: '>=20'}
+    hasBin: true
 
   possible-typed-array-names@1.1.0:
     resolution: {integrity: sha512-/+5VFTchJDoVj3bhoqi6UeymcD00DAwb1nJwamzPvHEszJ4FpF6SNNbUbOS8yI56qHzdV8eK0qEfOSiodkTdxg==}
@@ -4738,6 +4746,8 @@ snapshots:
       confbox: 0.2.2
       exsolve: 1.0.8
       pathe: 2.0.3
+
+  playwright-core@1.64.0: {}
 
   possible-typed-array-names@1.1.0: {}
 
