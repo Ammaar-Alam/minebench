@@ -4,7 +4,7 @@
  *
  * Each build goes through the same preparation the Arena serves as its full variant,
  * then the local-only /dev/judge-render page captures eight views around it (every 45
- * degrees at the Arena camera height, starting from the Arena's opening angle) and one
+ * degrees from a fixed camera height, starting from the Arena's opening angle) and one
  * from above. Each view is fit to the build as seen from that angle, so a still frame
  * isn't padded for the whole spin. Starts its own next dev server and drives the
  * installed Chrome headlessly.
@@ -30,8 +30,14 @@ const PORT = 3217;
 const SIZE = 512; // css px, the export renderer doubles it to 1024
 // light theme --viewer-bg from app/globals.css
 const BACKGROUND = "hsl(220 20% 97%)";
+// one camera height for every build instead of the arena's height-dependent angle
+const RING_ELEVATION = (35 * Math.PI) / 180;
 const VIEWS: { name: string; rotationY: number; elevation?: number }[] = [
-  ...Array.from({ length: 8 }, (_, k) => ({ name: `r${String(k * 45).padStart(3, "0")}`, rotationY: (k * Math.PI) / 4 })),
+  ...Array.from({ length: 8 }, (_, k) => ({
+    name: `r${String(k * 45).padStart(3, "0")}`,
+    rotationY: (k * Math.PI) / 4,
+    elevation: RING_ELEVATION,
+  })),
   // turned 45 degrees so the top view sits square instead of as a diamond
   { name: "top", rotationY: Math.PI / 4, elevation: (85 * Math.PI) / 180 },
 ];
