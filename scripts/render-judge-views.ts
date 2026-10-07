@@ -50,7 +50,6 @@ type SnapshotBuild = {
   blockCount: number;
   payloadFile: string | null;
   payloadBytes: number | null;
-  recordedSha256: string | null;
 };
 
 function argValue(flag: string): string | null {
@@ -145,7 +144,8 @@ async function main() {
           blockCount: build.blockCount,
           voxelByteSize: build.payloadBytes,
           voxelCompressedByteSize: null,
-          voxelSha256: build.recordedSha256,
+          // no stored checksum keeps each build out of the arena's in-memory cache, which outgrows the heap over a full run
+          voxelSha256: null,
           voxelData: null,
           voxelStorageBucket: LOCAL_BUILD_STORAGE_BUCKET,
           voxelStoragePath: path.relative(repoRoot, path.join(snapshotDir, build.payloadFile!)),
