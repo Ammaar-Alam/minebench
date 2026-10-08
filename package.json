@@ -47,6 +47,7 @@
     "uploads:sync": "tsx scripts/sync-uploads-from-db.ts",
     "judge:export": "tsx scripts/export-judge-dataset.ts",
     "judge:render": "tsx scripts/render-judge-views.ts",
+    "judge:features": "tsx scripts/judge-build-features.ts",
     "prompt": "tsx scripts/prompt.ts",
     "elo:reset": "tsx scripts/reset-elo.ts",
     "elo:recompute": "tsx scripts/recompute-elo.ts",
