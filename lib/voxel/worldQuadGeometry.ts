@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { ATLAS } from "@/lib/blocks/atlas";
+import { ATLAS_SAMPLE_GLSL } from "@/lib/voxel/atlasSampling";
 import type { VoxelGroup } from "@/lib/voxel/mesh";
 import { WORLD_QUAD_COLORS } from "@/lib/voxel/worldQuadData";
 
@@ -98,7 +99,7 @@ uint worldSurfaceOffset = vWorldSurfaceQuad.z + worldSurfaceSize.y + (worldSurfa
 uint worldSurfaceWord = texelFetch(worldSurfaceData, ivec2(worldSurfaceOffset % 2048u, worldSurfaceOffset / 2048u), 0).r;
 vec2 worldSurfaceAtlas = vec2(worldSurfaceWord & 1023u, (worldSurfaceWord >> 10u) & 1023u) * worldQuadAtlasTexel;
 vec2 worldSurfaceSt = fract(vMapUv);
-diffuseColor *= textureGrad(map, worldSurfaceAtlas + worldSurfaceSt * worldQuadAtlasTexel * ${ATLAS.tileSize.toFixed(1)}, worldSurfaceDx, worldSurfaceDy);
+diffuseColor *= sampleAtlas(map, worldSurfaceAtlas + worldSurfaceSt * worldQuadAtlasTexel * ${ATLAS.tileSize.toFixed(1)}, worldSurfaceDx, worldSurfaceDy);
 uint worldSurfaceFlags = (worldSurfaceWord >> 20u) & 2047u;
 int worldSurfaceTint = int(worldSurfaceFlags & 3u) * 4;
 vec3 worldSurfaceC0 = worldQuadColors[worldSurfaceTint + int((worldSurfaceFlags >> 2u) & 3u)];
@@ -172,13 +173,14 @@ transformed = worldQuadPosition - worldQuadAnchor;
     if (!water) {
       shader.fragmentShader = shader.fragmentShader
         .replace("#include <common>", `#include <common>
+${ATLAS_SAMPLE_GLSL}
 uniform vec2 worldQuadAtlasTexel;
 flat varying vec2 vWorldQuadAtlasOrigin;
 ${surface ? "uniform highp usampler2D worldSurfaceData;\nuniform vec3 worldQuadColors[16];\nflat varying uvec4 vWorldSurfaceQuad;\nvarying vec2 vWorldSurfaceUv;" : ""}`)
         .replace("#include <map_fragment>", surface ? surfaceMapFragment() : `#ifdef USE_MAP
   vec2 worldQuadTileSpan = worldQuadAtlasTexel * ${ATLAS.tileSize.toFixed(1)};
   vec2 worldQuadAtlasUv = vWorldQuadAtlasOrigin + fract(vMapUv) * worldQuadTileSpan;
-  vec4 sampledDiffuseColor = textureGrad(map, worldQuadAtlasUv, dFdx(vMapUv) * worldQuadTileSpan, dFdy(vMapUv) * worldQuadTileSpan);
+  vec4 sampledDiffuseColor = sampleAtlas(map, worldQuadAtlasUv, dFdx(vMapUv) * worldQuadTileSpan, dFdy(vMapUv) * worldQuadTileSpan);
   diffuseColor *= sampledDiffuseColor;
 #endif`);
     }

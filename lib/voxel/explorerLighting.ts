@@ -221,7 +221,10 @@ export function getExplorerBlockLight(
 }
 
 function enableExplorerBlockLight(material: THREE.MeshLambertMaterial) {
-  material.onBeforeCompile = (shader) => {
+  const compile = material.onBeforeCompile;
+  const key = material.customProgramCacheKey();
+  material.onBeforeCompile = (shader, renderer) => {
+    compile.call(material, shader, renderer);
     shader.vertexShader = shader.vertexShader
       .replace(
         "#include <color_pars_vertex>",
@@ -241,7 +244,7 @@ function enableExplorerBlockLight(material: THREE.MeshLambertMaterial) {
         "#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * vec3(1.0, 0.62, 0.32) * pow(vExplorerBlockLight, 1.6) * 1.2;",
       );
   };
-  material.customProgramCacheKey = () => "explorer-block-light-v1";
+  material.customProgramCacheKey = () => `${key}:explorer-block-light-v1`;
   material.needsUpdate = true;
 }
 

@@ -131,7 +131,7 @@ for (const water of [false, true]) {
         assert.match(shader.fragmentShader, /#include <map_fragment>/);
         assert.doesNotMatch(shader.fragmentShader, /textureGrad/);
       } else {
-        assert.match(shader.fragmentShader, /textureGrad\(map, worldQuadAtlasUv, dFdx\(vMapUv\) \* worldQuadTileSpan, dFdy\(vMapUv\) \* worldQuadTileSpan\)/);
+        assert.match(shader.fragmentShader, /sampleAtlas\(map, worldQuadAtlasUv, dFdx\(vMapUv\) \* worldQuadTileSpan, dFdy\(vMapUv\) \* worldQuadTileSpan\)/);
         assert.match(shader.fragmentShader, /fract\(vMapUv\)/);
       }
 

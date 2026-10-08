@@ -4,6 +4,7 @@ import type { BlockDefinition, RenderKind } from "@/lib/blocks/palettes";
 import { getRenderKind, hasLeafTint } from "@/lib/blocks/registry";
 import { getTextureKey, type Face } from "@/lib/blocks/textures";
 import { decodeBinaryVoxelBuild, readBinaryVoxelBuildHeader } from "@/lib/voxel/binaryBuild";
+import { ATLAS_SAMPLE_GLSL } from "@/lib/voxel/atlasSampling";
 import {
   configureAtlasTexture,
   createVoxelGroupAsync,
@@ -130,7 +131,7 @@ function patchRepeatingAtlasMaterial(material: THREE.Material) {
     shader.fragmentShader = shader.fragmentShader
       .replace(
         "#include <uv_pars_fragment>",
-        "#include <uv_pars_fragment>\nvarying vec4 vAtlasUvFrame;",
+        `#include <uv_pars_fragment>\nvarying vec4 vAtlasUvFrame;\n${ATLAS_SAMPLE_GLSL}`,
       )
       .replace(
         "#include <map_fragment>",
@@ -138,7 +139,7 @@ function patchRepeatingAtlasMaterial(material: THREE.Material) {
           "#ifdef USE_MAP",
           "  vec2 atlasTileSpan = vAtlasUvFrame.zw - vAtlasUvFrame.xy;",
           "  vec2 atlasTileUv = vAtlasUvFrame.xy + fract(vMapUv) * atlasTileSpan;",
-          "  vec4 sampledDiffuseColor = textureGrad(map, atlasTileUv, dFdx(vMapUv) * atlasTileSpan, dFdy(vMapUv) * atlasTileSpan);",
+          "  vec4 sampledDiffuseColor = sampleAtlas(map, atlasTileUv, dFdx(vMapUv) * atlasTileSpan, dFdy(vMapUv) * atlasTileSpan);",
           "  diffuseColor *= sampledDiffuseColor;",
           "#endif",
         ].join("\n"),
