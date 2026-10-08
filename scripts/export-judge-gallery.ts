@@ -2,8 +2,8 @@
 /**
  * Export visible Gallery builds in the judge-data snapshot layout so they can be rendered and scored.
  *
- * Gallery builds have no Arena votes, which makes them a test set the judge has never seen. Writes
- * prompts.jsonl (one row per Gallery prompt), builds.jsonl, and payloads/<buildId>.json.gz in the same
+ * Gallery builds that were never copied into the Arena have no votes, which makes them a test set the judge
+ * has never seen; Arena copies are left out. Writes prompts.jsonl (one row per Gallery prompt), builds.jsonl, and payloads/<buildId>.json.gz in the same
  * shape as `pnpm judge:export`, so `pnpm judge:render` works on the result unchanged.
  * Re-running reuses payloads already on disk while their stored bytes match the artifact checksum.
  *
@@ -52,7 +52,7 @@ async function main() {
   const outDir = path.resolve(argValue("--out") ?? path.join("judge-data", `gallery-${exportedAt.toISOString().slice(0, 10)}`));
   fs.mkdirSync(path.join(outDir, "payloads"), { recursive: true });
 
-  const examples = await prisma.galleryExample.findMany({
+  const allExamples = await prisma.galleryExample.findMany({
     where: { ...publicExampleWhere, candidate: publicCandidateWhere },
     orderBy: { customBuildId: "asc" },
     select: {
@@ -66,6 +66,13 @@ async function main() {
       },
     },
   });
+
+  // Arena copies of Gallery builds carry votes in the training snapshot, so they cannot be test builds
+  const arenaCopyPaths = (
+    await prisma.build.findMany({ where: { voxelStoragePath: { startsWith: "gallery/" } }, select: { voxelStoragePath: true } })
+  ).map((b) => b.voxelStoragePath ?? "");
+  const examples = allExamples.filter(({ customBuild }) => !arenaCopyPaths.some((p) => p.includes(`-${customBuild.id}-g`)));
+  const arenaCopiesExcluded = allExamples.length - examples.length;
 
   const prompts = new Map<string, unknown>();
   const builds = [];
@@ -118,9 +125,9 @@ async function main() {
   const failed = builds.filter((b) => b.payloadError);
   fs.writeFileSync(
     path.join(outDir, "manifest.json"),
-    `${JSON.stringify({ exportedAt, prompts: prompts.size, builds: builds.length, payloadFailures: failed.map((b) => ({ id: b.id, error: b.payloadError })) }, null, 2)}\n`,
+    `${JSON.stringify({ exportedAt, prompts: prompts.size, builds: builds.length, arenaCopiesExcluded, payloadFailures: failed.map((b) => ({ id: b.id, error: b.payloadError })) }, null, 2)}\n`,
   );
-  console.log(`${prompts.size} prompts, ${builds.length} builds, ${failed.length} payload failures, wrote ${outDir}`);
+  console.log(`${prompts.size} prompts, ${builds.length} builds (${arenaCopiesExcluded} Arena copies excluded), ${failed.length} payload failures, wrote ${outDir}`);
   await prisma.$disconnect();
   if (failed.length) process.exitCode = 1;
 }
