@@ -5,7 +5,7 @@
  * Gallery builds have no Arena votes, which makes them a test set the judge has never seen. Writes
  * prompts.jsonl (one row per Gallery prompt), builds.jsonl, and payloads/<buildId>.json.gz in the same
  * shape as `pnpm judge:export`, so `pnpm judge:render` works on the result unchanged.
- * Re-running reuses payloads already on disk while they match the artifact checksum.
+ * Re-running reuses payloads already on disk while their stored bytes match the artifact checksum.
  *
  * Usage:
  *   pnpm judge:gallery
@@ -20,6 +20,8 @@ import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
+import { sha256Hex } from "../lib/custom-builds/hash";
+import { publicCandidateWhere, publicExampleWhere } from "../lib/gallery/service";
 import { fetchStoredBuildBytes } from "../lib/storage/buildPayload";
 
 function argValue(flag: string): string | null {
@@ -50,9 +52,8 @@ async function main() {
   const outDir = path.resolve(argValue("--out") ?? path.join("judge-data", `gallery-${exportedAt.toISOString().slice(0, 10)}`));
   fs.mkdirSync(path.join(outDir, "payloads"), { recursive: true });
 
-  const visible = { removedAt: null, adminHiddenAt: null };
   const examples = await prisma.galleryExample.findMany({
-    where: { ...visible, candidate: visible, customBuild: { status: "succeeded", removedAt: null } },
+    where: { ...publicExampleWhere, candidate: publicCandidateWhere },
     orderBy: { customBuildId: "asc" },
     select: {
       candidate: { select: { id: true, promptText: true, upvoteCount: true, officialPromptId: true } },
@@ -82,16 +83,15 @@ async function main() {
     let payloadError: string | null = null;
     try {
       if (!artifact) throw new Error("No build_json artifact");
-      if (fs.existsSync(absolute)) {
-        const cached = await sha256OfGzip(fs.readFileSync(absolute));
-        if (cached.sha256 === artifact.sha256) payload = cached;
-      }
-      if (!payload) {
-        const gz = await fetchStoredBuildBytes({ bucket: artifact.bucket, path: artifact.path });
+      // artifact.sha256 covers the stored gzip bytes, not the decompressed JSON
+      let gz: Uint8Array | null = fs.existsSync(absolute) ? fs.readFileSync(absolute) : null;
+      if (!gz || sha256Hex(gz) !== artifact.sha256) {
+        gz = await fetchStoredBuildBytes({ bucket: artifact.bucket, path: artifact.path });
+        if (sha256Hex(gz) !== artifact.sha256) throw new Error("Stored payload does not match its artifact checksum");
         fs.writeFileSync(`${absolute}.tmp`, gz);
         fs.renameSync(`${absolute}.tmp`, absolute);
-        payload = await sha256OfGzip(gz);
       }
+      payload = await sha256OfGzip(gz);
     } catch (err) {
       payloadError = err instanceof Error ? err.message : String(err);
     }
