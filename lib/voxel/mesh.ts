@@ -20,6 +20,7 @@ import {
   type MeshBucket,
   type SerializedMeshBucket,
 } from "@/lib/voxel/meshBuckets";
+import { ATLAS_SAMPLE_GLSL } from "@/lib/voxel/atlasSampling";
 import { getCachedMeshPayload, setCachedMeshPayload } from "@/lib/voxel/meshPayloadCache";
 import {
   packVoxelPlaneCell,
@@ -245,6 +246,42 @@ function bucketFor(blockType: string, buckets: {
   return buckets.opaque;
 }
 
+
+function clampAtlasMipmaps(material: THREE.Material) {
+  material.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader
+      .replace("#include <uv_pars_fragment>", `#include <uv_pars_fragment>\n${ATLAS_SAMPLE_GLSL}`)
+      .replace(
+        "#include <map_fragment>",
+        "#ifdef USE_MAP\n  diffuseColor *= sampleAtlas(map, vMapUv, dFdx(vMapUv), dFdy(vMapUv));\n#endif",
+      );
+  };
+  material.customProgramCacheKey = () => "voxel-atlas-mip-clamp-v1";
+}
+
+function createAtlasMaterials(atlasTexture: THREE.Texture) {
+  configureAtlasTexture(atlasTexture);
+  const matOpaque = new THREE.MeshLambertMaterial({ map: atlasTexture, vertexColors: true });
+  const matCutout = new THREE.MeshLambertMaterial({
+    map: atlasTexture,
+    alphaTest: 0.45,
+    vertexColors: true,
+  });
+  const matTransparent = new THREE.MeshLambertMaterial({
+    map: atlasTexture,
+    transparent: true,
+    opacity: 0.85,
+    depthWrite: false,
+    vertexColors: true,
+  });
+  const matWater = createWaterSurfaceMaterial(atlasTexture);
+  const matEmissive = new THREE.MeshBasicMaterial({
+    map: atlasTexture,
+    vertexColors: true,
+  });
+  for (const material of [matOpaque, matCutout, matTransparent, matEmissive]) clampAtlasMipmaps(material);
+  return { matOpaque, matCutout, matTransparent, matWater, matEmissive };
+}
 
 export function configureAtlasTexture(atlasTexture: THREE.Texture) {
   let changed = false;
@@ -951,26 +988,7 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
 
   const water = buildWaterSurfaceBucket(prepared);
 
-  configureAtlasTexture(atlasTexture);
-
-  const matOpaque = new THREE.MeshLambertMaterial({ map: atlasTexture, vertexColors: true });
-  const matCutout = new THREE.MeshLambertMaterial({
-    map: atlasTexture,
-    alphaTest: 0.45,
-    vertexColors: true,
-  });
-  const matTransparent = new THREE.MeshLambertMaterial({
-    map: atlasTexture,
-    transparent: true,
-    opacity: 0.85,
-    depthWrite: false,
-    vertexColors: true,
-  });
-  const matWater = createWaterSurfaceMaterial(atlasTexture);
-  const matEmissive = new THREE.MeshBasicMaterial({
-    map: atlasTexture,
-    vertexColors: true,
-  });
+  const { matOpaque, matCutout, matTransparent, matWater, matEmissive } = createAtlasMaterials(atlasTexture);
 
   const group = new THREE.Group();
   group.name = "VoxelGroup";
@@ -1042,26 +1060,7 @@ export function createVoxelGroupFromMeshPayload(
   atlasTexture: THREE.Texture,
 ): VoxelGroup {
   const bounds = deserializeBounds(payload.bounds);
-  configureAtlasTexture(atlasTexture);
-
-  const matOpaque = new THREE.MeshLambertMaterial({ map: atlasTexture, vertexColors: true });
-  const matCutout = new THREE.MeshLambertMaterial({
-    map: atlasTexture,
-    alphaTest: 0.45,
-    vertexColors: true,
-  });
-  const matTransparent = new THREE.MeshLambertMaterial({
-    map: atlasTexture,
-    transparent: true,
-    opacity: 0.85,
-    depthWrite: false,
-    vertexColors: true,
-  });
-  const matWater = createWaterSurfaceMaterial(atlasTexture);
-  const matEmissive = new THREE.MeshBasicMaterial({
-    map: atlasTexture,
-    vertexColors: true,
-  });
+  const { matOpaque, matCutout, matTransparent, matWater, matEmissive } = createAtlasMaterials(atlasTexture);
 
   const group = new THREE.Group();
   group.name = "VoxelGroup";
@@ -1387,26 +1386,7 @@ async function createVoxelGroupAsyncLocal(
     stageLabel: "Finalizing geometry",
   });
 
-  configureAtlasTexture(atlasTexture);
-
-  const matOpaque = new THREE.MeshLambertMaterial({ map: atlasTexture, vertexColors: true });
-  const matCutout = new THREE.MeshLambertMaterial({
-    map: atlasTexture,
-    alphaTest: 0.45,
-    vertexColors: true,
-  });
-  const matTransparent = new THREE.MeshLambertMaterial({
-    map: atlasTexture,
-    transparent: true,
-    opacity: 0.85,
-    depthWrite: false,
-    vertexColors: true,
-  });
-  const matWater = createWaterSurfaceMaterial(atlasTexture);
-  const matEmissive = new THREE.MeshBasicMaterial({
-    map: atlasTexture,
-    vertexColors: true,
-  });
+  const { matOpaque, matCutout, matTransparent, matWater, matEmissive } = createAtlasMaterials(atlasTexture);
 
   const group = new THREE.Group();
   group.name = "VoxelGroup";
