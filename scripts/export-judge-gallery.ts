@@ -5,7 +5,7 @@
  * Gallery builds that were never copied into the Arena have no votes, which makes them a test set the judge
  * has never seen; Arena copies are left out. Writes prompts.jsonl (one row per Gallery prompt), builds.jsonl, and payloads/<buildId>.json.gz in the same
  * shape as `pnpm judge:export`, so `pnpm judge:render` works on the result unchanged.
- * Re-running reuses payloads already on disk while their stored bytes match the artifact checksum.
+ * Re-running reuses payloads already on disk while their JSON matches the artifact checksum.
  *
  * Usage:
  *   pnpm judge:gallery
@@ -17,10 +17,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { createGunzip } from "node:zlib";
+import { createGunzip, gzipSync } from "node:zlib";
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
-import { sha256Hex } from "../lib/custom-builds/hash";
+import { isGzipChunk } from "../lib/arena/clientBuildResponse";
 import { publicCandidateWhere, publicExampleWhere } from "../lib/gallery/service";
 import { fetchStoredBuildBytes } from "../lib/storage/buildPayload";
 
@@ -61,7 +61,7 @@ async function main() {
         select: {
           id: true, createdAt: true, gridSize: true, palette: true, modelKey: true, modelProvider: true,
           modelDisplayName: true, blockCount: true,
-          artifacts: { where: { kind: "build_json" }, select: { bucket: true, path: true, sha256: true } },
+          artifacts: { where: { kind: "build_json" }, select: { bucket: true, path: true, sourceBuildSha256: true } },
         },
       },
     },
@@ -90,16 +90,18 @@ async function main() {
     let payloadError: string | null = null;
     try {
       if (!artifact) throw new Error("No build_json artifact");
-      // artifact.sha256 covers the stored gzip bytes, not the decompressed JSON
-      let gz: Uint8Array | null = fs.existsSync(absolute) ? fs.readFileSync(absolute) : null;
-      if (!gz || sha256Hex(gz) !== artifact.sha256) {
-        gz = await fetchStoredBuildBytes({ bucket: artifact.bucket, path: artifact.path });
-        if (sha256Hex(gz) !== artifact.sha256) throw new Error("Stored payload does not match its artifact checksum");
+      // checked on the decompressed JSON, since remote downloads may arrive already decoded
+      if (fs.existsSync(absolute)) payload = await sha256OfGzip(fs.readFileSync(absolute)).catch(() => null);
+      if (payload?.sha256 !== artifact.sourceBuildSha256) {
+        const bytes = await fetchStoredBuildBytes({ bucket: artifact.bucket, path: artifact.path });
+        const gz = isGzipChunk(bytes) ? bytes : gzipSync(bytes);
+        payload = await sha256OfGzip(gz);
+        if (payload.sha256 !== artifact.sourceBuildSha256) throw new Error("Stored payload does not match its artifact checksum");
         fs.writeFileSync(`${absolute}.tmp`, gz);
         fs.renameSync(`${absolute}.tmp`, absolute);
       }
-      payload = await sha256OfGzip(gz);
     } catch (err) {
+      payload = null;
       payloadError = err instanceof Error ? err.message : String(err);
     }
     builds.push({
