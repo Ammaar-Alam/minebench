@@ -73,10 +73,12 @@ async function waitForServer(url: string, server: ReturnType<typeof spawn>) {
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`Timed out after ${ms} ms`)), ms)),
-  ]);
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Timed out after ${ms} ms`)), ms);
+  });
+  // a pending timer keeps the settled race, and its images, alive until it fires
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 async function main() {
@@ -145,27 +147,36 @@ async function main() {
     await page.goto(harnessUrl);
     await page.waitForFunction(() => typeof window.judgeRender === "function", undefined, { timeout: 300_000 });
 
+    // the arena's own preparation, reading the snapshot file through the local storage bucket
+    const prepare = async (build: SnapshotBuild) => {
+      const prepared = await prepareArenaBuild({
+        id: build.id,
+        gridSize: build.gridSize,
+        palette: build.palette,
+        blockCount: build.blockCount,
+        voxelByteSize: build.payloadBytes,
+        voxelCompressedByteSize: null,
+        // each build renders once, so no stored checksum keeps it out of the arena's in-memory cache
+        voxelSha256: null,
+        voxelData: null,
+        voxelStorageBucket: LOCAL_BUILD_STORAGE_BUCKET,
+        voxelStoragePath: path.relative(repoRoot, path.join(snapshotDir, build.payloadFile!)),
+        voxelStorageEncoding: "gzip",
+      });
+      return encodeBinarySnapshotArtifactPayload(createSnapshotArtifactPayload(prepared, "full"));
+    };
+
     const index = fs.openSync(path.join(outDir, "index.jsonl"), "a");
     let failures = 0;
+    let next = todo.length ? prepare(todo[0]) : null;
     for (const [i, build] of todo.entries()) {
       const started = Date.now();
+      const current = next!;
+      // Node prepares the next build while the browser renders this one
+      next = i + 1 < todo.length ? prepare(todo[i + 1]) : null;
+      next?.catch(() => undefined);
       try {
-        // the arena's own preparation, reading the snapshot file through the local storage bucket
-        const prepared = await prepareArenaBuild({
-          id: build.id,
-          gridSize: build.gridSize,
-          palette: build.palette,
-          blockCount: build.blockCount,
-          voxelByteSize: build.payloadBytes,
-          voxelCompressedByteSize: null,
-          // no stored checksum keeps each build out of the arena's in-memory cache, which outgrows the heap over a full run
-          voxelSha256: null,
-          voxelData: null,
-          voxelStorageBucket: LOCAL_BUILD_STORAGE_BUCKET,
-          voxelStoragePath: path.relative(repoRoot, path.join(snapshotDir, build.payloadFile!)),
-          voxelStorageEncoding: "gzip",
-        });
-        bodies.set(build.id, encodeBinarySnapshotArtifactPayload(createSnapshotArtifactPayload(prepared, "full")));
+        bodies.set(build.id, await current);
         const images = await withTimeout(
           page.evaluate(
             (job) => window.judgeRender!(job),
