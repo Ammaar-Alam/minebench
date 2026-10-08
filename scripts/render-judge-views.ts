@@ -8,7 +8,8 @@
  * from above. Each view is fit to the build as seen from that angle, so a still frame
  * isn't padded for the whole spin. Starts its own next dev server and drives the
  * installed Chrome headlessly.
- * Re-running skips builds whose images already exist.
+ * Re-running skips builds whose images already exist and refuses a changed view protocol;
+ * index.jsonl records the commit each build was rendered at.
  *
  * Usage:
  *   pnpm judge:render --snapshot judge-data/2026-10-07
@@ -97,10 +98,19 @@ async function main() {
   const todo = builds.filter((build) => build.payloadFile && !isDone(build.id));
   console.log(`${builds.length} builds, ${builds.length - todo.length} already rendered or without payload`);
 
-  fs.writeFileSync(
-    path.join(outDir, "views.json"),
-    `${JSON.stringify({ gitCommit: execSync("git rev-parse HEAD").toString().trim(), sizePx: SIZE * 2, framing: "each view fit to the build", background: BACKGROUND, views: VIEWS }, null, 2)}\n`,
-  );
+  const commit = execSync("git rev-parse HEAD").toString().trim();
+  const protocol = { sizePx: SIZE * 2, framing: "each view fit to the build", background: BACKGROUND, views: VIEWS };
+  const manifestPath = path.join(outDir, "views.json");
+  // skipped images were made under the recorded protocol, so a different one must not share the directory
+  if (fs.existsSync(manifestPath)) {
+    const existing = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
+    delete existing.gitCommit;
+    if (JSON.stringify(existing) !== JSON.stringify(protocol)) {
+      throw new Error(`${outDir} was rendered with a different view protocol; move it aside to render again`);
+    }
+  } else {
+    fs.writeFileSync(manifestPath, `${JSON.stringify({ gitCommit: commit, ...protocol }, null, 2)}\n`);
+  }
   if (todo.length === 0) return;
 
   // a server left behind by a crashed run would answer instead of this one
@@ -174,11 +184,11 @@ async function main() {
         images.forEach((dataUrl, v) => {
           fs.writeFileSync(path.join(buildDir, `${VIEWS[v].name}.png`), Buffer.from(dataUrl.split(",")[1], "base64"));
         });
-        fs.writeSync(index, `${JSON.stringify({ id: build.id, ok: true, ms: Date.now() - started })}\n`);
+        fs.writeSync(index, `${JSON.stringify({ id: build.id, ok: true, ms: Date.now() - started, commit })}\n`);
       } catch (err) {
         failures += 1;
         const error = err instanceof Error ? err.message : String(err);
-        fs.writeSync(index, `${JSON.stringify({ id: build.id, ok: false, ms: Date.now() - started, error })}\n`);
+        fs.writeSync(index, `${JSON.stringify({ id: build.id, ok: false, ms: Date.now() - started, commit, error })}\n`);
         console.error(`failed ${build.id}: ${error}`);
         // a timed out render can leave the harness mid-job
         await page.reload();

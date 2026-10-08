@@ -6,7 +6,7 @@
  * Private evaluation data (stealth models, their builds, stealth matchups) is excluded.
  * Votes keep raw session and account ids and are marked when an active admin vote
  * block covers their session, account, or network. Output stays local and git-ignored.
- * Re-running reuses payloads already on disk.
+ * Re-running reuses stored payloads already on disk while they match the recorded checksum.
  *
  * Usage:
  *   pnpm judge:export
@@ -148,10 +148,17 @@ async function main() {
     let payload: { sha256: string; bytes: number } | null = null;
     let payloadError: string | null = null;
     try {
-      let gz: Uint8Array;
-      if (fs.existsSync(absolute)) {
-        gz = fs.readFileSync(absolute);
-      } else {
+      let gz: Uint8Array | null = null;
+      // reuse a stored payload only while it matches the build's recorded checksum; imports can overwrite a build in place
+      if (build.voxelData == null && build.voxelSha256 && fs.existsSync(absolute)) {
+        const cached = fs.readFileSync(absolute);
+        const hashed = await sha256OfGzip(cached);
+        if (hashed.sha256 === build.voxelSha256) {
+          gz = cached;
+          payload = hashed;
+        }
+      }
+      if (!gz) {
         if (build.voxelData != null) {
           gz = gzipSync(JSON.stringify(build.voxelData));
         } else {
@@ -161,8 +168,8 @@ async function main() {
         }
         fs.writeFileSync(`${absolute}.tmp`, gz);
         fs.renameSync(`${absolute}.tmp`, absolute);
+        payload = await sha256OfGzip(gz);
       }
-      payload = await sha256OfGzip(gz);
     } catch (err) {
       payloadError = err instanceof Error ? err.message : String(err);
     }
