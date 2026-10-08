@@ -1076,7 +1076,8 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
               .addScaledVector(cameraOffset, (targetDistance * distanceScale) / distance);
           }
           camera.aspect = targetAspect;
-          if (isVoxelWorldScene(vg)) {
+          // a reframed camera can sit far closer than the spin fit the near plane was sized for
+          if (isVoxelWorldScene(vg) || elevation !== null || tight) {
             const position = camera.position.clone().applyAxisAngle(THREE.Object3D.DEFAULT_UP, -vg.group.rotation.y);
             Object.assign(camera, worldCameraClipping(position, bounds));
           }

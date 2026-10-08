@@ -103,6 +103,10 @@ async function main() {
   );
   if (todo.length === 0) return;
 
+  // a server left behind by a crashed run would answer instead of this one
+  const portInUse = await fetch(`http://localhost:${PORT}/`).then(() => true, () => false);
+  if (portInUse) throw new Error(`Port ${PORT} is already serving; stop the leftover server (lsof -iTCP:${PORT}) and re-run`);
+
   // own process group so stopping it also stops the workers next dev starts
   const server = spawn("pnpm", ["exec", "next", "dev", "-p", String(PORT)], { stdio: "ignore", detached: true });
   const stopServer = () => {
