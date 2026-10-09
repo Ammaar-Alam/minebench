@@ -41,6 +41,12 @@ const VIEWS: { name: string; rotationY: number; elevation?: number }[] = [
   })),
   // turned 45 degrees so the top view sits square instead of as a diamond
   { name: "top", rotationY: Math.PI / 4, elevation: (85 * Math.PI) / 180 },
+  // eye level, looking straight at each side (the ring starts on a corner)
+  ...Array.from({ length: 4 }, (_, k) => ({
+    name: `e${String(45 + k * 90).padStart(3, "0")}`,
+    rotationY: Math.PI / 4 + (k * Math.PI) / 2,
+    elevation: 0,
+  })),
 ];
 const BUILD_TIMEOUT_MS = 10 * 60_000;
 
@@ -96,19 +102,25 @@ async function main() {
     .filter(Boolean)
     .map((line) => JSON.parse(line) as SnapshotBuild)
     .filter((build) => !ids || ids.includes(build.id));
-  const isDone = (id: string) => VIEWS.every((view) => fs.existsSync(path.join(outDir, id, `${view.name}.png`)));
+  const missingViews = (id: string) => VIEWS.filter((view) => !fs.existsSync(path.join(outDir, id, `${view.name}.png`)));
+  const isDone = (id: string) => missingViews(id).length === 0;
   const todo = builds.filter((build) => build.payloadFile && !isDone(build.id));
   console.log(`${builds.length} builds, ${builds.length - todo.length} already rendered or without payload`);
 
   const commit = execSync("git rev-parse HEAD").toString().trim();
   const protocol = { sizePx: SIZE * 2, framing: "each view fit to the build", background: BACKGROUND, views: VIEWS };
   const manifestPath = path.join(outDir, "views.json");
-  // skipped images were made under the recorded protocol, so a different one must not share the directory
+  // skipped images were made under the recorded protocol, so a different one must not share the directory;
+  // views appended after the recorded ones are fine, since existing images stay as they are
   if (fs.existsSync(manifestPath)) {
     const existing = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
-    delete existing.gitCommit;
-    if (JSON.stringify(existing) !== JSON.stringify(protocol)) {
+    const recordedViews = existing.views ?? [];
+    const sameBase = JSON.stringify({ ...existing, gitCommit: undefined, views: undefined }) === JSON.stringify({ ...protocol, views: undefined });
+    if (!sameBase || JSON.stringify(recordedViews) !== JSON.stringify(VIEWS.slice(0, recordedViews.length))) {
       throw new Error(`${outDir} was rendered with a different view protocol; move it aside to render again`);
+    }
+    if (recordedViews.length < VIEWS.length) {
+      fs.writeFileSync(manifestPath, `${JSON.stringify({ ...existing, views: VIEWS, viewsAddedAt: { [commit]: VIEWS.slice(recordedViews.length).map((v) => v.name) } }, null, 2)}\n`);
     }
   } else {
     fs.writeFileSync(manifestPath, `${JSON.stringify({ gitCommit: commit, ...protocol }, null, 2)}\n`);
@@ -177,13 +189,14 @@ async function main() {
       next?.catch(() => undefined);
       try {
         bodies.set(build.id, await current);
+        const missing = missingViews(build.id);
         const images = await withTimeout(
           page.evaluate(
             (job) => window.judgeRender!(job),
             {
               buildId: build.id,
               palette: build.palette === "advanced" ? "advanced" : "simple",
-              views: VIEWS.map(({ rotationY, elevation }) => ({ rotationY, elevation })),
+              views: missing.map(({ rotationY, elevation }) => ({ rotationY, elevation })),
               size: SIZE,
               background: BACKGROUND,
             } as const,
@@ -193,7 +206,7 @@ async function main() {
         const buildDir = path.join(outDir, build.id);
         fs.mkdirSync(buildDir, { recursive: true });
         images.forEach((dataUrl, v) => {
-          fs.writeFileSync(path.join(buildDir, `${VIEWS[v].name}.png`), Buffer.from(dataUrl.split(",")[1], "base64"));
+          fs.writeFileSync(path.join(buildDir, `${missing[v].name}.png`), Buffer.from(dataUrl.split(",")[1], "base64"));
         });
         fs.writeSync(index, `${JSON.stringify({ id: build.id, ok: true, ms: Date.now() - started, commit })}\n`);
       } catch (err) {
