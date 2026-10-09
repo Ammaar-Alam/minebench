@@ -115,12 +115,13 @@ async function main() {
   if (fs.existsSync(manifestPath)) {
     const existing = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
     const recordedViews = existing.views ?? [];
-    const sameBase = JSON.stringify({ ...existing, gitCommit: undefined, views: undefined }) === JSON.stringify({ ...protocol, views: undefined });
+    // record-keeping fields are not part of the protocol
+    const sameBase = JSON.stringify({ ...existing, gitCommit: undefined, viewsAddedAt: undefined, views: undefined }) === JSON.stringify({ ...protocol, views: undefined });
     if (!sameBase || JSON.stringify(recordedViews) !== JSON.stringify(VIEWS.slice(0, recordedViews.length))) {
       throw new Error(`${outDir} was rendered with a different view protocol; move it aside to render again`);
     }
     if (recordedViews.length < VIEWS.length) {
-      fs.writeFileSync(manifestPath, `${JSON.stringify({ ...existing, views: VIEWS, viewsAddedAt: { [commit]: VIEWS.slice(recordedViews.length).map((v) => v.name) } }, null, 2)}\n`);
+      fs.writeFileSync(manifestPath, `${JSON.stringify({ ...existing, views: VIEWS, viewsAddedAt: { ...existing.viewsAddedAt, [commit]: VIEWS.slice(recordedViews.length).map((v) => v.name) } }, null, 2)}\n`);
     }
   } else {
     fs.writeFileSync(manifestPath, `${JSON.stringify({ gitCommit: commit, ...protocol }, null, 2)}\n`);
