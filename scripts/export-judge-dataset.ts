@@ -106,8 +106,9 @@ async function main() {
 
   const includedStealth = (argValue("--include-stealth") ?? "").split(",").filter(Boolean);
   const variants = await prisma.stealthVariant.findMany({ select: { id: true, modelId: true, codename: true } });
-  const unknownStealth = includedStealth.filter((codename) => !variants.some((v) => v.codename === codename));
-  if (unknownStealth.length > 0) throw new Error(`no stealth variant named ${unknownStealth.join(", ")}`);
+  // a codename is unique only within its experiment, so it must name exactly one variant
+  const unclear = includedStealth.filter((codename) => variants.filter((v) => v.codename === codename).length !== 1);
+  if (unclear.length > 0) throw new Error(`not exactly one stealth variant named ${unclear.join(", ")}`);
   const includedVariantIds = variants.filter((v) => includedStealth.includes(v.codename)).map((v) => v.id);
   const stealthModelIds = new Set(variants.filter((v) => !includedStealth.includes(v.codename)).map((v) => v.modelId));
   const publicModel = { id: { notIn: [...stealthModelIds] } };
