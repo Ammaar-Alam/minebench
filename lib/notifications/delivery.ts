@@ -100,7 +100,7 @@ async function notificationPayload(delivery: NotificationDelivery): Promise<Push
     }
   }
   return {
-    aps: { alert: { title, body }, sound: "default", "thread-id": `${notificationCategory(delivery.kind)}:${delivery.subjectId}` },
+    aps: { alert: { title, body }, sound: "default", "thread-id": notificationCategory(delivery.kind) },
     kind: delivery.kind, id: delivery.subjectId, userId: delivery.userId,
   };
 }
