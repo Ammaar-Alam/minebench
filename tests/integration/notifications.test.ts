@@ -333,6 +333,7 @@ async function main() {
     await drainNotifications(voteSend.send);
     assert.equal(voteSend.calls.length, 1);
     assert.equal(voteSend.calls[0].payload.aps.alert.body, "Your prompt received 2 new upvotes.");
+    assert.equal(voteSend.calls[0].payload.aps["thread-id"], "upvotes", "updates share one thread per category");
 
     await clearQueue();
     const contributionOwnerId = await createUser("notification-contribution-owner");
