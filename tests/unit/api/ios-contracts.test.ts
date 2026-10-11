@@ -95,6 +95,7 @@ async function main() {
     email: "native-account@example.test",
     displayName: "Native Account",
     publicNickname: "Builder",
+    isMineBenchAdmin: false,
     createdAt: "2026-08-01T12:00:00.000Z",
     gallerySuspension: {
       suspendedAt: "2026-08-29T13:00:00.000Z",
