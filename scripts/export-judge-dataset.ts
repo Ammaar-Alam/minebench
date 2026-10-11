@@ -3,7 +3,8 @@
  * Export a snapshot of public Arena data for judge training.
  *
  * Writes prompts/models/builds/votes as JSONL plus one gzipped payload per build.
- * Private evaluation data (stealth models, their builds, stealth matchups) is excluded.
+ * Private evaluation data (stealth models, their builds, stealth matchups) is excluded, except stealth variants named
+ * with --include-stealth, which are exported like public models (for variants the owner built, not a lab's).
  * Votes keep raw session and account ids and are marked when an active admin vote
  * block covers their session, account, or network. Output stays local and git-ignored.
  * Re-running reuses stored payloads already on disk while they match the recorded checksum.
@@ -11,6 +12,7 @@
  * Usage:
  *   pnpm judge:export
  *   pnpm judge:export --out judge-data/2026-10-07
+ *   pnpm judge:export --out judge-data/2026-10-11c --include-stealth velox
  */
 
 import { createHash } from "node:crypto";
@@ -102,9 +104,13 @@ async function main() {
     return restricted;
   };
 
-  const stealthModelIds = new Set(
-    (await prisma.stealthVariant.findMany({ select: { modelId: true } })).map((v) => v.modelId),
-  );
+  const includedStealth = (argValue("--include-stealth") ?? "").split(",").filter(Boolean);
+  const variants = await prisma.stealthVariant.findMany({ select: { id: true, modelId: true, codename: true } });
+  // a codename is unique only within its experiment, so it must name exactly one variant
+  const unclear = includedStealth.filter((codename) => variants.filter((v) => v.codename === codename).length !== 1);
+  if (unclear.length > 0) throw new Error(`not exactly one stealth variant named ${unclear.join(", ")}`);
+  const includedVariantIds = variants.filter((v) => includedStealth.includes(v.codename)).map((v) => v.id);
+  const stealthModelIds = new Set(variants.filter((v) => !includedStealth.includes(v.codename)).map((v) => v.modelId));
   const publicModel = { id: { notIn: [...stealthModelIds] } };
 
   const prompts = await prisma.prompt.findMany({
@@ -136,7 +142,7 @@ async function main() {
     FROM "Vote" v
     JOIN "Matchup" m ON m.id = v."matchupId"
     CROSS JOIN LATERAL (VALUES (m."buildAId"), (m."buildBId")) AS b(build_id)
-    WHERE m."stealthVariantId" IS NULL AND v."createdAt" <= ${snapshotAt}
+    WHERE (m."stealthVariantId" IS NULL OR m."stealthVariantId" = ANY(${includedVariantIds})) AND v."createdAt" <= ${snapshotAt}
     GROUP BY b.build_id`;
   const firstVoteAt = new Map(firstVoteRows.map((r) => [r.build_id, r.first_vote_at]));
 
@@ -202,9 +208,12 @@ async function main() {
     };
   });
 
-  const voteWhere = { createdAt: { lte: snapshotAt }, matchup: { stealthVariantId: null } };
+  const voteWhere = {
+    createdAt: { lte: snapshotAt },
+    matchup: { OR: [{ stealthVariantId: null }, { stealthVariantId: { in: includedVariantIds } }] },
+  };
   const excludedPrivateVotes = await prisma.vote.count({
-    where: { createdAt: { lte: snapshotAt }, matchup: { stealthVariantId: { not: null } } },
+    where: { createdAt: { lte: snapshotAt }, matchup: { stealthVariantId: { not: null, notIn: includedVariantIds } } },
   });
   const voteRows: ({ restricted: boolean } & Record<string, unknown>)[] = [];
   let cursor: string | null = null;
@@ -264,6 +273,7 @@ async function main() {
     gitCommit: execSync("git rev-parse HEAD").toString().trim(),
     counts: { prompts: prompts.length, models: models.length, builds: buildRows.length, votes: voteRows.length },
     excluded: { privateModels: stealthModelIds.size, privateVotes: excludedPrivateVotes },
+    includedStealth,
     payloadFailures: failed.map((b) => ({ id: b.id, error: b.payloadError })),
     storageHashMismatches: storageMismatches.map((b) => b.id),
     storageUpdatedAfterFirstVote: buildRows
