@@ -29,6 +29,7 @@ export function serializeAccount(account: PublicAccount) {
     email: account.email,
     displayName: account.displayName,
     publicNickname: account.publicNickname,
+    isMineBenchAdmin: account.isMineBenchAdmin,
     createdAt: account.createdAt.toISOString(),
     gallerySuspension: account.gallerySuspendedAt
       ? {
