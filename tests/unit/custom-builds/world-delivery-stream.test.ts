@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { createServer, type RequestListener } from "node:http";
+import type { AddressInfo } from "node:net";
 import { gzipSync } from "node:zlib";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -49,7 +51,7 @@ function largeGzipLikePart(): Uint8Array {
   return bytes;
 }
 
-async function withStorageEnv(run: () => Promise<void>): Promise<void> {
+async function withStorageEnv(run: () => Promise<void>, url = "http://127.0.0.1:43219"): Promise<void> {
   const previousFetch = globalThis.fetch;
   const previousEnv = {
     SUPABASE_URL: process.env.SUPABASE_URL,
@@ -57,7 +59,7 @@ async function withStorageEnv(run: () => Promise<void>): Promise<void> {
     SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY,
     SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
   };
-  process.env.SUPABASE_URL = "http://127.0.0.1:43219";
+  process.env.SUPABASE_URL = url;
   delete process.env.NEXT_PUBLIC_SUPABASE_URL;
   process.env.SUPABASE_SECRET_KEY = "world-delivery-stream-test-secret";
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -72,6 +74,18 @@ async function withStorageEnv(run: () => Promise<void>): Promise<void> {
   }
 }
 
+// storage serves objects uploaded with Content-Encoding back with that header, which fetch would decode
+async function withStorageServer(handler: RequestListener, run: () => Promise<void>): Promise<void> {
+  const server = createServer(handler);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    await withStorageEnv(run, `http://127.0.0.1:${(server.address() as AddressInfo).port}`);
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
 async function expectSettled<T>(promise: Promise<T>, label: string): Promise<T> {
   const timeout = Symbol(label);
   const result = await Promise.race([promise, delay(500).then(() => timeout)]);
@@ -82,25 +96,19 @@ async function expectSettled<T>(promise: Promise<T>, label: string): Promise<T> 
 async function checkLargePartIsReturnedAsAStream() {
   const { customBuildWorldViewerResponse } = await import("../../../lib/custom-builds/worldDelivery");
   const bytes = largeGzipLikePart();
-  const fetchStarted = deferred<void>();
-  let releaseBody: (() => void) | undefined;
+  const requestStarted = deferred<void>();
+  const bodyReleased = deferred<void>();
 
-  await withStorageEnv(async () => {
-    globalThis.fetch = (async (input, init) => {
-      assert.equal(String(input), "http://127.0.0.1:43219/storage/v1/object/unit/held-large-part");
-      assert.equal(new Headers(init?.headers).get("authorization"), "Bearer world-delivery-stream-test-secret");
-      fetchStarted.resolve();
-      return new Response(new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(bytes.subarray(0, 4));
-          releaseBody = () => {
-            controller.enqueue(bytes.subarray(4));
-            controller.close();
-          };
-        },
-      }));
-    }) as typeof fetch;
-
+  await withStorageServer(async (req, res) => {
+    assert.equal(req.url, "/storage/v1/object/unit/held-large-part");
+    assert.equal(req.headers.authorization, "Bearer world-delivery-stream-test-secret");
+    assert.equal(req.headers["accept-encoding"], "gzip");
+    requestStarted.resolve();
+    res.writeHead(200, { "Content-Type": "application/gzip", "Content-Encoding": "gzip" });
+    res.write(bytes.subarray(0, 4));
+    await bodyReleased.promise;
+    res.end(bytes.subarray(4));
+  }, async () => {
     const responsePromise = customBuildWorldViewerResponse({
       request: new Request("http://localhost:3000/api/generations/cb/artifacts/viewer?part=held-large-part"),
       artifact: artifact("manifest"),
@@ -115,12 +123,11 @@ async function checkLargePartIsReturnedAsAStream() {
     assert.equal((response as Response).headers.get("content-encoding"), null);
 
     const bodyPromise = (response as Response).arrayBuffer();
-    await expectSettled(fetchStarted.promise, "stream body read should start the storage fetch");
-    assert.ok(releaseBody, "storage response should expose a held body");
-    releaseBody();
+    await expectSettled(requestStarted.promise, "stream body read should start the storage request");
+    bodyReleased.resolve();
     const delivered = new Uint8Array(await bodyPromise);
     assert.equal(delivered.byteLength, bytes.byteLength);
-    assert.equal(sha256(delivered), sha256(bytes), "streamed world part bytes should be preserved");
+    assert.equal(sha256(delivered), sha256(bytes), "stored world part bytes should be delivered without decoding");
 
     const pinned = (v: string) => customBuildWorldViewerResponse({
       request: new Request(`http://localhost:3000/api/gallery/examples/cb/viewer?format=world&part=held-large-part&v=${v}`),
@@ -141,24 +148,11 @@ async function checkCancelClosesUpstream() {
   const firstChunk = Uint8Array.of(0x1f, 0x8b, 0x08, 0x00, 0x42);
   const upstreamCanceled = deferred<void>();
 
-  await withStorageEnv(async () => {
-    globalThis.fetch = (async (_input, init) => {
-      const signal = init?.signal;
-      assert.ok(signal, "storage stream should receive the request abort signal");
-      return new Response(new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(firstChunk);
-          signal.addEventListener("abort", () => {
-            upstreamCanceled.resolve();
-            controller.error(signal.reason ?? new DOMException("Aborted", "AbortError"));
-          }, { once: true });
-        },
-        cancel() {
-          upstreamCanceled.resolve();
-        },
-      }));
-    }) as typeof fetch;
-
+  await withStorageServer((_req, res) => {
+    res.on("close", () => upstreamCanceled.resolve());
+    res.writeHead(200, { "Content-Type": "application/gzip", "Content-Encoding": "gzip" });
+    res.write(firstChunk);
+  }, async () => {
     const response = await customBuildWorldViewerResponse({
       request: new Request("http://localhost:3000/api/generations/cb/artifacts/viewer?part=cancel-part"),
       artifact: artifact("manifest"),
@@ -170,7 +164,7 @@ async function checkCancelClosesUpstream() {
     const reader = response.body.getReader();
     const first = await reader.read();
     assert.equal(first.done, false);
-    assert.deepEqual(first.value, firstChunk);
+    assert.deepEqual(new Uint8Array(first.value!), firstChunk);
     const pendingRead = reader.read().catch(() => null);
     await delay(0);
     await reader.cancel();

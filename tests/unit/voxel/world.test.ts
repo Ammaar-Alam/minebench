@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { gzipSync } from "node:zlib";
 import {
   VOXEL_WORLD_MIXED_LEAF_SIZE,
@@ -72,10 +74,6 @@ function sha256(bytes: Uint8Array): string {
 
 function gzipJson(value: unknown): Uint8Array {
   return new Uint8Array(gzipSync(ENCODER.encode(JSON.stringify(value))));
-}
-
-function responseBytes(bytes: Uint8Array): ArrayBuffer {
-  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
 const inlineManifest = {
@@ -379,23 +377,22 @@ async function checkWorldDeliveryFetchCounts() {
     sha256: sha256(partBytes),
     sourceBuildSha256: OTHER_SHA,
   };
-  const previousFetch = globalThis.fetch;
   const previousEnv = {
     SUPABASE_URL: process.env.SUPABASE_URL,
     SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY,
   };
-  process.env.SUPABASE_URL = "http://127.0.0.1:43219";
-  process.env.SUPABASE_SECRET_KEY = "world-delivery-test-secret";
   const requestedPaths: string[] = [];
-  globalThis.fetch = (async (input, init) => {
-    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer world-delivery-test-secret");
-    const url = new URL(String(input));
-    const path = decodeURIComponent(url.pathname.replace("/storage/v1/object/unit/", ""));
+  const server = createServer((req, res) => {
+    assert.equal(req.headers.authorization, "Bearer world-delivery-test-secret");
+    const path = decodeURIComponent(new URL(req.url ?? "", "http://storage").pathname.replace("/storage/v1/object/unit/", ""));
     requestedPaths.push(path);
-    if (path === "manifest") return new Response(responseBytes(manifestBytes));
-    if (path === "mixed") return new Response(responseBytes(partBytes));
-    return new Response("missing", { status: 404 });
-  }) as typeof fetch;
+    const bytes = path === "manifest" ? manifestBytes : path === "mixed" ? partBytes : null;
+    res.writeHead(bytes ? 200 : 404);
+    res.end(bytes ?? "missing");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  process.env.SUPABASE_URL = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  process.env.SUPABASE_SECRET_KEY = "world-delivery-test-secret";
 
   try {
     const partKey = "mixed-0-data";
@@ -434,7 +431,8 @@ async function checkWorldDeliveryFetchCounts() {
     await fallbackResponse.arrayBuffer();
     assert.deepEqual(requestedPaths, ["manifest", "mixed"]);
   } finally {
-    globalThis.fetch = previousFetch;
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
     for (const [key, value] of Object.entries(previousEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;

@@ -5,7 +5,7 @@ import {
 } from "@/lib/custom-builds/artifacts";
 import {
   downloadCustomBuildArtifactBytes,
-  downloadCustomBuildArtifactStream,
+  downloadCustomBuildArtifactStoredStream,
 } from "@/lib/custom-builds/storage";
 import {
   isVoxelWorldRegionPageKey,
@@ -68,7 +68,7 @@ function streamedBytes(part: WorldArtifact, requestSignal: AbortSignal): Readabl
   const abortFromRequest = () => controller.abort(requestSignal.reason);
   if (requestSignal.aborted) abortFromRequest();
   else requestSignal.addEventListener("abort", abortFromRequest, { once: true });
-  const iterator = downloadCustomBuildArtifactStream({ ...part, signal: controller.signal })[Symbol.asyncIterator]();
+  const iterator = downloadCustomBuildArtifactStoredStream({ ...part, signal: controller.signal })[Symbol.asyncIterator]();
   const cleanup = () => {
     requestSignal.removeEventListener("abort", abortFromRequest);
   };

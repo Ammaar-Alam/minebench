@@ -1,3 +1,5 @@
+import http, { type IncomingMessage } from "node:http";
+import https from "node:https";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createClient } from "@supabase/supabase-js";
@@ -432,5 +434,41 @@ export async function* downloadCustomBuildArtifactStream(args: {
   } finally {
     await reader.cancel().catch(() => {});
     reader.releaseLock();
+  }
+}
+
+// fetch always inflates objects uploaded with Content-Encoding, so this reads them over raw http to keep the hashed bytes
+export async function* downloadCustomBuildArtifactStoredStream(args: {
+  bucket: string;
+  path: string;
+  encoding: string;
+  signal?: AbortSignal;
+}): AsyncGenerator<Uint8Array> {
+  if (args.bucket.trim() === LOCAL_BUILD_STORAGE_BUCKET) {
+    yield* downloadCustomBuildArtifactStream(args);
+    return;
+  }
+  const config = getSupabaseStorageConfig();
+  const url = new URL(`${config.url}/storage/v1/object/${encodeURIComponent(args.bucket)}/${encodeStoragePath(args.path)}`);
+  const response = await new Promise<IncomingMessage>((resolve, reject) => {
+    (url.protocol === "http:" ? http : https).get(url, {
+      headers: {
+        Authorization: `Bearer ${config.serviceRoleKey}`,
+        apikey: config.serviceRoleKey,
+        "Accept-Encoding": args.encoding === "gzip" ? "gzip" : "identity",
+      },
+      signal: args.signal,
+    }, resolve).on("error", reject);
+  });
+  try {
+    const status = response.statusCode ?? 0;
+    if (status < 200 || status >= 300) {
+      const chunks: Buffer[] = [];
+      for await (const chunk of response) chunks.push(chunk);
+      throw new Error(`Custom build artifact download failed (${status}): ${Buffer.concat(chunks).toString() || "empty response"}`);
+    }
+    yield* response;
+  } finally {
+    response.destroy();
   }
 }
