@@ -135,6 +135,35 @@ runProviderConfigTest(
         assert.deepEqual(profile?.parameters, [{ label: "Reasoning effort", value: "XHigh" }]);
       }
 
+      const wonder = assertCatalogEntry({
+        key: "meta_muse_wonder",
+        provider: "meta",
+        modelId: "muse-wonder-1.0",
+        displayName: "Muse Wonder",
+        openRouterModelId: "meta/muse-wonder",
+        slug: "muse-wonder",
+      });
+      assert.equal(modelRequiresReasoning(wonder.modelId), true);
+      assert.equal(modelRequiresReasoning(wonder.openRouterModelId!), true);
+      const wonderLadder = ["max", "xhigh", "high", "medium", "low", "minimal"];
+      assert.deepEqual(metaReasoningEffortAttempts(wonder.modelId), wonderLadder);
+      assert.deepEqual(openRouterReasoningEffortAttempts(wonder.openRouterModelId!), wonderLadder);
+      assert.deepEqual(getModelBenchmarkProfile(wonder.key)?.parameters, [
+        { label: "Reasoning effort", value: "Max" },
+      ]);
+      const wonderDirect = await runGeneration(capture, {
+        modelKey: wonder.key,
+        maxAttempts: 1,
+        providerKeys: { meta: "test-meta-key" },
+      });
+      assert.equal(wonderDirect.result.acceptedOutputTokens, 943_718);
+      const wonderRequest = wonderDirect.requests.find((candidate) =>
+        candidate.url.includes("meta.test"),
+      );
+      assert.equal(wonderRequest?.body.model, "muse-wonder-1.0");
+      assert.equal(wonderRequest?.body.max_completion_tokens, 943_718);
+      assert.equal(wonderRequest?.body.reasoning_effort, "max");
+
       const model = assertCatalogEntry(expectedModels[0]);
       const effortLadder = ["xhigh", "high", "medium", "low", "minimal"];
 

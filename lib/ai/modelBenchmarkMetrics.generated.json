@@ -826,6 +826,28 @@
       "interruptedRunCount": 0,
       "providerCallTrackingJobCount": 15,
       "completedAttemptTrackingJobCount": 15
+    },
+    "meta_muse_wonder": {
+      "inferenceSampleCount": 15,
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "promptCohortId": "prompts-v1:bd8c28367f8a97f2",
+      "averageJsonSizeBytes": 29112974,
+      "configurationSampleCount": 15,
+      "configurationIsConsistent": true,
+      "outputCapSampleCount": 15,
+      "outputCapIsConsistent": true,
+      "averageInferenceMs": 341104,
+      "finalizedAttemptCount": 19,
+      "outputCapTokens": 943718,
+      "providerCallCount": 19,
+      "completedAttemptCount": 18,
+      "rejectedResponseCount": 3,
+      "failedAttemptCount": 4,
+      "failedRunCount": 0,
+      "interruptedRunCount": 0,
+      "providerCallTrackingJobCount": 15,
+      "completedAttemptTrackingJobCount": 15
     }
   }
 }

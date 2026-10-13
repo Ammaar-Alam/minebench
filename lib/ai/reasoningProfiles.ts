@@ -116,6 +116,10 @@ const EFFORT_LADDER_RULES: readonly EffortLadderRule[] = [
     ladder: ["xhigh", "high", "medium", "low"],
   },
   {
+    ids: ["muse-wonder-1.0", "meta/muse-wonder"],
+    ladder: ["max", "xhigh", "high", "medium", "low", "minimal"],
+  },
+  {
     ids: ["muse-spark-1.3", "meta/muse-spark-1.3"],
     ladder: ["xhigh", "high", "medium", "low", "minimal"],
   },
@@ -206,9 +210,8 @@ export function metaReasoningEffortAttempts(
   override?: string,
 ): string[] | undefined {
   const label = `Meta model ${modelId}`;
-  if (modelId === "muse-spark-1.3" || modelId === "muse-spark-1.2") {
-    return ladderAttempts(label, effortLadderRuleFor(modelId)!, override);
-  }
+  const rule = effortLadderRuleFor(modelId);
+  if (rule) return ladderAttempts(label, rule, override);
 
   const normalized = normalizeReasoningOverride(override);
   if (normalized) {
@@ -247,6 +250,8 @@ export function modelRequiresReasoning(modelId: string): boolean {
     normalized === "z-ai/glm-5.3-flash" ||
     normalized === "google/gemini-3.8-flash" ||
     normalized === "google/gemini-3.7-flash" ||
+    normalized === "muse-wonder-1.0" ||
+    normalized === "meta/muse-wonder" ||
     normalized === "muse-spark-1.3" ||
     normalized === "meta/muse-spark-1.3" ||
     normalized === "muse-spark-1.2" ||
