@@ -18,6 +18,7 @@ for (const [direct, routed] of [
   ["qwen3.8-max", "qwen/qwen3.8-max"],
   ["gemini-3.7-flash", "google/gemini-3.7-flash"],
   ["gemini-3.6-flash", "google/gemini-3.6-flash"],
+  ["muse-wonder-1.0", "meta/muse-wonder"],
   ["muse-spark-1.3", "meta/muse-spark-1.3"],
   ["muse-spark-1.2", "meta/muse-spark-1.2"],
 ] as const) {
@@ -36,6 +37,7 @@ assert.equal(modelOutputCeiling("qwen3.8-max"), 131_072);
 assert.equal(modelOutputCeiling("qwen/qwen3.8-max"), 131_072);
 assert.equal(modelOutputCeiling("MiniMax-M2.7"), 131_072);
 assert.equal(modelOutputCeiling("grok-4-1-fast"), 30_000);
+assert.equal(modelOutputCeiling("muse-wonder-1.0"), 943_718);
 assert.equal(modelOutputCeiling("muse-spark-1.3"), 131_072);
 assert.equal(modelOutputCeiling("meta/muse-spark-1.3"), 131_072);
 assert.equal(modelOutputCeiling("muse-spark-1.2"), 131_072);

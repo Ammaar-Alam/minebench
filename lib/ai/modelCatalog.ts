@@ -659,6 +659,15 @@ const CATALOG = [
     openRouterModelId: "minimax/minimax-m2.5",
   },
   {
+    key: "meta_muse_wonder",
+    slug: "muse-wonder",
+    provider: "meta",
+    modelId: "muse-wonder-1.0",
+    displayName: "Muse Wonder",
+    enabled: true,
+    openRouterModelId: "meta/muse-wonder",
+  },
+  {
     key: "meta_muse_spark_1_3",
     slug: "muse-spark-1-3",
     provider: "meta",

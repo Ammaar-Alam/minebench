@@ -247,6 +247,9 @@ const MODEL_RUN_PARAMETERS = {
   minimax_m2_5: [
     { label: "Reasoning effort", value: "XHigh" },
   ],
+  meta_muse_wonder: [
+    { label: "Reasoning effort", value: "Max" },
+  ],
   meta_muse_spark_1_3: OPENROUTER_XHIGH,
   meta_muse_spark_1_2: OPENROUTER_XHIGH,
   meta_llama_4_maverick: PROVIDER_DEFAULT,
@@ -340,6 +343,9 @@ export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
 const MODEL_BENCHMARK_METADATA: Partial<
   Record<ModelKey, Omit<ModelBenchmarkProfile, "outputCap" | "parameters">>
 > = {
+  meta_muse_wonder: {
+    totalCost: { usd: 10.42, attemptCount: 18 },
+  },
   anthropic_claude_opus_5_5: {
     totalCost: { usd: 111.53, attemptCount: 63 },
     totalAttempts: 63,

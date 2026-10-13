@@ -69,6 +69,7 @@ assert.ok(
 );
 
 const attemptCostSnapshots = [
+  ["meta_muse_wonder", "Muse Wonder", "$10.42", "$0.58 per attempt"],
   ["anthropic_claude_opus_5_5", "Claude Opus 5.5", "$111.53", "$1.77 per attempt"],
   ["anthropic_claude_sonnet_5_5", "Claude Sonnet 5.5", "$10.06", "$0.63 per attempt"],
   ["openai_gpt_6_1_sol", "GPT 6.1 Sol Pro", "$9.77", "$0.54 per attempt"],
