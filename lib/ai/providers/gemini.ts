@@ -2,6 +2,7 @@ import { isProviderRequestPreviewCaptured, providerFetch, withMaxOutputTokens } 
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
+import { modelUsesDefaultSampling } from "@/lib/ai/modelRequestProfiles";
 import type { GeminiThinkingConfig } from "@/lib/ai/reasoningProfiles";
 import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
 import {
@@ -60,9 +61,26 @@ export function sanitizeGeminiJsonSchema(value: unknown): unknown {
   return output;
 }
 
-type GeminiGenerateContentResponse = {
-  candidates?: { content?: { parts?: { text?: string }[] } }[];
+type GeminiCandidate = {
+  content?: { parts?: { text?: string; thought?: boolean }[] };
+  finishReason?: string;
+  continuationToken?: string;
 };
+
+type GeminiGenerateContentResponse = {
+  candidates?: GeminiCandidate[];
+  error?: unknown;
+};
+
+function geminiRequestError(err: unknown): unknown {
+  if (isProviderRequestPreviewCaptured(err)) return err;
+  if (err instanceof Error && err.name === "AbortError") {
+    return new Error("Gemini request timed out");
+  }
+  console.error("Gemini network error:", err);
+  const cause = err instanceof Error && err.cause ? ` (cause: ${String(err.cause)})` : "";
+  return new Error(`Gemini request failed: ${err instanceof Error ? err.message : String(err)}${cause}`);
+}
 
 function bestThinkingConfigForModel(modelId: string): GeminiThinkingConfig | undefined {
   if (modelId.startsWith("gemini-3")) {
@@ -82,7 +100,7 @@ function bestThinkingConfigForModel(modelId: string): GeminiThinkingConfig | und
 }
 
 function usesDefaultSampling(modelId: string): boolean {
-  return modelId.startsWith("gemini-3");
+  return modelId.startsWith("gemini-3") || modelUsesDefaultSampling(modelId);
 }
 
 function describeThinkingConfigLine(thinkingConfig?: GeminiThinkingConfig): string {
@@ -115,19 +133,24 @@ export async function geminiGenerateText(params: {
   if (!apiKey) throw new Error("Missing GOOGLE_AI_API_KEY");
   if (!params.jsonSchema) throw new Error("Missing jsonSchema for Gemini JSON mode");
 
-  const method = params.onDelta ? "streamGenerateContent" : "generateContent";
+  // Argon can think past undici's 5-minute header and body timeouts, so it
+  // streams thought summaries to keep the connection active
+  const streamThoughts = params.modelId === "gemini-4-argon";
+  const stream = Boolean(params.onDelta) || streamThoughts;
+  const method = stream ? "streamGenerateContent" : "generateContent";
   const url = new URL(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
       params.modelId
     )}:${method}`
   );
   url.searchParams.set("key", apiKey);
-  if (params.onDelta) url.searchParams.set("alt", "sse");
+  if (stream) url.searchParams.set("alt", "sse");
 
   const controller = new AbortController();
   const detachAbort = attachAbortSignal(controller, params.signal);
   const timeout: ReturnType<typeof setTimeout> | null = null;
   let res: Response | null = null;
+  let acceptedRequest: { headers: CustomRequestHeaders; body: Record<string, unknown> } | null = null;
   try {
     const thinkingConfig = params.thinkingConfig ?? bestThinkingConfigForModel(params.modelId);
     const thinkingConfigLine = describeThinkingConfigLine(thinkingConfig);
@@ -135,7 +158,9 @@ export async function geminiGenerateText(params: {
     const generationConfig = {
       ...(usesDefaultSampling(params.modelId) ? {} : { temperature: params.temperature ?? 0.2 }),
       maxOutputTokens: params.maxOutputTokens ?? 8192,
-      ...(thinkingConfig ? { thinkingConfig } : {}),
+      ...(thinkingConfig
+        ? { thinkingConfig: streamThoughts ? { ...thinkingConfig, includeThoughts: true } : thinkingConfig }
+        : {}),
     };
     const basePayload = {
       systemInstruction: { parts: [{ text: params.system }] },
@@ -160,22 +185,22 @@ export async function geminiGenerateText(params: {
         { "Content-Type": "application/json" },
         params.customHeaders,
       );
-      if (params.onDelta) headers.Accept = "text/event-stream";
+      if (stream) headers.Accept = "text/event-stream";
       controller.signal.throwIfAborted();
+      const body = mergeCustomRequestBody(payload, params.customBody, [
+        "generationConfig.responseMimeType",
+        "generationConfig.responseJsonSchema",
+      ]);
       params.onProviderRequest?.();
       res = await providerFetch(url, {
         method: "POST",
         headers,
         signal: controller.signal,
-        body: JSON.stringify(
-          mergeCustomRequestBody(payload, params.customBody, [
-            "generationConfig.responseMimeType",
-            "generationConfig.responseJsonSchema",
-          ]),
-        ),
+        body: JSON.stringify(body),
       });
       if (res.ok) {
         successBudget = tok;
+        acceptedRequest = { headers, body };
         break;
       }
       lastBody = await res.text().catch(() => "");
@@ -211,42 +236,117 @@ export async function geminiGenerateText(params: {
     });
     params.onTrace?.(withMaxOutputTokens(thinkingConfigLine, budget));
   } catch (err) {
-    if (isProviderRequestPreviewCaptured(err)) throw err;
-    if (err instanceof Error && err.name === "AbortError") {
-      throw new Error("Gemini request timed out");
-    }
-    console.error("Gemini network error:", err);
-    const cause = err instanceof Error && err.cause ? ` (cause: ${String(err.cause)})` : "";
-    throw new Error(`Gemini request failed: ${err instanceof Error ? err.message : String(err)}${cause}`);
-  } finally {
     detachAbort();
+    throw geminiRequestError(err);
+  } finally {
     if (timeout) clearTimeout(timeout);
   }
 
-  if (!res) throw new Error("Gemini request failed");
+  if (!res || !acceptedRequest) throw new Error("Gemini request failed");
 
-  if (params.onDelta) {
-    let text = "";
-    await consumeSseStream(res, (evt) => {
-      if (evt.data === "[DONE]") return;
-      let parsed: GeminiGenerateContentResponse | null = null;
+  // Long decode stops each request at the per-request limit with a continuation
+  // token, and resending the identical request with it resumes the same output.
+  // Streams also send checkpoint tokens, so a dropped stream resumes from the
+  // last checkpoint and drops the uncommitted text after it
+  let text = "";
+  let checkpoint: { token: string; length: number } | undefined;
+  let resumesWithoutProgress = 0;
+  // Once checkpoints start, deltas wait for their commit so a resume never shows discarded text
+  let delivered = 0;
+  const deliver = (upTo: number) => {
+    if (upTo <= delivered) return;
+    params.onDelta?.(text.slice(delivered, upTo));
+    delivered = upTo;
+  };
+  // The next request to send after the accepted one; no token resends the original request
+  let next: { token?: string } | undefined;
+  try {
+    for (;;) {
+      // Terminal fields can arrive on separate events, so each keeps its last value
+      let finishReason: string | undefined;
+      let hopToken: string | undefined;
+      let continuationToken: string | undefined;
+      let retry = false;
+      const readAnswer = (data: GeminiGenerateContentResponse): string => {
+        if (data.error) throw new Error(`Gemini error: ${JSON.stringify(data.error)}`);
+        const candidate = data.candidates?.[0];
+        finishReason = candidate?.finishReason ?? finishReason;
+        hopToken = candidate?.continuationToken ?? hopToken;
+        return candidate?.content?.parts?.map((p) => (p.thought ? "" : p.text ?? "")).join("") ?? "";
+      };
+      const commit = () => {
+        if (!hopToken || hopToken === checkpoint?.token) return;
+        checkpoint = { token: hopToken, length: text.length };
+        resumesWithoutProgress = 0;
+      };
+
       try {
-        parsed = JSON.parse(evt.data) as GeminiGenerateContentResponse;
-      } catch {
-        return;
+        if (next) {
+          controller.signal.throwIfAborted();
+          params.onProviderRequest?.();
+          res = await providerFetch(url, {
+            method: "POST",
+            headers: acceptedRequest.headers,
+            signal: controller.signal,
+            body: JSON.stringify(
+              next.token ? { ...acceptedRequest.body, continuationToken: next.token } : acceptedRequest.body,
+            ),
+          });
+          if (!res.ok) throw new Error(`Gemini error ${res.status}: ${await res.text().catch(() => "")}`);
+        }
+        if (stream) {
+          await consumeSseStream(res, (evt) => {
+            if (evt.data === "[DONE]") return;
+            const delta = readAnswer(JSON.parse(evt.data) as GeminiGenerateContentResponse);
+            text += delta;
+            commit();
+            deliver(checkpoint ? checkpoint.length : text.length);
+          });
+        } else {
+          text += readAnswer((await res.json()) as GeminiGenerateContentResponse);
+          commit();
+        }
+        // CONTINUATION is only resumable from a fresh token covering all received text;
+        // anything else, like a stream closing before a finish reason, recovers from the last checkpoint
+        const resumable =
+          finishReason === "CONTINUATION" &&
+          checkpoint?.length === text.length &&
+          checkpoint.token !== next?.token;
+        if ((stream && !finishReason) || (finishReason === "CONTINUATION" && !resumable)) {
+          throw new Error(`Gemini stream ended before completion (finishReason=${finishReason ?? "none"})`);
+        }
+        if (resumable) continuationToken = checkpoint?.token;
+      } catch (err) {
+        // A transport error after STOP still leaves a finished response
+        if (finishReason !== "STOP") {
+          // Before the first checkpoint only a caller without live deltas can resend the original request
+          const recoverable = Boolean(checkpoint) || !params.onDelta;
+          if (!stream || !recoverable || controller.signal.aborted || ++resumesWithoutProgress > 2) throw err;
+          text = text.slice(0, checkpoint?.length ?? 0);
+          continuationToken = checkpoint?.token;
+          retry = true;
+        }
       }
-      const chunk =
-        parsed.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
-      if (!chunk) return;
-      const delta = chunk.startsWith(text) ? chunk.slice(text.length) : chunk;
-      if (!delta) return;
-      text += delta;
-      params.onDelta?.(delta);
-    });
-    return { text };
-  }
 
-  const data = (await res.json()) as GeminiGenerateContentResponse;
-  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
-  return { text };
+      if (!continuationToken && !retry) {
+        // The cumulative budget is spent, so a fresh retry would buy the same truncated output
+        if (finishReason === "MAX_TOKENS") {
+          throw new Error("Gemini response used its full output budget (finishReason=MAX_TOKENS)");
+        }
+        if (stream && finishReason !== "STOP") {
+          throw new Error(`Gemini stream ended before completion (finishReason=${finishReason ?? "none"})`);
+        }
+        if (!text.trim()) {
+          throw new Error(`Gemini returned no answer text (finishReason=${finishReason ?? "none"})`);
+        }
+        deliver(text.length);
+        return { text };
+      }
+      next = { token: continuationToken };
+    }
+  } catch (err) {
+    throw geminiRequestError(err);
+  } finally {
+    detachAbort();
+  }
 }

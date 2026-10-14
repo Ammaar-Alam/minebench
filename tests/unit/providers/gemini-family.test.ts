@@ -14,6 +14,7 @@ import {
   runGeneration,
   runProviderConfigTest,
   schemaContainsKey,
+  validBuildJson,
   type ExpectedCatalogEntry,
 } from "../../helpers/providerConfigHarness";
 
@@ -181,6 +182,347 @@ runProviderConfigTest("gemini family", {}, async (capture) => {
       expected.requiresReasoning ? ["disabled"] : [],
     );
   }
+
+  const argon = assertCatalogEntry({
+    key: "gemini_4_argon",
+    provider: "gemini",
+    modelId: "gemini-4-argon",
+    displayName: "Gemini 4 Argon",
+    openRouterModelId: "google/gemini-4-argon",
+    slug: "gemini-4-argon",
+  });
+  assert.deepEqual(geminiThinkingConfigForModel(argon.modelId), { thinkingLevel: "high" });
+  assert.throws(
+    () => geminiThinkingConfigForModel(argon.modelId, "minimal"),
+    /Supported values: high, medium, low/,
+  );
+  assert.deepEqual(openRouterReasoningEffortAttempts(argon.openRouterModelId!), [
+    "high",
+    "medium",
+    "low",
+  ]);
+  assert.equal(modelRequiresReasoning(argon.openRouterModelId!), true);
+
+  // Long decode resends the identical request with each continuation token
+  const build = validBuildJson();
+  const hops = [
+    { text: build.slice(0, 20), finishReason: "CONTINUATION", continuationToken: "hop-1" },
+    { text: build.slice(20, 40), finishReason: "CONTINUATION", continuationToken: "hop-2" },
+    { text: build.slice(40), finishReason: "STOP" },
+  ];
+  let hopIndex = 0;
+  capture.respondWith((request) => {
+    if (!request.url.includes("/models/gemini-4-argon:")) return null;
+    const { text, finishReason, continuationToken } = hops[hopIndex++];
+    // Thought summaries keep the stream active and never reach the build text, and
+    // the terminal reason and token may arrive on separate events
+    const events = [
+      { candidates: [{ content: { parts: [{ text: "planning", thought: true }] } }] },
+      { candidates: [{ content: { parts: [{ text }] }, finishReason }] },
+      ...(continuationToken ? [{ candidates: [{ continuationToken }] }] : []),
+    ];
+    return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  });
+  const argonRun = await runGeneration(capture, {
+    modelKey: argon.key,
+    maxAttempts: 1,
+    providerKeys: { gemini: "test-google-key" },
+  });
+  capture.respondWith(null);
+  assert.equal(argonRun.result.rawText, build, "Continuation hops should join into one response");
+  // Argon always streams so long hops return headers before undici's timeout
+  const argonRequests = argonRun.requests.filter((request) =>
+    request.url.includes("/models/gemini-4-argon:streamGenerateContent"),
+  );
+  assert.equal(argonRequests.length, 3);
+  assert.deepEqual(
+    argonRequests.map((request) => request.body.continuationToken),
+    [undefined, "hop-1", "hop-2"],
+  );
+  const { continuationToken: _token, ...resumedBody } = argonRequests[2].body;
+  assert.deepEqual(resumedBody, argonRequests[0].body);
+  const argonConfig = argonRequests[0].body.generationConfig as Record<string, unknown>;
+  assert.deepEqual(argonConfig.thinkingConfig, { thinkingLevel: "high", includeThoughts: true });
+  assert.equal(Object.hasOwn(argonConfig, "temperature"), false);
+  assertTraceLine(
+    argonRun.traces,
+    [
+      "Routing via direct gemini provider (gemini-4-argon)",
+      "thinking_mode=thinking_level=high",
+      "temperature=default",
+    ],
+    "Direct Gemini 4 Argon trace should report the highest thinking level",
+  );
+
+  // A dropped stream resumes from its last checkpoint and drops the uncommitted text
+  const sse = (event: unknown) => new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`);
+  const droppedChunks = [
+    sse({ candidates: [{ content: { parts: [{ text: build.slice(0, 30) }] }, continuationToken: "checkpoint-1" }] }),
+    sse({ candidates: [{ content: { parts: [{ text: "uncommitted" }] } }] }),
+  ];
+  const resumedDeltas: string[] = [];
+  let resumeRequests = 0;
+  const resumeResponder = (request: { url: string }) => {
+    if (!request.url.includes("/models/gemini-4-argon:")) return null;
+    if (resumeRequests++ === 0) {
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            const chunk = droppedChunks.shift();
+            if (chunk) controller.enqueue(chunk);
+            else controller.error(new Error("socket reset"));
+          },
+        }),
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    }
+    return new Response(
+      new TextDecoder().decode(
+        sse({ candidates: [{ content: { parts: [{ text: build.slice(30) }] }, finishReason: "STOP" }] }),
+      ),
+      { headers: { "Content-Type": "text/event-stream" } },
+    );
+  };
+  capture.respondWith(resumeResponder);
+  const resumed = await runGeneration(capture, {
+    modelKey: argon.key,
+    maxAttempts: 1,
+    providerKeys: { gemini: "test-google-key" },
+  });
+  capture.respondWith(null);
+  assert.equal(resumed.result.rawText, build, "Resumed text should drop output after the checkpoint");
+
+  // Streamed deltas never include text that a resume later discards
+  resumeRequests = 0;
+  droppedChunks.push(
+    sse({ candidates: [{ content: { parts: [{ text: build.slice(0, 30) }] }, continuationToken: "checkpoint-1" }] }),
+    sse({ candidates: [{ content: { parts: [{ text: "uncommitted" }] } }] }),
+  );
+  capture.respondWith(resumeResponder);
+  await geminiGenerateText({
+    modelId: "gemini-4-argon",
+    apiKey: "test-google-key",
+    system: "Return a build.",
+    user: "small tower",
+    maxOutputTokens: 1_048_576,
+    thinkingConfig: { thinkingLevel: "high" },
+    jsonSchema: { type: "object" },
+    onDelta: (delta) => resumedDeltas.push(delta),
+  });
+  capture.respondWith(null);
+  assert.equal(resumedDeltas.join(""), build);
+
+  // A continuation request that fails to connect also retries from the checkpoint
+  resumeRequests = 0;
+  droppedChunks.push(
+    sse({ candidates: [{ content: { parts: [{ text: build.slice(0, 30) }] }, continuationToken: "checkpoint-1" }] }),
+    sse({ candidates: [{ content: { parts: [{ text: "uncommitted" }] } }] }),
+  );
+  let failedConnects = 0;
+  capture.respondWith((request) => {
+    if (request.url.includes("/models/gemini-4-argon:") && resumeRequests === 1 && failedConnects++ === 0) {
+      throw new TypeError("fetch failed");
+    }
+    return resumeResponder(request);
+  });
+  const reconnected = await runGeneration(capture, {
+    modelKey: argon.key,
+    maxAttempts: 1,
+    providerKeys: { gemini: "test-google-key" },
+  });
+  capture.respondWith(null);
+  assert.equal(reconnected.result.rawText, build);
+  assert.deepEqual(
+    reconnected.requests
+      .filter((request) => request.url.includes("/models/gemini-4-argon:"))
+      .map((request) => request.body.continuationToken),
+    [undefined, "checkpoint-1", "checkpoint-1"],
+  );
+  assert.deepEqual(
+    resumed.requests
+      .filter((request) => request.url.includes("/models/gemini-4-argon:"))
+      .map((request) => request.body.continuationToken),
+    [undefined, "checkpoint-1"],
+  );
+
+  // A socket error after STOP keeps the finished build instead of discarding it
+  const finishedChunks = [
+    sse({ candidates: [{ content: { parts: [{ text: build }] }, finishReason: "STOP" }] }),
+  ];
+  capture.respondWith((request) =>
+    request.url.includes("/models/gemini-4-argon:")
+      ? new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              const chunk = finishedChunks.shift();
+              if (chunk) controller.enqueue(chunk);
+              else controller.error(new Error("socket reset"));
+            },
+          }),
+          { headers: { "Content-Type": "text/event-stream" } },
+        )
+      : null,
+  );
+  const closedAfterStop = await runGeneration(capture, {
+    modelKey: argon.key,
+    maxAttempts: 1,
+    providerKeys: { gemini: "test-google-key" },
+  });
+  capture.respondWith(null);
+  assert.equal(closedAfterStop.result.rawText, build);
+  assert.equal(
+    closedAfterStop.requests.filter((request) => request.url.includes("/models/gemini-4-argon:")).length,
+    1,
+  );
+
+  // A clean close after a checkpoint but before a finish reason also resumes
+  let cleanCloseRequests = 0;
+  capture.respondWith((request) => {
+    if (!request.url.includes("/models/gemini-4-argon:")) return null;
+    const event =
+      cleanCloseRequests++ === 0
+        ? { candidates: [{ content: { parts: [{ text: build.slice(0, 30) }] }, continuationToken: "checkpoint-1" }] }
+        : { candidates: [{ content: { parts: [{ text: build.slice(30) }] }, finishReason: "STOP" }] };
+    return new Response(new TextDecoder().decode(sse(event)), {
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  });
+  const cleanClose = await runGeneration(capture, {
+    modelKey: argon.key,
+    maxAttempts: 1,
+    providerKeys: { gemini: "test-google-key" },
+  });
+  capture.respondWith(null);
+  assert.equal(cleanClose.result.rawText, build);
+  assert.deepEqual(
+    cleanClose.requests
+      .filter((request) => request.url.includes("/models/gemini-4-argon:"))
+      .map((request) => request.body.continuationToken),
+    [undefined, "checkpoint-1"],
+  );
+
+  // CONTINUATION after uncommitted text truncates to the checkpoint before resuming
+  let staleRequests = 0;
+  capture.respondWith((request) => {
+    if (!request.url.includes("/models/gemini-4-argon:")) return null;
+    const events =
+      staleRequests++ === 0
+        ? [
+            { candidates: [{ content: { parts: [{ text: build.slice(0, 30) }] }, continuationToken: "checkpoint-1" }] },
+            { candidates: [{ content: { parts: [{ text: build.slice(30, 40) }] }, finishReason: "CONTINUATION" }] },
+          ]
+        : [{ candidates: [{ content: { parts: [{ text: build.slice(30) }] }, finishReason: "STOP" }] }];
+    return new Response(events.map((event) => new TextDecoder().decode(sse(event))).join(""), {
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  });
+  const staleToken = await runGeneration(capture, {
+    modelKey: argon.key,
+    maxAttempts: 1,
+    providerKeys: { gemini: "test-google-key" },
+  });
+  capture.respondWith(null);
+  assert.equal(staleToken.result.rawText, build, "Uncommitted text before CONTINUATION should not repeat");
+  assert.deepEqual(
+    staleToken.requests
+      .filter((request) => request.url.includes("/models/gemini-4-argon:"))
+      .map((request) => request.body.continuationToken),
+    [undefined, "checkpoint-1"],
+  );
+
+  // Without live deltas, a drop before the first checkpoint resends the original request
+  let restartRequests = 0;
+  capture.respondWith((request) => {
+    if (!request.url.includes("/models/gemini-4-argon:")) return null;
+    if (restartRequests++ === 0) {
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.error(new Error("socket reset"));
+          },
+        }),
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    }
+    return new Response(
+      new TextDecoder().decode(sse({ candidates: [{ content: { parts: [{ text: build }] }, finishReason: "STOP" }] })),
+      { headers: { "Content-Type": "text/event-stream" } },
+    );
+  });
+  const restarted = await runGeneration(capture, {
+    modelKey: argon.key,
+    maxAttempts: 1,
+    providerKeys: { gemini: "test-google-key" },
+  });
+  capture.respondWith(null);
+  assert.equal(restarted.result.rawText, build);
+  const restartBodies = restarted.requests
+    .filter((request) => request.url.includes("/models/gemini-4-argon:"))
+    .map((request) => request.body);
+  assert.equal(restartBodies.length, 2);
+  assert.deepEqual(restartBodies[1], restartBodies[0], "The restart must resend the identical original request");
+
+  // An exhausted output budget is terminal instead of buying a fresh full retry
+  capture.respondWith((request) =>
+    request.url.includes("/models/gemini-4-argon:")
+      ? new Response(
+          new TextDecoder().decode(
+            sse({ candidates: [{ content: { parts: [{ text: build.slice(0, 30) }] }, finishReason: "MAX_TOKENS" }] }),
+          ),
+          { headers: { "Content-Type": "text/event-stream" } },
+        )
+      : null,
+  );
+  const exhausted = await runGeneration(capture, {
+    modelKey: argon.key,
+    maxAttempts: 3,
+    providerKeys: { gemini: "test-google-key" },
+  });
+  capture.respondWith(null);
+  assert.ok(!exhausted.result.ok);
+  assert.match(exhausted.result.error, /finishReason=MAX_TOKENS/);
+  assert.equal(
+    exhausted.requests.filter((request) => request.url.includes("/models/gemini-4-argon:")).length,
+    1,
+  );
+
+  // A stream that closes without a final event is a cut-off response, never an empty build
+  capture.respondWith((request) =>
+    request.url.includes("/models/gemini-4-argon:")
+      ? new Response(
+          `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: "planning", thought: true }] } }] })}\n\n`,
+          { headers: { "Content-Type": "text/event-stream" } },
+        )
+      : null,
+  );
+  const cutOff = await runGeneration(capture, {
+    modelKey: argon.key,
+    maxAttempts: 1,
+    providerKeys: { gemini: "test-google-key" },
+  });
+  capture.respondWith(null);
+  assert.ok(!cutOff.result.ok);
+  assert.match(cutOff.result.error, /Gemini stream ended before completion \(finishReason=none\)/);
+
+  // A finished stream holding only thought summaries has no build to return
+  capture.respondWith((request) =>
+    request.url.includes("/models/gemini-4-argon:")
+      ? new Response(
+          `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: "planning", thought: true }] }, finishReason: "STOP" }] })}\n\n`,
+          { headers: { "Content-Type": "text/event-stream" } },
+        )
+      : null,
+  );
+  const thoughtOnly = await runGeneration(capture, {
+    modelKey: argon.key,
+    maxAttempts: 1,
+    providerKeys: { gemini: "test-google-key" },
+  });
+  capture.respondWith(null);
+  assert.ok(!thoughtOnly.result.ok);
+  assert.match(thoughtOnly.result.error, /Gemini returned no answer text \(finishReason=STOP\)/);
 
   const overridden = await runGeneration(capture, {
     modelKey: "gemini_3_8_flash",

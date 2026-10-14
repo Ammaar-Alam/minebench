@@ -120,6 +120,10 @@ const EFFORT_LADDER_RULES: readonly EffortLadderRule[] = [
     ladder: ["max", "xhigh", "high", "medium", "low", "minimal"],
   },
   {
+    ids: ["gemini-4-argon", "google/gemini-4-argon"],
+    ladder: ["high", "medium", "low"],
+  },
+  {
     ids: ["muse-spark-1.3", "meta/muse-spark-1.3"],
     ladder: ["xhigh", "high", "medium", "low", "minimal"],
   },
@@ -248,6 +252,7 @@ export function modelRequiresReasoning(modelId: string): boolean {
     normalized === "z-ai/glm-5.3" ||
     normalized === "glm-5.3-flash" ||
     normalized === "z-ai/glm-5.3-flash" ||
+    normalized === "google/gemini-4-argon" ||
     normalized === "google/gemini-3.8-flash" ||
     normalized === "google/gemini-3.7-flash" ||
     normalized === "muse-wonder-1.0" ||
@@ -294,6 +299,12 @@ export function geminiThinkingConfigForModel(
   override?: string,
 ): GeminiThinkingConfig | undefined {
   const normalized = normalizeReasoningOverride(override);
+
+  const rule = effortLadderRuleFor(modelId);
+  if (rule) {
+    const [thinkingLevel] = ladderAttempts(`Gemini model ${modelId}`, rule, override);
+    return { thinkingLevel: thinkingLevel as GeminiThinkingLevel };
+  }
 
   if (modelId.startsWith("gemini-3")) {
     const allowed: readonly GeminiThinkingLevel[] = isGemini3FlashFamily(modelId)
