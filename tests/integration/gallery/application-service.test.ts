@@ -77,6 +77,9 @@ async function main() {
     assert.equal(await getSavedGeneration(otherId, created[0]!.id), null);
     assert.equal((await getSavedGeneration(ownerId, created[0]!.id))?.prompt, "A tiny observatory");
     assert.equal((await listSavedGenerations(ownerId, { limit: 10 })).items.length, 2);
+    assert.equal((await listSavedGenerations(ownerId, { query: "  TINY observ " })).items.length, 2, "search ignores case and surrounding space");
+    assert.equal((await listSavedGenerations(ownerId, { query: "lighthouse" })).items.length, 0);
+    assert.equal((await listSavedGenerations(otherId, { query: "tiny" })).items.length, 0, "search stays scoped to the owner");
 
     const hosted = await createSavedGenerations({
       ownerId,

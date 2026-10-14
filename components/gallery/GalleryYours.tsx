@@ -397,30 +397,52 @@ export function GalleryYours({
     initialItems,
     targetGeneration ? [targetGeneration] : [],
   ));
-  const [cursor, setCursor] = useState(initialCursor);
+  // a cursor only continues the search that produced it
+  const [cursor, setCursor] = useState(initialCursor ? { value: initialCursor, search: "" } : null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(targetGeneration && viewerUrl(targetGeneration) ? targetGeneration.id : null);
+  const [query, setQuery] = useState("");
+  const [searching, setSearching] = useState(false);
+  // the search the visible list answers, so stale or failed results never pass for the current query
+  const [resultsFor, setResultsFor] = useState("");
+  const [searchFailed, setSearchFailed] = useState(false);
+  const [hasBuilds, setHasBuilds] = useState(items.length > 0);
   const scrolledTargetRef = useRef<string | null>(null);
+  const searchRef = useRef("");
   const selected = items.find((item) => item.id === selectedId) ?? null;
+  const search = query.trim();
 
   useEffect(() => {
     const controller = new AbortController();
-    void fetch("/api/generations", { cache: "no-store", signal: controller.signal })
-      .then(async (response) => {
-        if (!response.ok) return;
-        const page = (await response.json()) as { items: SavedGenerationPayload[]; nextCursor: string | null };
-        setItems((current) => mergeGenerations(
-          page.items,
-          targetGenerationId && !page.items.some((item) => item.id === targetGenerationId)
-            ? current.filter((item) => item.id === targetGenerationId)
-            : [],
-        ));
-        setCursor(page.nextCursor);
-      })
-      .catch(() => undefined);
-    return () => controller.abort();
-  }, [targetGenerationId]);
+    searchRef.current = search;
+    const timer = window.setTimeout(() => {
+      setSearching(Boolean(search));
+      setSearchFailed(false);
+      void fetch(`/api/generations${search ? `?query=${encodeURIComponent(search)}` : ""}`, { cache: "no-store", signal: controller.signal })
+        .then(async (response) => {
+          if (!response.ok) throw new Error("Saved generations unavailable");
+          const page = (await response.json()) as { items: SavedGenerationPayload[]; nextCursor: string | null };
+          setItems((current) => {
+            if (search) return page.items;
+            // a deep-linked build older than the first page survives searches through the route prop
+            const target = targetGenerationId && !page.items.some((item) => item.id === targetGenerationId)
+              ? current.find((item) => item.id === targetGenerationId) ?? (targetGeneration?.id === targetGenerationId ? targetGeneration : null)
+              : null;
+            return mergeGenerations(page.items, target ? [target] : []);
+          });
+          setCursor(page.nextCursor ? { value: page.nextCursor, search } : null);
+          setResultsFor(search);
+          if (!search) setHasBuilds(page.items.length > 0 || Boolean(targetGenerationId));
+        })
+        .catch(() => { if (!controller.signal.aborted) setSearchFailed(true); })
+        .finally(() => { if (!controller.signal.aborted) setSearching(false); });
+    }, search ? 220 : 0);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [search, targetGeneration, targetGenerationId]);
 
   useEffect(() => {
     if (!targetGenerationId || scrolledTargetRef.current === targetGenerationId) return;
@@ -447,15 +469,16 @@ export function GalleryYours({
   }, [items]);
 
   async function loadMore() {
-    if (!cursor || loadingMore) return;
+    if (!cursor || cursor.search !== search || loadingMore) return;
     setLoadingMore(true);
     setLoadError(null);
     try {
-      const response = await fetch(`/api/generations?cursor=${encodeURIComponent(cursor)}`, { cache: "no-store" });
+      const response = await fetch(`/api/generations?cursor=${encodeURIComponent(cursor.value)}${search ? `&query=${encodeURIComponent(search)}` : ""}`, { cache: "no-store" });
       if (!response.ok) throw new Error("Saved generations unavailable");
       const page = (await response.json()) as { items: SavedGenerationPayload[]; nextCursor: string | null };
+      if (searchRef.current !== search) return;
       setItems((current) => mergeGenerations(current, page.items));
-      setCursor(page.nextCursor);
+      setCursor(page.nextCursor ? { value: page.nextCursor, search } : null);
     } catch {
       setLoadError("Saved generations unavailable");
     } finally {
@@ -467,16 +490,48 @@ export function GalleryYours({
     <section id="builds" className="scroll-mt-24" aria-labelledby="saved-builds-title">
       <header className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
         <div><p className="mb-eyebrow">Builds</p><h2 id="saved-builds-title" className="mt-2 text-xl font-semibold tracking-tight text-fg">Saved builds</h2></div>
-        <div className="flex gap-2"><Link href="/gallery" className="mb-btn h-11">Explore</Link><Link href="/sandbox?mode=live" className="mb-btn mb-btn-primary h-11">Generate</Link></div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          {hasBuilds || search ? (
+            <div role="search" className="relative h-11 w-full rounded-md bg-bg text-sm ring-1 ring-inset ring-border transition-shadow focus-within:ring-2 focus-within:ring-accent/50 sm:w-60 lg:w-72">
+              <label htmlFor="saved-builds-search" className="sr-only">Search saved builds</label>
+              <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted2"><circle cx="8.5" cy="8.5" r="5.25" /><path d="m12.4 12.4 4.1 4.1" /></svg>
+              <input
+                id="saved-builds-search"
+                type="search"
+                value={query}
+                maxLength={800}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape" && query) {
+                    event.preventDefault();
+                    setQuery("");
+                  }
+                }}
+                placeholder="Search builds"
+                autoComplete="off"
+                spellCheck={false}
+                aria-controls="saved-builds-list"
+                className="mb-leaderboard-search-input h-full w-full appearance-none bg-transparent pl-10 pr-11 text-sm text-fg outline-none placeholder:text-muted2"
+              />
+              {query ? (
+                <button type="button" aria-label="Clear search" onClick={() => setQuery("")} className="absolute inset-y-0 right-0 grid w-11 place-items-center rounded-md text-muted2 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50">
+                  <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" className="h-3.5 w-3.5"><path d="m4 4 8 8M12 4l-8 8" /></svg>
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+          <div className="flex gap-2"><Link href="/gallery" className="mb-btn h-11 flex-1 sm:flex-none">Explore</Link><Link href="/sandbox?mode=live" className="mb-btn mb-btn-primary h-11 flex-1 sm:flex-none">Generate</Link></div>
+        </div>
       </header>
       {suspended ? <div className="mt-6 rounded-md border border-danger/40 bg-danger/5 px-4 py-3"><p className="font-semibold text-fg">Gallery access suspended</p><p className="mt-1 text-sm text-muted">Your private builds remain available.</p></div> : null}
-      {targetGenerationId && !items.some((item) => item.id === targetGenerationId) ? (
+      {targetGenerationId && !search && !items.some((item) => item.id === targetGenerationId) ? (
         <p role="status" className="mt-6 mb-feedback mb-feedback-error">
           Saved build unavailable.
         </p>
       ) : null}
 
-      <div className="mt-6 grid gap-4">
+      {searchFailed && resultsFor !== search ? <p role="status" className="mt-6 mb-feedback mb-feedback-error">Search unavailable.</p> : null}
+      <div id="saved-builds-list" aria-busy={searching} className={`mt-6 grid gap-4 transition-opacity duration-200 motion-reduce:transition-none ${resultsFor !== search ? "opacity-60" : ""}`}>
         {items.map((generation, index) => (
           <article id={generation.id} key={generation.id} className={`group/card scroll-mt-24 overflow-hidden rounded-md border border-border/80 bg-card/10 transition-[border-color,background-color] hover:border-border hover:bg-card/20 motion-reduce:transition-none mb-card-enter ${index % 2 === 1 ? "mb-card-enter-delay" : ""}`}>
             <div className="grid md:grid-cols-[15rem_minmax(0,1fr)] lg:grid-cols-[18rem_minmax(0,1fr)]">
@@ -509,9 +564,9 @@ export function GalleryYours({
             </div>
           </article>
         ))}
-        {items.length === 0 ? <div className="rounded-md border border-border/80 px-5 py-12 text-center"><p className="text-sm text-muted">No saved builds.</p></div> : null}
+        {items.length === 0 ? <div className="rounded-md border border-border/80 px-5 py-12 text-center"><p className="text-sm text-muted">{resultsFor ? `Nothing matches “${resultsFor}”.` : "No saved builds."}</p></div> : null}
       </div>
-      {cursor ? <div className="mt-12 flex justify-center"><button type="button" disabled={loadingMore} className="mb-collapse-toggle" onClick={() => void loadMore()}><span>{loadingMore ? "Loading…" : "More"}</span><svg aria-hidden="true" className="mb-disclosure-chevron h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6.5L8 10.5L12 6.5" /></svg></button></div> : null}
+      {cursor?.search === search ? <div className="mt-12 flex justify-center"><button type="button" disabled={loadingMore} className="mb-collapse-toggle" onClick={() => void loadMore()}><span>{loadingMore ? "Loading…" : "More"}</span><svg aria-hidden="true" className="mb-disclosure-chevron h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6.5L8 10.5L12 6.5" /></svg></button></div> : null}
       {loadError ? <p role="status" className="mt-6 text-center text-sm text-danger">{loadError}</p> : null}
       {selected ? (
         <SavedBuildDialog
