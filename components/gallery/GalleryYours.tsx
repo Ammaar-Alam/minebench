@@ -397,7 +397,8 @@ export function GalleryYours({
     initialItems,
     targetGeneration ? [targetGeneration] : [],
   ));
-  const [cursor, setCursor] = useState(initialCursor);
+  // a cursor only continues the search that produced it
+  const [cursor, setCursor] = useState(initialCursor ? { value: initialCursor, search: "" } : null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(targetGeneration && viewerUrl(targetGeneration) ? targetGeneration.id : null);
@@ -417,13 +418,15 @@ export function GalleryYours({
         .then(async (response) => {
           if (!response.ok) return;
           const page = (await response.json()) as { items: SavedGenerationPayload[]; nextCursor: string | null };
-          setItems((current) => search ? page.items : mergeGenerations(
-            page.items,
-            targetGenerationId && !page.items.some((item) => item.id === targetGenerationId)
-              ? current.filter((item) => item.id === targetGenerationId)
-              : [],
-          ));
-          setCursor(page.nextCursor);
+          setItems((current) => {
+            if (search) return page.items;
+            // a deep-linked build older than the first page survives searches through the route prop
+            const target = targetGenerationId && !page.items.some((item) => item.id === targetGenerationId)
+              ? current.find((item) => item.id === targetGenerationId) ?? (targetGeneration?.id === targetGenerationId ? targetGeneration : null)
+              : null;
+            return mergeGenerations(page.items, target ? [target] : []);
+          });
+          setCursor(page.nextCursor ? { value: page.nextCursor, search } : null);
         })
         .catch(() => undefined)
         .finally(() => { if (!controller.signal.aborted) setSearching(false); });
@@ -432,7 +435,7 @@ export function GalleryYours({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [search, targetGenerationId]);
+  }, [search, targetGeneration, targetGenerationId]);
 
   useEffect(() => {
     if (!targetGenerationId || scrolledTargetRef.current === targetGenerationId) return;
@@ -459,16 +462,16 @@ export function GalleryYours({
   }, [items]);
 
   async function loadMore() {
-    if (!cursor || loadingMore) return;
+    if (!cursor || cursor.search !== search || loadingMore) return;
     setLoadingMore(true);
     setLoadError(null);
     try {
-      const response = await fetch(`/api/generations?cursor=${encodeURIComponent(cursor)}${search ? `&query=${encodeURIComponent(search)}` : ""}`, { cache: "no-store" });
+      const response = await fetch(`/api/generations?cursor=${encodeURIComponent(cursor.value)}${search ? `&query=${encodeURIComponent(search)}` : ""}`, { cache: "no-store" });
       if (!response.ok) throw new Error("Saved generations unavailable");
       const page = (await response.json()) as { items: SavedGenerationPayload[]; nextCursor: string | null };
       if (searchRef.current !== search) return;
       setItems((current) => mergeGenerations(current, page.items));
-      setCursor(page.nextCursor);
+      setCursor(page.nextCursor ? { value: page.nextCursor, search } : null);
     } catch {
       setLoadError("Saved generations unavailable");
     } finally {
@@ -555,7 +558,7 @@ export function GalleryYours({
         ))}
         {items.length === 0 ? <div className="rounded-md border border-border/80 px-5 py-12 text-center"><p className="text-sm text-muted">{search ? `Nothing matches “${search}”.` : "No saved builds."}</p></div> : null}
       </div>
-      {cursor ? <div className="mt-12 flex justify-center"><button type="button" disabled={loadingMore} className="mb-collapse-toggle" onClick={() => void loadMore()}><span>{loadingMore ? "Loading…" : "More"}</span><svg aria-hidden="true" className="mb-disclosure-chevron h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6.5L8 10.5L12 6.5" /></svg></button></div> : null}
+      {cursor?.search === search ? <div className="mt-12 flex justify-center"><button type="button" disabled={loadingMore} className="mb-collapse-toggle" onClick={() => void loadMore()}><span>{loadingMore ? "Loading…" : "More"}</span><svg aria-hidden="true" className="mb-disclosure-chevron h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6.5L8 10.5L12 6.5" /></svg></button></div> : null}
       {loadError ? <p role="status" className="mt-6 text-center text-sm text-danger">{loadError}</p> : null}
       {selected ? (
         <SavedBuildDialog

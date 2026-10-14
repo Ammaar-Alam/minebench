@@ -115,10 +115,14 @@ assert.ok(
   "suspension email should link directly to the account appeal surface",
 );
 assert.ok(
-  yours.includes('fetch("/api/generations", { cache: "no-store", signal: controller.signal })') &&
-    yours.includes("setItems((current) => mergeGenerations(") &&
-    yours.includes("setCursor(page.nextCursor)"),
+  yours.includes('fetch(`/api/generations${search ? `?query=${encodeURIComponent(search)}` : ""}`, { cache: "no-store", signal: controller.signal })') &&
+    yours.includes("return mergeGenerations(page.items, target ? [target] : []);") &&
+    yours.includes("setCursor(page.nextCursor ? { value: page.nextCursor, search } : null)"),
   "saved builds should refresh their first page on mount instead of trusting stale route props",
+);
+assert.ok(
+  yours.includes("cursor.search !== search") && yours.includes("cursor?.search === search"),
+  "saved build pagination must not continue a previous search with its cursor",
 );
 assert.equal(
   yours.includes("generation.storedBytes"),
