@@ -8,7 +8,9 @@ import {
   getEfficiencyAxisDomain,
   getEfficiencyPoints,
   getEfficiencyResource,
+  getEfficiencyTicks,
   getParetoFrontier,
+  placeEfficiencyLabels,
 } from "../../../lib/leaderboardEfficiency";
 
 function model(key: string, cost: number, rating: number): LeaderboardResponse["models"][number] {
@@ -69,6 +71,37 @@ assert.ok(linearMin <= 0.001 && linearMax > 0.01 && linearMax - linearMin < 1);
 assert.deepEqual(getEfficiencyAxisDomain([]), [0, 1]);
 const [singleMin, singleMax] = getEfficiencyAxisDomain([0.5], true);
 assert.ok(singleMin < Math.log10(0.5) && singleMax > Math.log10(0.5));
+assert.deepEqual(getEfficiencyTicks([1093, 2357], "rating", 7), [1250, 1500, 1750, 2000, 2250]);
+assert.deepEqual(getEfficiencyTicks([Math.log10(0.015), Math.log10(60)], "cost", 12, true), [0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50]);
+assert.deepEqual(getEfficiencyTicks([Math.log10(0.015), Math.log10(60)], "cost", 6, true), [0.1, 1, 10], "dense log ticks fall back to decades");
+assert.deepEqual(getEfficiencyTicks([Math.log10(17), Math.log10(5000)], "speed", 12, true), [30, 60, 120, 300, 600, 900, 1800, 3600], "time ticks land on clock values");
+assert.deepEqual(getEfficiencyTicks([0, 700], "speed", 4), [0, 300, 600]);
+const bounds = { x: 0, y: 0, width: 400, height: 200 };
+const crowded = placeEfficiencyLabels(
+  [{ key: "a", x: 100, y: 100, width: 60 }, { key: "b", x: 100, y: 104, width: 60 }, { key: "c", x: 395, y: 100, width: 60 }],
+  [{ key: "a", x: 94, y: 94, width: 12, height: 12 }],
+  bounds,
+);
+assert.deepEqual(crowded.get("a"), { x: 110, y: 100, leader: null }, "first label takes the right-hand slot");
+assert.ok(crowded.get("b") && crowded.get("b")!.x !== 110, "second label moves to a free slot");
+const ambiguous = placeEfficiencyLabels(
+  [{ key: "a", x: 100, y: 100, width: 60 }],
+  [{ key: "a", x: 94, y: 94, width: 12, height: 12 }, { key: "b", x: 124, y: 94, width: 12, height: 12 }],
+  bounds,
+);
+assert.ok(ambiguous.get("a")!.x < 100, "labels avoid sitting nearer a neighbour's dot");
+assert.ok(crowded.get("c")!.x + 60 <= 400, "labels stay inside the chart");
+const far = placeEfficiencyLabels(
+  [{ key: "a", x: 100, y: 100, width: 60 }, { key: "b", x: 100, y: 100, width: 60, far: true }, { key: "c", x: 100, y: 100, width: 60 }],
+  [], { x: 0, y: 0, width: 400, height: 400 },
+);
+assert.equal(far.get("b")?.leader, null, "free adjacent slots never need a leader");
+const blocked = placeEfficiencyLabels(
+  [{ key: "a", x: 100, y: 100, width: 60, far: true }],
+  [{ x: 80, y: 80, width: 40, height: 40 }], { x: 0, y: 0, width: 400, height: 400 },
+);
+assert.ok(blocked.get("a")?.leader, "frontier labels reach past crowded neighbours with a leader");
+assert.equal(placeEfficiencyLabels([{ key: "a", x: 100, y: 100, width: 60 }], [{ x: 80, y: 80, width: 40, height: 40 }], bounds).size, 0);
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 const render = (entries = models, query = "") => renderToStaticMarkup(React.createElement(LeaderboardEfficiency, { models: entries, modelQuery: query }));
