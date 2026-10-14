@@ -304,9 +304,12 @@ export async function geminiGenerateText(params: {
         }
         if (finishReason === "CONTINUATION") continuationToken = hopToken;
       } catch (err) {
-        if (!stream || !checkpoint || controller.signal.aborted || ++resumesWithoutProgress > 2) throw err;
-        text = text.slice(0, checkpoint.length);
-        continuationToken = checkpoint.token;
+        // A transport error after STOP still leaves a finished response
+        if (finishReason !== "STOP") {
+          if (!stream || !checkpoint || controller.signal.aborted || ++resumesWithoutProgress > 2) throw err;
+          text = text.slice(0, checkpoint.length);
+          continuationToken = checkpoint.token;
+        }
       }
 
       if (!continuationToken) {

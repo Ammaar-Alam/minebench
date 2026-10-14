@@ -347,6 +347,36 @@ runProviderConfigTest("gemini family", {}, async (capture) => {
     [undefined, "checkpoint-1"],
   );
 
+  // A socket error after STOP keeps the finished build instead of discarding it
+  const finishedChunks = [
+    sse({ candidates: [{ content: { parts: [{ text: build }] }, finishReason: "STOP" }] }),
+  ];
+  capture.respondWith((request) =>
+    request.url.includes("/models/gemini-4-argon:")
+      ? new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              const chunk = finishedChunks.shift();
+              if (chunk) controller.enqueue(chunk);
+              else controller.error(new Error("socket reset"));
+            },
+          }),
+          { headers: { "Content-Type": "text/event-stream" } },
+        )
+      : null,
+  );
+  const closedAfterStop = await runGeneration(capture, {
+    modelKey: argon.key,
+    maxAttempts: 1,
+    providerKeys: { gemini: "test-google-key" },
+  });
+  capture.respondWith(null);
+  assert.equal(closedAfterStop.result.rawText, build);
+  assert.equal(
+    closedAfterStop.requests.filter((request) => request.url.includes("/models/gemini-4-argon:")).length,
+    1,
+  );
+
   // A stream that closes without a final event is a cut-off response, never an empty build
   capture.respondWith((request) =>
     request.url.includes("/models/gemini-4-argon:")
