@@ -4,7 +4,6 @@ import Image from "next/image";
 import { useEffect, useState } from "react";
 
 const APP_STORE_URL = "https://apps.apple.com/app/minebench/id6803704037?ct=web-arena";
-const SHOWN_KEY = "mb-app-prompt-shown";
 // Safari shows Apple's own banner from the page metadata; other iPhone browsers and in-app views need this card
 const NON_SAFARI = /CriOS|FxiOS|EdgiOS|OPiOS|OPT\/|GSA\/|DuckDuckGo|Instagram|FBAN|FBAV|Twitter|LinkedInApp|Snapchat|musical_ly|BytedanceWebview|Line\//;
 
@@ -14,29 +13,28 @@ export function wantsAppPrompt(userAgent: string): boolean {
 
 export function AppPrompt() {
   const [visible, setVisible] = useState(false);
+  // covers the whole site header so no sliver of it shows underneath
+  const [headerHeight, setHeaderHeight] = useState<number>();
 
   useEffect(() => {
     if (!wantsAppPrompt(navigator.userAgent)) return;
-    // once per browser session, so refreshing or browsing around never brings it back
-    try {
-      if (sessionStorage.getItem(SHOWN_KEY)) return;
-      sessionStorage.setItem(SHOWN_KEY, "1");
-    } catch {
-      return;
-    }
-    const timer = window.setTimeout(() => setVisible(true), 1200);
+    const timer = window.setTimeout(() => {
+      setHeaderHeight(document.querySelector("header")?.getBoundingClientRect().bottom);
+      setVisible(true);
+    }, 1200);
     return () => window.clearTimeout(timer);
   }, []);
 
   if (!visible) return null;
 
   return (
-    <div className="fixed inset-x-0 top-0 z-50 flex justify-center px-3 pt-3">
-      <aside
-        aria-label="MineBench for iPhone"
-        className="mb-app-prompt flex w-full max-w-md items-center gap-3 rounded-md border border-border bg-bg/95 p-3 shadow-soft backdrop-blur-sm"
-      >
-        <Image src="/icon-192.png" alt="" width={44} height={44} className="h-11 w-11 shrink-0 rounded-[10px]" />
+    <aside
+      aria-label="MineBench for iPhone"
+      className="mb-app-prompt fixed inset-x-0 top-0 z-50 flex items-center border-b border-border bg-card px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] shadow-soft"
+      style={{ minHeight: headerHeight }}
+    >
+      <div className="mx-auto flex w-full max-w-md items-center gap-3">
+        <Image src="/icon-192.png" alt="" width={44} height={44} className="h-11 w-11 shrink-0 rounded-[10px] ring-1 ring-border" />
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-fg">MineBench for iPhone</p>
           <p className="mt-0.5 text-xs leading-snug text-muted">Sign in with Apple, start a build anywhere, and get a ping when it’s done.</p>
@@ -54,7 +52,7 @@ export function AppPrompt() {
             <path d="m4 4 8 8M12 4l-8 8" />
           </svg>
         </button>
-      </aside>
-    </div>
+      </div>
+    </aside>
   );
 }

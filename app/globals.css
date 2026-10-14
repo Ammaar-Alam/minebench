@@ -1796,7 +1796,7 @@
 @keyframes efficiency-detail { from { opacity: 0.6; } to { opacity: 1; } }
 @keyframes efficiency-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
 @keyframes efficiency-fade { from { opacity: 0; } }
-@keyframes app-prompt-enter { from { opacity: 0; transform: translateY(-10px); } }
+@keyframes app-prompt-enter { from { transform: translateY(-100%); } }
 @keyframes efficiency-dot { from { opacity: 0; transform: scale(0.4); } }
 @media (prefers-reduced-motion: reduce) {
   .mb-efficiency-enter, .mb-efficiency-frontier, .mb-efficiency-detail, .mb-efficiency-dot, .mb-efficiency-leader, .mb-efficiency-label, .mb-app-prompt { animation: none; }
