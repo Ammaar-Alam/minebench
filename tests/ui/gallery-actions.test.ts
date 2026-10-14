@@ -124,6 +124,10 @@ assert.ok(
   yours.includes("cursor.search !== search") && yours.includes("cursor?.search === search"),
   "saved build pagination must not continue a previous search with its cursor",
 );
+assert.ok(
+  yours.includes("Search unavailable.") && yours.includes("resultsFor !== search") && yours.includes("hasBuilds || search"),
+  "saved build search must flag stale or failed results and keep the field mounted while clearing",
+);
 assert.equal(
   yours.includes("generation.storedBytes"),
   false,

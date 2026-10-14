@@ -404,6 +404,10 @@ export function GalleryYours({
   const [selectedId, setSelectedId] = useState<string | null>(targetGeneration && viewerUrl(targetGeneration) ? targetGeneration.id : null);
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
+  // the search the visible list answers, so stale or failed results never pass for the current query
+  const [resultsFor, setResultsFor] = useState("");
+  const [searchFailed, setSearchFailed] = useState(false);
+  const [hasBuilds, setHasBuilds] = useState(items.length > 0);
   const scrolledTargetRef = useRef<string | null>(null);
   const searchRef = useRef("");
   const selected = items.find((item) => item.id === selectedId) ?? null;
@@ -414,9 +418,10 @@ export function GalleryYours({
     searchRef.current = search;
     const timer = window.setTimeout(() => {
       setSearching(Boolean(search));
+      setSearchFailed(false);
       void fetch(`/api/generations${search ? `?query=${encodeURIComponent(search)}` : ""}`, { cache: "no-store", signal: controller.signal })
         .then(async (response) => {
-          if (!response.ok) return;
+          if (!response.ok) throw new Error("Saved generations unavailable");
           const page = (await response.json()) as { items: SavedGenerationPayload[]; nextCursor: string | null };
           setItems((current) => {
             if (search) return page.items;
@@ -427,8 +432,10 @@ export function GalleryYours({
             return mergeGenerations(page.items, target ? [target] : []);
           });
           setCursor(page.nextCursor ? { value: page.nextCursor, search } : null);
+          setResultsFor(search);
+          if (!search) setHasBuilds(page.items.length > 0 || Boolean(targetGenerationId));
         })
-        .catch(() => undefined)
+        .catch(() => { if (!controller.signal.aborted) setSearchFailed(true); })
         .finally(() => { if (!controller.signal.aborted) setSearching(false); });
     }, search ? 220 : 0);
     return () => {
@@ -484,7 +491,7 @@ export function GalleryYours({
       <header className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
         <div><p className="mb-eyebrow">Builds</p><h2 id="saved-builds-title" className="mt-2 text-xl font-semibold tracking-tight text-fg">Saved builds</h2></div>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          {items.length > 0 || search ? (
+          {hasBuilds || search ? (
             <div role="search" className="relative h-11 w-full rounded-md bg-bg text-sm ring-1 ring-inset ring-border transition-shadow focus-within:ring-2 focus-within:ring-accent/50 sm:w-60 lg:w-72">
               <label htmlFor="saved-builds-search" className="sr-only">Search saved builds</label>
               <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted2"><circle cx="8.5" cy="8.5" r="5.25" /><path d="m12.4 12.4 4.1 4.1" /></svg>
@@ -523,7 +530,8 @@ export function GalleryYours({
         </p>
       ) : null}
 
-      <div id="saved-builds-list" aria-busy={searching} className={`mt-6 grid gap-4 transition-opacity duration-200 motion-reduce:transition-none ${searching ? "opacity-60" : ""}`}>
+      {searchFailed && resultsFor !== search ? <p role="status" className="mt-6 mb-feedback mb-feedback-error">Search unavailable.</p> : null}
+      <div id="saved-builds-list" aria-busy={searching} className={`mt-6 grid gap-4 transition-opacity duration-200 motion-reduce:transition-none ${resultsFor !== search ? "opacity-60" : ""}`}>
         {items.map((generation, index) => (
           <article id={generation.id} key={generation.id} className={`group/card scroll-mt-24 overflow-hidden rounded-md border border-border/80 bg-card/10 transition-[border-color,background-color] hover:border-border hover:bg-card/20 motion-reduce:transition-none mb-card-enter ${index % 2 === 1 ? "mb-card-enter-delay" : ""}`}>
             <div className="grid md:grid-cols-[15rem_minmax(0,1fr)] lg:grid-cols-[18rem_minmax(0,1fr)]">
@@ -556,7 +564,7 @@ export function GalleryYours({
             </div>
           </article>
         ))}
-        {items.length === 0 ? <div className="rounded-md border border-border/80 px-5 py-12 text-center"><p className="text-sm text-muted">{search ? `Nothing matches “${search}”.` : "No saved builds."}</p></div> : null}
+        {items.length === 0 ? <div className="rounded-md border border-border/80 px-5 py-12 text-center"><p className="text-sm text-muted">{resultsFor ? `Nothing matches “${resultsFor}”.` : "No saved builds."}</p></div> : null}
       </div>
       {cursor?.search === search ? <div className="mt-12 flex justify-center"><button type="button" disabled={loadingMore} className="mb-collapse-toggle" onClick={() => void loadMore()}><span>{loadingMore ? "Loading…" : "More"}</span><svg aria-hidden="true" className="mb-disclosure-chevron h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6.5L8 10.5L12 6.5" /></svg></button></div> : null}
       {loadError ? <p role="status" className="mt-6 text-center text-sm text-danger">{loadError}</p> : null}
