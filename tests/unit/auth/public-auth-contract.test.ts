@@ -33,6 +33,23 @@ assert.equal(
   resolveRequestOrigin({ nodeEnv: "development", host: "localhost:3000" }),
   "http://localhost:3000",
 );
+assert.equal(
+  resolveRequestOrigin({ configuredOrigin: "https://minebench.ai", nodeEnv: "development", host: "localhost:3000" }),
+  "http://localhost:3000",
+  "local sign-in returns to localhost even with a production site url configured",
+);
+assert.equal(resolveRequestOrigin({ nodeEnv: "development", host: "127.0.0.1:3000" }), "http://127.0.0.1:3000");
+assert.equal(resolveRequestOrigin({ nodeEnv: "development", host: "192.168.1.20:3000" }), "http://192.168.1.20:3000");
+assert.equal(
+  resolveRequestOrigin({ nodeEnv: "development", forwardedHost: "dev.example.test", forwardedProto: "https", host: "localhost:3000" }),
+  "https://dev.example.test",
+  "tunnels keep the scheme the proxy reports",
+);
+assert.equal(
+  resolveRequestOrigin({ configuredOrigin: "https://minebench.ai", nodeEnv: "production", host: "untrusted.test" }),
+  "https://minebench.ai",
+  "production never trusts the request host",
+);
 assert.throws(
   () => resolveRequestOrigin({ nodeEnv: "production", host: "untrusted.test" }),
   /Missing MINEBENCH_SITE_URL/,
