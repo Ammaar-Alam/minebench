@@ -245,34 +245,52 @@ export async function geminiGenerateText(params: {
   if (!res || !acceptedRequest) throw new Error("Gemini request failed");
 
   // Long decode stops each request at the per-request limit with a continuation
-  // token, and resending the identical request with it resumes the same output
+  // token, and resending the identical request with it resumes the same output.
+  // Streams also send checkpoint tokens, so a dropped stream resumes from the
+  // last checkpoint and drops the uncommitted text after it
   let text = "";
+  let checkpoint: { token: string; length: number } | undefined;
+  let resumesWithoutProgress = 0;
   try {
     for (;;) {
       // Terminal fields can arrive on separate events, so each keeps its last value
       let finishReason: string | undefined;
+      let hopToken: string | undefined;
       let continuationToken: string | undefined;
       const readAnswer = (data: GeminiGenerateContentResponse): string => {
         if (data.error) throw new Error(`Gemini error: ${JSON.stringify(data.error)}`);
         const candidate = data.candidates?.[0];
         finishReason = candidate?.finishReason ?? finishReason;
-        continuationToken = candidate?.continuationToken ?? continuationToken;
+        hopToken = candidate?.continuationToken ?? hopToken;
         return candidate?.content?.parts?.map((p) => (p.thought ? "" : p.text ?? "")).join("") ?? "";
       };
+      const commit = () => {
+        if (!hopToken || hopToken === checkpoint?.token) return;
+        checkpoint = { token: hopToken, length: text.length };
+        resumesWithoutProgress = 0;
+      };
 
-      if (stream) {
-        await consumeSseStream(res, (evt) => {
-          if (evt.data === "[DONE]") return;
-          const delta = readAnswer(JSON.parse(evt.data) as GeminiGenerateContentResponse);
-          if (!delta) return;
-          text += delta;
-          params.onDelta?.(delta);
-        });
-      } else {
-        text += readAnswer((await res.json()) as GeminiGenerateContentResponse);
+      try {
+        if (stream) {
+          await consumeSseStream(res, (evt) => {
+            if (evt.data === "[DONE]") return;
+            const delta = readAnswer(JSON.parse(evt.data) as GeminiGenerateContentResponse);
+            text += delta;
+            if (delta) params.onDelta?.(delta);
+            commit();
+          });
+        } else {
+          text += readAnswer((await res.json()) as GeminiGenerateContentResponse);
+          commit();
+        }
+        if (finishReason === "CONTINUATION") continuationToken = hopToken;
+      } catch (err) {
+        if (!stream || !checkpoint || controller.signal.aborted || ++resumesWithoutProgress > 2) throw err;
+        text = text.slice(0, checkpoint.length);
+        continuationToken = checkpoint.token;
       }
 
-      if (finishReason !== "CONTINUATION" || !continuationToken) {
+      if (!continuationToken) {
         // A stream can close without a final event, which is a cut-off response, not a finished one
         if (stream && finishReason !== "STOP") {
           throw new Error(`Gemini stream ended before completion (finishReason=${finishReason ?? "none"})`);

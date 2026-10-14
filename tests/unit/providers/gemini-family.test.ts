@@ -256,6 +256,48 @@ runProviderConfigTest("gemini family", {}, async (capture) => {
     "Direct Gemini 4 Argon trace should report the highest thinking level",
   );
 
+  // A dropped stream resumes from its last checkpoint and drops the uncommitted text
+  const sse = (event: unknown) => new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`);
+  const droppedChunks = [
+    sse({ candidates: [{ content: { parts: [{ text: build.slice(0, 30) }] }, continuationToken: "checkpoint-1" }] }),
+    sse({ candidates: [{ content: { parts: [{ text: "uncommitted" }] } }] }),
+  ];
+  let resumeRequests = 0;
+  capture.respondWith((request) => {
+    if (!request.url.includes("/models/gemini-4-argon:")) return null;
+    if (resumeRequests++ === 0) {
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            const chunk = droppedChunks.shift();
+            if (chunk) controller.enqueue(chunk);
+            else controller.error(new Error("socket reset"));
+          },
+        }),
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    }
+    return new Response(
+      new TextDecoder().decode(
+        sse({ candidates: [{ content: { parts: [{ text: build.slice(30) }] }, finishReason: "STOP" }] }),
+      ),
+      { headers: { "Content-Type": "text/event-stream" } },
+    );
+  });
+  const resumed = await runGeneration(capture, {
+    modelKey: argon.key,
+    maxAttempts: 1,
+    providerKeys: { gemini: "test-google-key" },
+  });
+  capture.respondWith(null);
+  assert.equal(resumed.result.rawText, build, "Resumed text should drop output after the checkpoint");
+  assert.deepEqual(
+    resumed.requests
+      .filter((request) => request.url.includes("/models/gemini-4-argon:"))
+      .map((request) => request.body.continuationToken),
+    [undefined, "checkpoint-1"],
+  );
+
   // A stream that closes without a final event is a cut-off response, never an empty build
   capture.respondWith((request) =>
     request.url.includes("/models/gemini-4-argon:")
