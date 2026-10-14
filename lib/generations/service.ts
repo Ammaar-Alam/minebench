@@ -471,22 +471,25 @@ function encodeCursor(value: GenerationCursor): string {
 
 export async function listSavedGenerations(
   ownerId: string,
-  options: { cursor?: string | null; limit?: number } = {},
+  options: { cursor?: string | null; limit?: number; query?: string | null } = {},
 ) {
   const limit = Math.max(1, Math.min(options.limit ?? 20, 50));
   const cursor = decodeCursor(options.cursor);
+  const query = options.query?.trim();
   const rows = await prisma.customBuild.findMany({
     where: {
       ownerId,
       removedAt: null,
-      ...(cursor
-        ? {
-            OR: [
-              { createdAt: { lt: cursor.createdAt } },
-              { createdAt: cursor.createdAt, id: { lt: cursor.id } },
-            ],
-          }
-        : {}),
+      AND: [
+        ...(query ? [{ OR: [
+          { promptText: { contains: query, mode: "insensitive" as const } },
+          { modelDisplayName: { contains: query, mode: "insensitive" as const } },
+        ] }] : []),
+        ...(cursor ? [{ OR: [
+          { createdAt: { lt: cursor.createdAt } },
+          { createdAt: cursor.createdAt, id: { lt: cursor.id } },
+        ] }] : []),
+      ],
     },
     select: generationSelect,
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],

@@ -98,6 +98,7 @@ export async function GET(request: Request) {
     return apiJson(await listSavedGenerations(ownerId, {
       cursor: url.searchParams.get("cursor"),
       limit: Number.isFinite(limit) ? limit : 20,
+      query: url.searchParams.get("query")?.slice(0, MAX_GENERATION_PROMPT_CHARS),
     }));
   } catch (error) {
     return apiServiceError(error);
