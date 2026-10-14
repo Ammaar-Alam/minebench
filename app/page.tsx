@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { AppPrompt } from "@/components/arena/AppPrompt";
 import { Arena } from "@/components/arena/Arena";
 import { breadcrumbJsonLd, datasetJsonLd, DEFAULT_OG_IMAGE, SEO_KEYWORDS } from "@/lib/seo";
 
@@ -9,6 +10,8 @@ export const metadata: Metadata = {
   alternates: {
     canonical: "/",
   },
+  // Safari's Smart App Banner; Arena only so it greets visitors without following them around
+  itunes: { appId: "6803704037", appArgument: "https://minebench.ai/" },
   openGraph: {
     title: "MineBench | Voxel Build AI Benchmark",
     description:
@@ -39,6 +42,7 @@ export default function HomePage() {
       />
       <h1 className="sr-only">MineBench AI voxel build benchmark</h1>
       <Arena />
+      <AppPrompt />
     </>
   );
 }

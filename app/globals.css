@@ -1783,6 +1783,7 @@
 .mb-efficiency-frontier { color: hsl(var(--accent)); stroke-dasharray: 1; transition: opacity 160ms cubic-bezier(0.22, 1, 0.36, 1); animation: efficiency-draw 600ms 60ms linear both; }
 .mb-efficiency-point { cursor: pointer; transition: opacity 160ms cubic-bezier(0.22, 1, 0.36, 1), transform 320ms cubic-bezier(0.22, 1, 0.36, 1); }
 .mb-efficiency-label { transition: opacity 200ms cubic-bezier(0.22, 1, 0.36, 1), transform 320ms cubic-bezier(0.22, 1, 0.36, 1), fill 140ms ease-out; animation: efficiency-fade 280ms ease-out backwards; }
+.mb-app-prompt { animation: app-prompt-enter 320ms cubic-bezier(0.22, 1, 0.36, 1) both; }
 .mb-efficiency-leader { transition: opacity 160ms cubic-bezier(0.22, 1, 0.36, 1); animation: efficiency-fade 200ms 280ms ease-out backwards; }
 .mb-efficiency-guide { transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1); }
 .mb-efficiency-point:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
@@ -1795,9 +1796,10 @@
 @keyframes efficiency-detail { from { opacity: 0.6; } to { opacity: 1; } }
 @keyframes efficiency-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
 @keyframes efficiency-fade { from { opacity: 0; } }
+@keyframes app-prompt-enter { from { opacity: 0; transform: translateY(-10px); } }
 @keyframes efficiency-dot { from { opacity: 0; transform: scale(0.4); } }
 @media (prefers-reduced-motion: reduce) {
-  .mb-efficiency-enter, .mb-efficiency-frontier, .mb-efficiency-detail, .mb-efficiency-dot, .mb-efficiency-leader, .mb-efficiency-label { animation: none; }
+  .mb-efficiency-enter, .mb-efficiency-frontier, .mb-efficiency-detail, .mb-efficiency-dot, .mb-efficiency-leader, .mb-efficiency-label, .mb-app-prompt { animation: none; }
   .mb-efficiency-point, .mb-efficiency-dot, .mb-efficiency-row, .mb-efficiency-label, .mb-efficiency-guide, .mb-efficiency-leader { transition: none; }
 }
 
