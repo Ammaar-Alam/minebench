@@ -23,8 +23,9 @@ export function resolveRequestOrigin(input: {
 }): string {
   const host = input.forwardedHost?.trim() || input.host?.trim();
   // dev stays on the host the browser used even when .env points the site url at production
+  // next dev serves plain http, a tunnel or proxy reports https through x-forwarded-proto
   if (input.nodeEnv !== "production" && host) {
-    const protocol = input.forwardedProto?.trim() || (host.startsWith("localhost") ? "http" : "https");
+    const protocol = input.forwardedProto?.trim() || "http";
     return new URL(`${protocol}://${host}`).origin;
   }
   if (input.configuredOrigin?.trim()) {
