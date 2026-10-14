@@ -27,7 +27,9 @@ const WATERMARK = "minebench.ai";
 const numeric = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
 
 let measureContext: CanvasRenderingContext2D | null | undefined;
-function measureText(text: string, font: string) {
+// estimates until the browser has read the real font so first renders match on server and client
+function measureText(text: string, font: string | null) {
+  if (!font) return text.length * 7;
   if (measureContext === undefined) measureContext = typeof document === "undefined" ? null : document.createElement("canvas").getContext("2d");
   if (!measureContext) return text.length * 7;
   measureContext.font = font;
@@ -42,7 +44,7 @@ export function LeaderboardEfficiency({ models, modelQuery }: {
   const chartRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(720);
   const [viewportHeight, setViewportHeight] = useState(1000);
-  const [font, setFont] = useState({ family: "sans-serif" });
+  const [font, setFont] = useState<{ family: string } | null>(null);
   const [metric, setMetric] = useState<EfficiencyMetric>("cost");
   const [establishedOnly, setEstablishedOnly] = useState(false);
   const [logScale, setLogScale] = useState(true);
@@ -69,7 +71,7 @@ export function LeaderboardEfficiency({ models, modelQuery }: {
   const y = (value: number) => plot.y + (yMax - value) / (yMax - yMin) * plot.height;
   const xTicks = getEfficiencyTicks([xMin, xMax], metric, Math.max(3, Math.floor(plot.width / 72)), useLog);
   const yTicks = getEfficiencyTicks([yMin, yMax], "rating", compact ? 5 : 7);
-  const labelFont = `600 ${compact ? 11 : 12}px ${font.family}`;
+  const labelFont = font && `600 ${compact ? 11 : 12}px ${font.family}`;
   const watermark = { x: plot.x + plot.width - 8, y: plot.y + plot.height - 12, width: measureText(WATERMARK, labelFont) };
   // frontier first, then rating, so the models that matter keep their labels
   const labelOrder = [...points].sort((a, b) =>
