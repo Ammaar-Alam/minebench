@@ -258,6 +258,7 @@ export async function geminiGenerateText(params: {
     params.onDelta?.(text.slice(delivered, upTo));
     delivered = upTo;
   };
+  let resumeToken: string | undefined;
   try {
     for (;;) {
       // Terminal fields can arrive on separate events, so each keeps its last value
@@ -278,6 +279,17 @@ export async function geminiGenerateText(params: {
       };
 
       try {
+        if (resumeToken) {
+          controller.signal.throwIfAborted();
+          params.onProviderRequest?.();
+          res = await providerFetch(url, {
+            method: "POST",
+            headers: acceptedRequest.headers,
+            signal: controller.signal,
+            body: JSON.stringify({ ...acceptedRequest.body, continuationToken: resumeToken }),
+          });
+          if (!res.ok) throw new Error(`Gemini error ${res.status}: ${await res.text().catch(() => "")}`);
+        }
         if (stream) {
           await consumeSseStream(res, (evt) => {
             if (evt.data === "[DONE]") return;
@@ -308,15 +320,7 @@ export async function geminiGenerateText(params: {
         deliver(text.length);
         return { text };
       }
-      controller.signal.throwIfAborted();
-      params.onProviderRequest?.();
-      res = await providerFetch(url, {
-        method: "POST",
-        headers: acceptedRequest.headers,
-        signal: controller.signal,
-        body: JSON.stringify({ ...acceptedRequest.body, continuationToken }),
-      });
-      if (!res.ok) throw new Error(`Gemini error ${res.status}: ${await res.text().catch(() => "")}`);
+      resumeToken = continuationToken;
     }
   } catch (err) {
     throw geminiRequestError(err);

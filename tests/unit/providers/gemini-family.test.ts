@@ -313,6 +313,33 @@ runProviderConfigTest("gemini family", {}, async (capture) => {
   });
   capture.respondWith(null);
   assert.equal(resumedDeltas.join(""), build);
+
+  // A continuation request that fails to connect also retries from the checkpoint
+  resumeRequests = 0;
+  droppedChunks.push(
+    sse({ candidates: [{ content: { parts: [{ text: build.slice(0, 30) }] }, continuationToken: "checkpoint-1" }] }),
+    sse({ candidates: [{ content: { parts: [{ text: "uncommitted" }] } }] }),
+  );
+  let failedConnects = 0;
+  capture.respondWith((request) => {
+    if (request.url.includes("/models/gemini-4-argon:") && resumeRequests === 1 && failedConnects++ === 0) {
+      throw new TypeError("fetch failed");
+    }
+    return resumeResponder(request);
+  });
+  const reconnected = await runGeneration(capture, {
+    modelKey: argon.key,
+    maxAttempts: 1,
+    providerKeys: { gemini: "test-google-key" },
+  });
+  capture.respondWith(null);
+  assert.equal(reconnected.result.rawText, build);
+  assert.deepEqual(
+    reconnected.requests
+      .filter((request) => request.url.includes("/models/gemini-4-argon:"))
+      .map((request) => request.body.continuationToken),
+    [undefined, "checkpoint-1", "checkpoint-1"],
+  );
   assert.deepEqual(
     resumed.requests
       .filter((request) => request.url.includes("/models/gemini-4-argon:"))
