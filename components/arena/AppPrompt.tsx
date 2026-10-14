@@ -3,7 +3,7 @@
 import Image from "next/image";
 import { useEffect, useState } from "react";
 
-const APP_STORE_URL = "https://apps.apple.com/app/minebench/id6803704037?ct=web-arena";
+const APP_STORE_URL = "https://apps.apple.com/app/apple-store/id6803704037?pt=127495015&ct=web-arena&mt=8";
 // Safari shows Apple's own banner from the page metadata; other iPhone browsers and in-app views need this card
 const NON_SAFARI = /CriOS|FxiOS|EdgiOS|OPiOS|OPT\/|GSA\/|DuckDuckGo|Instagram|FBAN|FBAV|Twitter|LinkedInApp|Snapchat|musical_ly|BytedanceWebview|Line\//;
 
