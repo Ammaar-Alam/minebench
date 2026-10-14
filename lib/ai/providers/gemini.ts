@@ -302,11 +302,16 @@ export async function geminiGenerateText(params: {
           text += readAnswer((await res.json()) as GeminiGenerateContentResponse);
           commit();
         }
-        // A stream that closes before a finish reason or token was cut off, so it resumes like a dropped one
-        if (stream && (!finishReason || (finishReason === "CONTINUATION" && !hopToken))) {
+        // CONTINUATION is only resumable from a fresh token covering all received text;
+        // anything else, like a stream closing before a finish reason, recovers from the last checkpoint
+        const resumable =
+          finishReason === "CONTINUATION" &&
+          checkpoint?.length === text.length &&
+          checkpoint.token !== resumeToken;
+        if ((stream && !finishReason) || (finishReason === "CONTINUATION" && !resumable)) {
           throw new Error(`Gemini stream ended before completion (finishReason=${finishReason ?? "none"})`);
         }
-        if (finishReason === "CONTINUATION") continuationToken = hopToken;
+        if (resumable) continuationToken = checkpoint?.token;
       } catch (err) {
         // A transport error after STOP still leaves a finished response
         if (finishReason !== "STOP") {

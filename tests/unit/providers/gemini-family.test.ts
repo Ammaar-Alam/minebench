@@ -403,6 +403,35 @@ runProviderConfigTest("gemini family", {}, async (capture) => {
     [undefined, "checkpoint-1"],
   );
 
+  // CONTINUATION after uncommitted text truncates to the checkpoint before resuming
+  let staleRequests = 0;
+  capture.respondWith((request) => {
+    if (!request.url.includes("/models/gemini-4-argon:")) return null;
+    const events =
+      staleRequests++ === 0
+        ? [
+            { candidates: [{ content: { parts: [{ text: build.slice(0, 30) }] }, continuationToken: "checkpoint-1" }] },
+            { candidates: [{ content: { parts: [{ text: build.slice(30, 40) }] }, finishReason: "CONTINUATION" }] },
+          ]
+        : [{ candidates: [{ content: { parts: [{ text: build.slice(30) }] }, finishReason: "STOP" }] }];
+    return new Response(events.map((event) => new TextDecoder().decode(sse(event))).join(""), {
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  });
+  const staleToken = await runGeneration(capture, {
+    modelKey: argon.key,
+    maxAttempts: 1,
+    providerKeys: { gemini: "test-google-key" },
+  });
+  capture.respondWith(null);
+  assert.equal(staleToken.result.rawText, build, "Uncommitted text before CONTINUATION should not repeat");
+  assert.deepEqual(
+    staleToken.requests
+      .filter((request) => request.url.includes("/models/gemini-4-argon:"))
+      .map((request) => request.body.continuationToken),
+    [undefined, "checkpoint-1"],
+  );
+
   // An exhausted output budget is terminal instead of buying a fresh full retry
   capture.respondWith((request) =>
     request.url.includes("/models/gemini-4-argon:")
