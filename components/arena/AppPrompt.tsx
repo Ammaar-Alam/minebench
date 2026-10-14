@@ -37,7 +37,7 @@ export function AppPrompt() {
         <Image src="/icon-192.png" alt="" width={44} height={44} className="h-11 w-11 shrink-0 rounded-[10px] ring-1 ring-border" />
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-fg">MineBench for iPhone</p>
-          <p className="mt-0.5 text-xs leading-snug text-muted">Sign in with Apple, start a build anywhere, and get a ping when it’s done.</p>
+          <p className="mt-0.5 text-xs leading-snug text-muted">Sync your account, start a build anywhere, and get a ping when it’s done.</p>
         </div>
         <a href={APP_STORE_URL} className="mb-btn mb-btn-primary h-9 shrink-0 px-3 text-xs" onClick={() => setVisible(false)}>
           Get app
