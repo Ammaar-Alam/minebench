@@ -377,6 +377,56 @@ runProviderConfigTest("gemini family", {}, async (capture) => {
     1,
   );
 
+  // A clean close after a checkpoint but before a finish reason also resumes
+  let cleanCloseRequests = 0;
+  capture.respondWith((request) => {
+    if (!request.url.includes("/models/gemini-4-argon:")) return null;
+    const event =
+      cleanCloseRequests++ === 0
+        ? { candidates: [{ content: { parts: [{ text: build.slice(0, 30) }] }, continuationToken: "checkpoint-1" }] }
+        : { candidates: [{ content: { parts: [{ text: build.slice(30) }] }, finishReason: "STOP" }] };
+    return new Response(new TextDecoder().decode(sse(event)), {
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  });
+  const cleanClose = await runGeneration(capture, {
+    modelKey: argon.key,
+    maxAttempts: 1,
+    providerKeys: { gemini: "test-google-key" },
+  });
+  capture.respondWith(null);
+  assert.equal(cleanClose.result.rawText, build);
+  assert.deepEqual(
+    cleanClose.requests
+      .filter((request) => request.url.includes("/models/gemini-4-argon:"))
+      .map((request) => request.body.continuationToken),
+    [undefined, "checkpoint-1"],
+  );
+
+  // An exhausted output budget is terminal instead of buying a fresh full retry
+  capture.respondWith((request) =>
+    request.url.includes("/models/gemini-4-argon:")
+      ? new Response(
+          new TextDecoder().decode(
+            sse({ candidates: [{ content: { parts: [{ text: build.slice(0, 30) }] }, finishReason: "MAX_TOKENS" }] }),
+          ),
+          { headers: { "Content-Type": "text/event-stream" } },
+        )
+      : null,
+  );
+  const exhausted = await runGeneration(capture, {
+    modelKey: argon.key,
+    maxAttempts: 3,
+    providerKeys: { gemini: "test-google-key" },
+  });
+  capture.respondWith(null);
+  assert.ok(!exhausted.result.ok);
+  assert.match(exhausted.result.error, /finishReason=MAX_TOKENS/);
+  assert.equal(
+    exhausted.requests.filter((request) => request.url.includes("/models/gemini-4-argon:")).length,
+    1,
+  );
+
   // A stream that closes without a final event is a cut-off response, never an empty build
   capture.respondWith((request) =>
     request.url.includes("/models/gemini-4-argon:")

@@ -293,6 +293,7 @@ function isExhaustedOutputBudgetProviderError(message: string): boolean {
   const m = message.toLowerCase();
   return (
     m.includes("status incomplete: max_output_tokens") ||
+    m.includes("finishreason=max_tokens") ||
     m.includes("ended with status incomplete: max_output_tokens")
   );
 }

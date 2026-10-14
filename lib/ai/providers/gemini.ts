@@ -302,6 +302,10 @@ export async function geminiGenerateText(params: {
           text += readAnswer((await res.json()) as GeminiGenerateContentResponse);
           commit();
         }
+        // A stream that closes before a finish reason or token was cut off, so it resumes like a dropped one
+        if (stream && (!finishReason || (finishReason === "CONTINUATION" && !hopToken))) {
+          throw new Error(`Gemini stream ended before completion (finishReason=${finishReason ?? "none"})`);
+        }
         if (finishReason === "CONTINUATION") continuationToken = hopToken;
       } catch (err) {
         // A transport error after STOP still leaves a finished response
@@ -313,7 +317,10 @@ export async function geminiGenerateText(params: {
       }
 
       if (!continuationToken) {
-        // A stream can close without a final event, which is a cut-off response, not a finished one
+        // The cumulative budget is spent, so a fresh retry would buy the same truncated output
+        if (finishReason === "MAX_TOKENS") {
+          throw new Error("Gemini response used its full output budget (finishReason=MAX_TOKENS)");
+        }
         if (stream && finishReason !== "STOP") {
           throw new Error(`Gemini stream ended before completion (finishReason=${finishReason ?? "none"})`);
         }
