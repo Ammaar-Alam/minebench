@@ -162,6 +162,10 @@ const MODEL_RUN_PARAMETERS = {
     { label: "Thinking", value: "Adaptive" },
     { label: "Reasoning effort", value: "Max" },
   ],
+  gemini_4_argon: [
+    { label: "Thinking level", value: "High" },
+    { label: "Sampling", value: "Provider default" },
+  ],
   gemini_3_8_flash: [
     { label: "Thinking level", value: "High" },
     { label: "Sampling", value: "Provider default" },
@@ -343,6 +347,9 @@ export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
 const MODEL_BENCHMARK_METADATA: Partial<
   Record<ModelKey, Omit<ModelBenchmarkProfile, "outputCap" | "parameters">>
 > = {
+  gemini_4_argon: {
+    totalCost: { usd: 9.12, attemptCount: 16 },
+  },
   meta_muse_wonder: {
     totalCost: { usd: 10.42, attemptCount: 18 },
   },

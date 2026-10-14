@@ -848,6 +848,28 @@
       "interruptedRunCount": 0,
       "providerCallTrackingJobCount": 15,
       "completedAttemptTrackingJobCount": 15
+    },
+    "gemini_4_argon": {
+      "inferenceSampleCount": 15,
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "promptCohortId": "prompts-v1:bd8c28367f8a97f2",
+      "averageJsonSizeBytes": 71321490,
+      "configurationSampleCount": 15,
+      "configurationIsConsistent": true,
+      "outputCapSampleCount": 15,
+      "outputCapIsConsistent": true,
+      "averageInferenceMs": 375064,
+      "finalizedAttemptCount": 16,
+      "outputCapTokens": 1048576,
+      "providerCallCount": 16,
+      "completedAttemptCount": 16,
+      "rejectedResponseCount": 1,
+      "failedAttemptCount": 1,
+      "failedRunCount": 0,
+      "interruptedRunCount": 0,
+      "providerCallTrackingJobCount": 15,
+      "completedAttemptTrackingJobCount": 15
     }
   }
 }

@@ -14,6 +14,7 @@ import {
   runGeneration,
   runProviderConfigTest,
   schemaContainsKey,
+  validBuildJson,
   type ExpectedCatalogEntry,
 } from "../../helpers/providerConfigHarness";
 
@@ -181,6 +182,115 @@ runProviderConfigTest("gemini family", {}, async (capture) => {
       expected.requiresReasoning ? ["disabled"] : [],
     );
   }
+
+  const argon = assertCatalogEntry({
+    key: "gemini_4_argon",
+    provider: "gemini",
+    modelId: "gemini-4-argon",
+    displayName: "Gemini 4 Argon",
+    openRouterModelId: "google/gemini-4-argon",
+    slug: "gemini-4-argon",
+  });
+  assert.deepEqual(geminiThinkingConfigForModel(argon.modelId), { thinkingLevel: "high" });
+  assert.throws(
+    () => geminiThinkingConfigForModel(argon.modelId, "minimal"),
+    /Supported values: high, medium, low/,
+  );
+  assert.deepEqual(openRouterReasoningEffortAttempts(argon.openRouterModelId!), [
+    "high",
+    "medium",
+    "low",
+  ]);
+  assert.equal(modelRequiresReasoning(argon.openRouterModelId!), true);
+
+  // Long decode resends the identical request with each continuation token
+  const build = validBuildJson();
+  const hops = [
+    { text: build.slice(0, 20), finishReason: "CONTINUATION", continuationToken: "hop-1" },
+    { text: build.slice(20, 40), finishReason: "CONTINUATION", continuationToken: "hop-2" },
+    { text: build.slice(40), finishReason: "STOP" },
+  ];
+  let hopIndex = 0;
+  capture.respondWith((request) => {
+    if (!request.url.includes("/models/gemini-4-argon:")) return null;
+    const { text, finishReason, continuationToken } = hops[hopIndex++];
+    // Thought summaries keep the stream active and never reach the build text, and
+    // the terminal reason and token may arrive on separate events
+    const events = [
+      { candidates: [{ content: { parts: [{ text: "planning", thought: true }] } }] },
+      { candidates: [{ content: { parts: [{ text }] }, finishReason }] },
+      ...(continuationToken ? [{ candidates: [{ continuationToken }] }] : []),
+    ];
+    return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  });
+  const argonRun = await runGeneration(capture, {
+    modelKey: argon.key,
+    maxAttempts: 1,
+    providerKeys: { gemini: "test-google-key" },
+  });
+  capture.respondWith(null);
+  assert.equal(argonRun.result.rawText, build, "Continuation hops should join into one response");
+  // Argon always streams so long hops return headers before undici's timeout
+  const argonRequests = argonRun.requests.filter((request) =>
+    request.url.includes("/models/gemini-4-argon:streamGenerateContent"),
+  );
+  assert.equal(argonRequests.length, 3);
+  assert.deepEqual(
+    argonRequests.map((request) => request.body.continuationToken),
+    [undefined, "hop-1", "hop-2"],
+  );
+  const { continuationToken: _token, ...resumedBody } = argonRequests[2].body;
+  assert.deepEqual(resumedBody, argonRequests[0].body);
+  const argonConfig = argonRequests[0].body.generationConfig as Record<string, unknown>;
+  assert.deepEqual(argonConfig.thinkingConfig, { thinkingLevel: "high", includeThoughts: true });
+  assert.equal(Object.hasOwn(argonConfig, "temperature"), false);
+  assertTraceLine(
+    argonRun.traces,
+    [
+      "Routing via direct gemini provider (gemini-4-argon)",
+      "thinking_mode=thinking_level=high",
+      "temperature=default",
+    ],
+    "Direct Gemini 4 Argon trace should report the highest thinking level",
+  );
+
+  // A stream that closes without a final event is a cut-off response, never an empty build
+  capture.respondWith((request) =>
+    request.url.includes("/models/gemini-4-argon:")
+      ? new Response(
+          `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: "planning", thought: true }] } }] })}\n\n`,
+          { headers: { "Content-Type": "text/event-stream" } },
+        )
+      : null,
+  );
+  const cutOff = await runGeneration(capture, {
+    modelKey: argon.key,
+    maxAttempts: 1,
+    providerKeys: { gemini: "test-google-key" },
+  });
+  capture.respondWith(null);
+  assert.ok(!cutOff.result.ok);
+  assert.match(cutOff.result.error, /Gemini stream ended before completion \(finishReason=none\)/);
+
+  // A finished stream holding only thought summaries has no build to return
+  capture.respondWith((request) =>
+    request.url.includes("/models/gemini-4-argon:")
+      ? new Response(
+          `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: "planning", thought: true }] }, finishReason: "STOP" }] })}\n\n`,
+          { headers: { "Content-Type": "text/event-stream" } },
+        )
+      : null,
+  );
+  const thoughtOnly = await runGeneration(capture, {
+    modelKey: argon.key,
+    maxAttempts: 1,
+    providerKeys: { gemini: "test-google-key" },
+  });
+  capture.respondWith(null);
+  assert.ok(!thoughtOnly.result.ok);
+  assert.match(thoughtOnly.result.error, /Gemini returned no answer text \(finishReason=STOP\)/);
 
   const overridden = await runGeneration(capture, {
     modelKey: "gemini_3_8_flash",
