@@ -84,7 +84,9 @@ export function getEfficiencyTicks(
     const decades = Array.from({ length: Math.ceil(domain[1]) - Math.floor(domain[0]) + 1 }, (_, index) => Math.floor(domain[0]) + index);
     const major = inside(metric === "speed" ? [1, 10, 60, 600, 3600, 36000] : decades.map((decade) => 10 ** decade));
     const minor = inside(metric === "speed" ? TIME_STEPS : decades.flatMap((decade) => [1, 2, 5].map((step) => Number((step * 10 ** decade).toPrecision(12)))));
-    return minor.length <= maxTicks || major.length < 2 ? minor : major;
+    const ticks = minor.length <= maxTicks || major.length < 2 ? minor : major;
+    // narrow bands can miss every round value, so fall through to evenly spaced ticks
+    if (ticks.length) return ticks;
   }
   const rough = (max - min) / Math.max(1, maxTicks - 1);
   const magnitude = 10 ** Math.floor(Math.log10(rough || 1));

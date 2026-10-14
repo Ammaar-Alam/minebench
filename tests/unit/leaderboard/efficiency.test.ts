@@ -76,6 +76,8 @@ assert.deepEqual(getEfficiencyTicks([Math.log10(0.015), Math.log10(60)], "cost",
 assert.deepEqual(getEfficiencyTicks([Math.log10(0.015), Math.log10(60)], "cost", 6, true), [0.1, 1, 10], "dense log ticks fall back to decades");
 assert.deepEqual(getEfficiencyTicks([Math.log10(17), Math.log10(5000)], "speed", 12, true), [30, 60, 120, 300, 600, 900, 1800, 3600], "time ticks land on clock values");
 assert.deepEqual(getEfficiencyTicks([0, 700], "speed", 4), [0, 300, 600]);
+const narrow = getEfficiencyTicks(getEfficiencyAxisDomain([3], true), "cost", 8, true);
+assert.ok(narrow.length > 0 && narrow.every((tick) => tick > 2 && tick < 4), "narrow log bands still get ticks");
 const bounds = { x: 0, y: 0, width: 400, height: 200 };
 const crowded = placeEfficiencyLabels(
   [{ key: "a", x: 100, y: 100, width: 60 }, { key: "b", x: 100, y: 104, width: 60 }, { key: "c", x: 395, y: 100, width: 60 }],
