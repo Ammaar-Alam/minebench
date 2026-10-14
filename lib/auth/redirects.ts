@@ -21,6 +21,13 @@ export function resolveRequestOrigin(input: {
   host?: string | null;
   forwardedProto?: string | null;
 }): string {
+  const host = input.forwardedHost?.trim() || input.host?.trim();
+  // dev stays on the host the browser used even when .env points the site url at production
+  // next dev serves plain http, a tunnel or proxy reports https through x-forwarded-proto
+  if (input.nodeEnv !== "production" && host) {
+    const protocol = input.forwardedProto?.trim() || "http";
+    return new URL(`${protocol}://${host}`).origin;
+  }
   if (input.configuredOrigin?.trim()) {
     return new URL(input.configuredOrigin.trim()).origin;
   }
@@ -30,11 +37,7 @@ export function resolveRequestOrigin(input: {
   if (input.nodeEnv === "production") {
     throw new Error("Missing MINEBENCH_SITE_URL for the authentication redirect");
   }
-
-  const host = input.forwardedHost?.trim() || input.host?.trim();
-  if (!host) throw new Error("Could not determine the authentication origin");
-  const protocol = input.forwardedProto?.trim() || (host.startsWith("localhost") ? "http" : "https");
-  return new URL(`${protocol}://${host}`).origin;
+  throw new Error("Could not determine the authentication origin");
 }
 
 export async function getRequestOrigin(): Promise<string> {
