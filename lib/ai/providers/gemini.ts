@@ -251,6 +251,13 @@ export async function geminiGenerateText(params: {
   let text = "";
   let checkpoint: { token: string; length: number } | undefined;
   let resumesWithoutProgress = 0;
+  // Once checkpoints start, deltas wait for their commit so a resume never shows discarded text
+  let delivered = 0;
+  const deliver = (upTo: number) => {
+    if (upTo <= delivered) return;
+    params.onDelta?.(text.slice(delivered, upTo));
+    delivered = upTo;
+  };
   try {
     for (;;) {
       // Terminal fields can arrive on separate events, so each keeps its last value
@@ -276,8 +283,8 @@ export async function geminiGenerateText(params: {
             if (evt.data === "[DONE]") return;
             const delta = readAnswer(JSON.parse(evt.data) as GeminiGenerateContentResponse);
             text += delta;
-            if (delta) params.onDelta?.(delta);
             commit();
+            deliver(checkpoint ? checkpoint.length : text.length);
           });
         } else {
           text += readAnswer((await res.json()) as GeminiGenerateContentResponse);
@@ -298,6 +305,7 @@ export async function geminiGenerateText(params: {
         if (!text.trim()) {
           throw new Error(`Gemini returned no answer text (finishReason=${finishReason ?? "none"})`);
         }
+        deliver(text.length);
         return { text };
       }
       controller.signal.throwIfAborted();

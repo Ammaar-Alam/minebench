@@ -262,8 +262,9 @@ runProviderConfigTest("gemini family", {}, async (capture) => {
     sse({ candidates: [{ content: { parts: [{ text: build.slice(0, 30) }] }, continuationToken: "checkpoint-1" }] }),
     sse({ candidates: [{ content: { parts: [{ text: "uncommitted" }] } }] }),
   ];
+  const resumedDeltas: string[] = [];
   let resumeRequests = 0;
-  capture.respondWith((request) => {
+  const resumeResponder = (request: { url: string }) => {
     if (!request.url.includes("/models/gemini-4-argon:")) return null;
     if (resumeRequests++ === 0) {
       return new Response(
@@ -283,7 +284,8 @@ runProviderConfigTest("gemini family", {}, async (capture) => {
       ),
       { headers: { "Content-Type": "text/event-stream" } },
     );
-  });
+  };
+  capture.respondWith(resumeResponder);
   const resumed = await runGeneration(capture, {
     modelKey: argon.key,
     maxAttempts: 1,
@@ -291,6 +293,26 @@ runProviderConfigTest("gemini family", {}, async (capture) => {
   });
   capture.respondWith(null);
   assert.equal(resumed.result.rawText, build, "Resumed text should drop output after the checkpoint");
+
+  // Streamed deltas never include text that a resume later discards
+  resumeRequests = 0;
+  droppedChunks.push(
+    sse({ candidates: [{ content: { parts: [{ text: build.slice(0, 30) }] }, continuationToken: "checkpoint-1" }] }),
+    sse({ candidates: [{ content: { parts: [{ text: "uncommitted" }] } }] }),
+  );
+  capture.respondWith(resumeResponder);
+  await geminiGenerateText({
+    modelId: "gemini-4-argon",
+    apiKey: "test-google-key",
+    system: "Return a build.",
+    user: "small tower",
+    maxOutputTokens: 1_048_576,
+    thinkingConfig: { thinkingLevel: "high" },
+    jsonSchema: { type: "object" },
+    onDelta: (delta) => resumedDeltas.push(delta),
+  });
+  capture.respondWith(null);
+  assert.equal(resumedDeltas.join(""), build);
   assert.deepEqual(
     resumed.requests
       .filter((request) => request.url.includes("/models/gemini-4-argon:"))
