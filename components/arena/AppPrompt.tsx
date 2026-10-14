@@ -4,11 +4,13 @@ import Image from "next/image";
 import { useEffect, useState } from "react";
 
 const APP_STORE_URL = "https://apps.apple.com/app/apple-store/id6803704037?pt=127495015&ct=web-arena&mt=8";
-// Safari shows Apple's own banner from the page metadata; other iPhone browsers and in-app views need this card
-const NON_SAFARI = /CriOS|FxiOS|EdgiOS|OPiOS|OPT\/|GSA\/|DuckDuckGo|Instagram|FBAN|FBAV|Twitter|LinkedInApp|Snapchat|musical_ly|BytedanceWebview|Line\//;
+// browsers that copy Safari's version and Safari tokens but never show Apple's banner
+const OTHER_BROWSERS = /CriOS|FxiOS|EdgiOS|OPiOS|OPT\/|GSA\/|DuckDuckGo|Instagram|FBAN|FBAV|Twitter|LinkedInApp|Snapchat|musical_ly|BytedanceWebview|Line\//;
 
+// only Safari shows Apple's banner from the page metadata; every other iPhone browser and web view gets this one
 export function wantsAppPrompt(userAgent: string): boolean {
-  return /iPhone|iPod/.test(userAgent) && NON_SAFARI.test(userAgent);
+  const safari = /Version\/[\d.]+.* Safari\//.test(userAgent) && !OTHER_BROWSERS.test(userAgent);
+  return /iPhone|iPod/.test(userAgent) && !safari;
 }
 
 export function AppPrompt() {
