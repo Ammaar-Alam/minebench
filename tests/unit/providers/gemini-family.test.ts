@@ -432,6 +432,38 @@ runProviderConfigTest("gemini family", {}, async (capture) => {
     [undefined, "checkpoint-1"],
   );
 
+  // Without live deltas, a drop before the first checkpoint resends the original request
+  let restartRequests = 0;
+  capture.respondWith((request) => {
+    if (!request.url.includes("/models/gemini-4-argon:")) return null;
+    if (restartRequests++ === 0) {
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.error(new Error("socket reset"));
+          },
+        }),
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    }
+    return new Response(
+      new TextDecoder().decode(sse({ candidates: [{ content: { parts: [{ text: build }] }, finishReason: "STOP" }] })),
+      { headers: { "Content-Type": "text/event-stream" } },
+    );
+  });
+  const restarted = await runGeneration(capture, {
+    modelKey: argon.key,
+    maxAttempts: 1,
+    providerKeys: { gemini: "test-google-key" },
+  });
+  capture.respondWith(null);
+  assert.equal(restarted.result.rawText, build);
+  const restartBodies = restarted.requests
+    .filter((request) => request.url.includes("/models/gemini-4-argon:"))
+    .map((request) => request.body);
+  assert.equal(restartBodies.length, 2);
+  assert.deepEqual(restartBodies[1], restartBodies[0], "The restart must resend the identical original request");
+
   // An exhausted output budget is terminal instead of buying a fresh full retry
   capture.respondWith((request) =>
     request.url.includes("/models/gemini-4-argon:")

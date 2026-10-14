@@ -258,13 +258,15 @@ export async function geminiGenerateText(params: {
     params.onDelta?.(text.slice(delivered, upTo));
     delivered = upTo;
   };
-  let resumeToken: string | undefined;
+  // The next request to send after the accepted one; no token resends the original request
+  let next: { token?: string } | undefined;
   try {
     for (;;) {
       // Terminal fields can arrive on separate events, so each keeps its last value
       let finishReason: string | undefined;
       let hopToken: string | undefined;
       let continuationToken: string | undefined;
+      let retry = false;
       const readAnswer = (data: GeminiGenerateContentResponse): string => {
         if (data.error) throw new Error(`Gemini error: ${JSON.stringify(data.error)}`);
         const candidate = data.candidates?.[0];
@@ -279,14 +281,16 @@ export async function geminiGenerateText(params: {
       };
 
       try {
-        if (resumeToken) {
+        if (next) {
           controller.signal.throwIfAborted();
           params.onProviderRequest?.();
           res = await providerFetch(url, {
             method: "POST",
             headers: acceptedRequest.headers,
             signal: controller.signal,
-            body: JSON.stringify({ ...acceptedRequest.body, continuationToken: resumeToken }),
+            body: JSON.stringify(
+              next.token ? { ...acceptedRequest.body, continuationToken: next.token } : acceptedRequest.body,
+            ),
           });
           if (!res.ok) throw new Error(`Gemini error ${res.status}: ${await res.text().catch(() => "")}`);
         }
@@ -307,7 +311,7 @@ export async function geminiGenerateText(params: {
         const resumable =
           finishReason === "CONTINUATION" &&
           checkpoint?.length === text.length &&
-          checkpoint.token !== resumeToken;
+          checkpoint.token !== next?.token;
         if ((stream && !finishReason) || (finishReason === "CONTINUATION" && !resumable)) {
           throw new Error(`Gemini stream ended before completion (finishReason=${finishReason ?? "none"})`);
         }
@@ -315,13 +319,16 @@ export async function geminiGenerateText(params: {
       } catch (err) {
         // A transport error after STOP still leaves a finished response
         if (finishReason !== "STOP") {
-          if (!stream || !checkpoint || controller.signal.aborted || ++resumesWithoutProgress > 2) throw err;
-          text = text.slice(0, checkpoint.length);
-          continuationToken = checkpoint.token;
+          // Before the first checkpoint only a caller without live deltas can resend the original request
+          const recoverable = Boolean(checkpoint) || !params.onDelta;
+          if (!stream || !recoverable || controller.signal.aborted || ++resumesWithoutProgress > 2) throw err;
+          text = text.slice(0, checkpoint?.length ?? 0);
+          continuationToken = checkpoint?.token;
+          retry = true;
         }
       }
 
-      if (!continuationToken) {
+      if (!continuationToken && !retry) {
         // The cumulative budget is spent, so a fresh retry would buy the same truncated output
         if (finishReason === "MAX_TOKENS") {
           throw new Error("Gemini response used its full output budget (finishReason=MAX_TOKENS)");
@@ -335,7 +342,7 @@ export async function geminiGenerateText(params: {
         deliver(text.length);
         return { text };
       }
-      resumeToken = continuationToken;
+      next = { token: continuationToken };
     }
   } catch (err) {
     throw geminiRequestError(err);
