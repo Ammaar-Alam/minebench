@@ -27,7 +27,7 @@ function validToolCallJson(): string {
   return JSON.stringify({
     tool: "voxel.exec",
     input: {
-      code: 'box(0, 0, 0, 4, 4, 4, "stone");',
+      code: 'box(0, 0, 0, 8, 8, 8, "stone");',
       gridSize: 64,
       palette: "simple",
       seed: 123,
@@ -85,6 +85,8 @@ runProviderConfigTest(
 
     const originalLookup = dns.lookup;
     const originalHttpsRequest = https.request;
+    const keepAliveCalls: Array<[boolean?, number?]> = [];
+    let failNextSocket = false;
     Object.defineProperty(dns, "lookup", {
       configurable: true,
       value: async () => [{ address: "93.184.216.34", family: 4 }],
@@ -94,7 +96,21 @@ runProviderConfigTest(
       value: ((
         options: RequestOptions,
         callback: (response: IncomingMessage) => void,
-      ) => http.request({ ...options, hostname: "127.0.0.1", family: 4 }, callback)) as typeof https.request,
+      ) => {
+        const request = http.request({ ...options, hostname: "127.0.0.1", family: 4 }, callback);
+        const setSocketKeepAlive = request.setSocketKeepAlive;
+        request.setSocketKeepAlive = (...args) => {
+          assert.equal(request.writableEnded, false, "keepalive must start before waiting for headers");
+          keepAliveCalls.push(args);
+          return setSocketKeepAlive.apply(request, args);
+        };
+        request.once("finish", () => {
+          if (!failNextSocket) return;
+          failNextSocket = false;
+          request.destroy(Object.assign(new Error("read ETIMEDOUT"), { code: "ETIMEDOUT" }));
+        });
+        return request;
+      }) as typeof https.request,
     });
 
     try {
@@ -148,6 +164,7 @@ runProviderConfigTest(
         candidate.url.includes("xai.test"),
       );
       assert.ok(directRequest, "Direct xAI request should be captured");
+      assert.deepEqual(keepAliveCalls, [[true, 30_000]], "silent requests need TCP keepalive");
       assert.equal(directRequest.body.model, "grok-4.6");
       assert.equal(directRequest.body.max_completion_tokens, 496_000);
       assert.equal("max_tokens" in directRequest.body, false);
@@ -280,6 +297,27 @@ runProviderConfigTest(
       assert.equal(grok47DirectRequest.body.reasoning_effort, "xhigh");
       assert.equal("temperature" in grok47DirectRequest.body, false);
       assertStructuredOutput(grok47DirectRequest.body);
+
+      // a dead socket retries without producing a completed response
+      failNextSocket = true;
+      const providerAttempts: number[] = [];
+      const completedAttempts: number[] = [];
+      const recovered = await generateVoxelBuild({
+        modelKey: grok47.key,
+        prompt: "small tower",
+        gridSize: 64,
+        palette: "simple",
+        maxAttempts: 2,
+        enableTools: true,
+        providerKeys: { xai: "test-xai-key" },
+        allowServerKeys: false,
+        onProviderRequest: (attempt) => { providerAttempts.push(attempt); },
+        onRawResponse: (attempt) => { completedAttempts.push(attempt); },
+      });
+      assert.ok(recovered.ok, !recovered.ok ? recovered.error : undefined);
+      assert.deepEqual(providerAttempts, [1, 2]);
+      assert.deepEqual(completedAttempts, [2]);
+      assert.ok(keepAliveCalls.every(([enabled, delay]) => enabled && delay === 30_000));
 
       const grok47OpenRouter = await runGeneration(capture, {
         modelKey: grok47.key,
