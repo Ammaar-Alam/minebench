@@ -870,6 +870,28 @@
       "interruptedRunCount": 0,
       "providerCallTrackingJobCount": 15,
       "completedAttemptTrackingJobCount": 15
+    },
+    "xai_grok_4_7": {
+      "inferenceSampleCount": 15,
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "promptCohortId": "prompts-v1:bd8c28367f8a97f2",
+      "averageJsonSizeBytes": 30987976,
+      "configurationSampleCount": 15,
+      "configurationIsConsistent": true,
+      "outputCapSampleCount": 15,
+      "outputCapIsConsistent": true,
+      "averageInferenceMs": 2728796,
+      "finalizedAttemptCount": 31,
+      "outputCapTokens": 500000,
+      "providerCallCount": 52,
+      "completedAttemptCount": 20,
+      "rejectedResponseCount": 5,
+      "failedAttemptCount": 17,
+      "failedRunCount": 0,
+      "interruptedRunCount": 20,
+      "providerCallTrackingJobCount": 15,
+      "completedAttemptTrackingJobCount": 15
     }
   }
 }
