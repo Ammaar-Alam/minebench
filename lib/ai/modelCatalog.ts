@@ -517,6 +517,15 @@ const CATALOG = [
     forceOpenRouter: true,
   },
   {
+    key: "xai_grok_4_7",
+    slug: "grok-4-7",
+    provider: "xai",
+    modelId: "grok-4.7",
+    displayName: "Grok 4.7",
+    enabled: true,
+    openRouterModelId: "x-ai/grok-4.7",
+  },
+  {
     key: "xai_grok_4_6",
     slug: "grok-4-6",
     provider: "xai",

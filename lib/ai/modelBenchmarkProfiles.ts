@@ -213,6 +213,10 @@ const MODEL_RUN_PARAMETERS = {
   deepseek_v3_2: [
     { label: "Reasoning", value: "Provider default" },
   ],
+  xai_grok_4_7: [
+    { label: "Reasoning effort", value: "XHigh" },
+    { label: "Sampling", value: "Provider default" },
+  ],
   xai_grok_4_6: [
     { label: "Reasoning effort", value: "XHigh" },
     { label: "Sampling", value: "Provider default" },

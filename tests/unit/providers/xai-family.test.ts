@@ -237,6 +237,67 @@ runProviderConfigTest(
       assertStructuredOutput(strictFailureRequests[0].body);
       rejectXaiStructuredOutput = false;
 
+      // Grok 4.7: same ladder as 4.6, context-bounded cap, provider-default sampling
+      const grok47 = assertCatalogEntry({
+        key: "xai_grok_4_7",
+        provider: "xai",
+        modelId: "grok-4.7",
+        displayName: "Grok 4.7",
+        openRouterModelId: "x-ai/grok-4.7",
+        slug: "grok-4-7",
+      });
+      assert.equal(modelRequiresReasoning(grok47.modelId), true);
+      assert.equal(modelRequiresReasoning(grok47.openRouterModelId!), true);
+      assert.deepEqual(xaiReasoningEffortAttempts(grok47.modelId), grok46Ladder);
+      assert.deepEqual(xaiReasoningEffortAttempts(grok47.modelId, "max"), grok46Ladder);
+      assert.deepEqual(
+        openRouterReasoningEffortAttempts(grok47.openRouterModelId!),
+        grok46Ladder,
+      );
+      assert.deepEqual(xaiRequestConfigForModel(grok47.modelId), {
+        maxTokensParameter: "max_completion_tokens",
+        reasoningEffort: "xhigh",
+      });
+      assert.deepEqual(getModelBenchmarkProfile(grok47.key)?.parameters, [
+        { label: "Reasoning effort", value: "XHigh" },
+        { label: "Sampling", value: "Provider default" },
+      ]);
+
+      const grok47Direct = await runGeneration(capture, {
+        modelKey: grok47.key,
+        maxAttempts: 1,
+        enableTools: true,
+        providerKeys: { xai: "test-xai-key" },
+      });
+      assert.equal(grok47Direct.result.providerRoute, "direct");
+      assert.equal(grok47Direct.result.acceptedOutputTokens, 500_000);
+      const grok47DirectRequest = grok47Direct.requests.find((candidate) =>
+        candidate.url.includes("xai.test"),
+      );
+      assert.ok(grok47DirectRequest, "Direct Grok 4.7 request should be captured");
+      assert.equal(grok47DirectRequest.body.model, "grok-4.7");
+      assert.equal(grok47DirectRequest.body.max_completion_tokens, 500_000);
+      assert.equal(grok47DirectRequest.body.reasoning_effort, "xhigh");
+      assert.equal("temperature" in grok47DirectRequest.body, false);
+      assertStructuredOutput(grok47DirectRequest.body);
+
+      const grok47OpenRouter = await runGeneration(capture, {
+        modelKey: grok47.key,
+        maxAttempts: 1,
+        enableTools: true,
+        providerKeys: { openrouter: "test-openrouter-key" },
+      });
+      assert.equal(grok47OpenRouter.result.providerRoute, "openrouter");
+      const grok47OpenRouterRequest = grok47OpenRouter.requests.find((candidate) =>
+        candidate.url.includes("openrouter.test"),
+      );
+      assert.ok(grok47OpenRouterRequest, "OpenRouter Grok 4.7 request should be captured");
+      assert.equal(grok47OpenRouterRequest.body.model, "x-ai/grok-4.7");
+      assert.equal(grok47OpenRouterRequest.body.max_tokens, 500_000);
+      assert.deepEqual(grok47OpenRouterRequest.body.reasoning, { effort: "xhigh" });
+      assert.equal("temperature" in grok47OpenRouterRequest.body, false);
+      assertStructuredOutput(grok47OpenRouterRequest.body);
+
       // Grok 4.5: no xhigh, context-bounded cap, MineBench temperature applies
       chatResponseText = validBuildJson();
       const grok45 = assertCatalogEntry({
