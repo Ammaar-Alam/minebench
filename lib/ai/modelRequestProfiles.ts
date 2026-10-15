@@ -18,7 +18,7 @@ const OUTPUT_CEILINGS: readonly { tokens: number; ids: readonly string[] }[] = [
   { tokens: 1_000_000, ids: ["grok-4.3"] },
   { tokens: 943_718, ids: ["muse-wonder-1.0"] },
   { tokens: 496_000, ids: ["grok-4.6"] },
-  { tokens: 500_000, ids: ["grok-4.5"] },
+  { tokens: 500_000, ids: ["grok-4.7", "grok-4.5"] },
   { tokens: 393_216, ids: ["deepseek-flash"] },
   {
     tokens: 384_000,
@@ -73,6 +73,7 @@ const DEFAULT_SAMPLING_IDS: readonly string[] = [
   "gpt-6-astra",
   "gpt-6-sol",
   "gpt-6-luna",
+  "grok-4.7",
   "grok-4.6",
   "kimi-k3",
   "qwen3.8-max",

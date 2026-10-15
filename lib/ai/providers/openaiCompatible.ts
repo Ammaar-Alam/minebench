@@ -206,6 +206,8 @@ async function postToResolvedApi(params: {
       reject(error);
     });
     params.signal.addEventListener("abort", abort, { once: true });
+    // keep silent reasoning requests alive and detect dead connections
+    req.setSocketKeepAlive(true, 30_000);
     req.write(params.body);
     req.end();
   });

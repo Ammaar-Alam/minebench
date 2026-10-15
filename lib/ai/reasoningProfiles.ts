@@ -132,7 +132,7 @@ const EFFORT_LADDER_RULES: readonly EffortLadderRule[] = [
     ladder: ["xhigh", "high", "medium", "low", "minimal"],
   },
   {
-    ids: ["grok-4.6", "x-ai/grok-4.6"],
+    ids: ["grok-4.7", "x-ai/grok-4.7", "grok-4.6", "x-ai/grok-4.6"],
     ladder: ["xhigh", "high", "medium", "low"],
     aliases: { max: null },
   },
@@ -246,6 +246,8 @@ export function modelRequiresReasoning(modelId: string): boolean {
     normalized === "openai/gpt-6.1-sol-pro" ||
     normalized === "gpt-6-astra" ||
     normalized === "openai/gpt-6-astra-pro" ||
+    normalized === "grok-4.7" ||
+    normalized === "x-ai/grok-4.7" ||
     normalized === "grok-4.6" ||
     normalized === "x-ai/grok-4.6" ||
     normalized === "glm-5.3" ||
@@ -485,6 +487,8 @@ export function xaiReasoningEffortAttempts(
   override?: string,
 ): string[] | undefined {
   const isExplicitEffortModel =
+    modelId === "grok-4.7" ||
+    modelId === "x-ai/grok-4.7" ||
     modelId === "grok-4.6" ||
     modelId === "x-ai/grok-4.6" ||
     modelId === "grok-4.5" ||
@@ -499,7 +503,7 @@ export function openRouterReasoningEffortAttempts(
   override?: string,
 ): string[] | undefined {
   const label = `OpenRouter model ${modelId}`;
-  if (modelId === "x-ai/grok-4.6" || modelId === "x-ai/grok-4.5") {
+  if (modelId === "x-ai/grok-4.7" || modelId === "x-ai/grok-4.6" || modelId === "x-ai/grok-4.5") {
     return xaiReasoningEffortAttempts(modelId, override);
   }
   if (claudeCapabilities(modelId).adaptiveThinking) {

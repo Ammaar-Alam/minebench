@@ -213,6 +213,10 @@ const MODEL_RUN_PARAMETERS = {
   deepseek_v3_2: [
     { label: "Reasoning", value: "Provider default" },
   ],
+  xai_grok_4_7: [
+    { label: "Reasoning effort", value: "XHigh" },
+    { label: "Sampling", value: "Provider default" },
+  ],
   xai_grok_4_6: [
     { label: "Reasoning effort", value: "XHigh" },
     { label: "Sampling", value: "Provider default" },
@@ -347,6 +351,9 @@ export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
 const MODEL_BENCHMARK_METADATA: Partial<
   Record<ModelKey, Omit<ModelBenchmarkProfile, "outputCap" | "parameters">>
 > = {
+  xai_grok_4_7: {
+    totalCost: { usd: 42.40, attemptCount: 20 },
+  },
   gemini_4_argon: {
     totalCost: { usd: 9.12, attemptCount: 16 },
   },
