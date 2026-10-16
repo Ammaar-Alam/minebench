@@ -42,7 +42,7 @@ R_i = 1500 + (\theta_i - \bar{\theta})\frac{400}{\ln 10}
 The observed Fisher information supplies an asymptotic variance for each fitted ability. MineBench reports:
 
 ```math
-SE(R_i) = \frac{400}{\ln 10}\sqrt{\operatorname{Var}(\theta_i)}
+SE(R_i) = \frac{400}{\ln 10}\sqrt{\mathrm{Var}(\theta_i)}
 ```
 
 ```math

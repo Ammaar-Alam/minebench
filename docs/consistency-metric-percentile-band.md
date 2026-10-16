@@ -115,9 +115,9 @@ First estimate prompt-level between-model variance:
 \tau_p^2 =
 \max\left(
 0,
-\operatorname{Var}(\hat{\theta}_{i,p} - \alpha_i)
+\mathrm{Var}(\hat{\theta}_{i,p} - \alpha_i)
 -
-\operatorname{mean}(s_{i,p}^2)
+\mathrm{mean}(s_{i,p}^2)
 \right)
 ```
 
@@ -185,8 +185,8 @@ G_i = U_i - L_i
 The public score is:
 
 ```math
-\operatorname{Consistency}_i =
-\operatorname{clamp}
+\mathrm{Consistency}_i =
+\mathrm{clamp}
 \left(
 100 - G_i - 0.75 \cdot \frac{G_i^2}{100},
 0,
@@ -219,7 +219,7 @@ The strongest alternative was a residual-based metric that asks whether a model 
 For each decisive vote:
 
 ```math
-e_{i,v} = \operatorname{expectedScore}(C_i, C_j)
+e_{i,v} = \mathrm{expectedScore}(C_i, C_j)
 ```
 
 ```math
@@ -235,26 +235,26 @@ For each prompt:
 
 ```math
 \bar{r}_{i,p} =
-\operatorname{mean}_{v \in p}(r_{i,v})
+\mathrm{mean}_{v \in p}(r_{i,v})
 ```
 
 Then:
 
 ```math
-\operatorname{span}_i =
-\operatorname{mean}(\text{top 20\% of } \bar{r}_{i,p})
+\mathrm{span}_i =
+\mathrm{mean}(\text{top 20\% of } \bar{r}_{i,p})
 -
-\operatorname{mean}(\text{bottom 20\% of } \bar{r}_{i,p})
+\mathrm{mean}(\text{bottom 20\% of } \bar{r}_{i,p})
 ```
 
 ```math
 x_i =
-\frac{\min(0.5, \operatorname{span}_i)}{0.5}
+\frac{\min(0.5, \mathrm{span}_i)}{0.5}
 ```
 
 ```math
-\operatorname{Consistency}^{\text{residual}}_i =
-\operatorname{round}\left(100(1 - x_i^2), 1\right)
+\mathrm{Consistency}^{\text{residual}}_i =
+\mathrm{round}\left(100(1 - x_i^2), 1\right)
 ```
 
 This residual metric is valuable as a research diagnostic:
