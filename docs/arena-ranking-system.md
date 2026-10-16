@@ -171,12 +171,12 @@ the existing model publication workflow; no separate chart export is needed.
 
 ## Implementation references
 
-- Rating helpers: `lib/arena/rating.ts`
-- Bradley-Terry fit and leaderboard statistics: `lib/arena/stats.ts`
-- Matchmaking: `app/api/arena/matchup/route.ts`
-- Vote processing: `lib/arena/voteJobs.ts`
-- Eligible prompt universe: `lib/arena/eligibility.ts`
-- Leaderboard API: `app/api/leaderboard/route.ts`
-- Personal ranking: `lib/account/personalRanking.ts`
-- Rank snapshots: `app/api/admin/rank-snapshots/capture/route.ts`
-- Rating replay: `scripts/recompute-elo.ts`
+- Rating helpers: [`lib/arena/rating.ts`](../lib/arena/rating.ts)
+- Bradley-Terry fit and leaderboard statistics: [`lib/arena/stats.ts`](../lib/arena/stats.ts)
+- Matchmaking: [`app/api/arena/matchup/route.ts`](../app/api/arena/matchup/route.ts)
+- Vote processing: [`lib/arena/voteJobs.ts`](../lib/arena/voteJobs.ts)
+- Eligible prompt universe: [`lib/arena/eligibility.ts`](../lib/arena/eligibility.ts)
+- Leaderboard API: [`app/api/leaderboard/route.ts`](../app/api/leaderboard/route.ts)
+- Personal ranking: [`lib/account/personalRanking.ts`](../lib/account/personalRanking.ts)
+- Rank snapshots: [`app/api/admin/rank-snapshots/capture/route.ts`](../app/api/admin/rank-snapshots/capture/route.ts)
+- Rating replay: [`scripts/recompute-elo.ts`](../scripts/recompute-elo.ts)

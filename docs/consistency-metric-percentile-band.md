@@ -265,69 +265,11 @@ This residual metric is valuable as a research diagnostic:
 
 It is not the headline public stat because it answers a different question. A model can underperform its own baseline on a prompt and still be one of the best models in the field on that prompt. The public UI is easier to interpret when the prompt graph and leaderboard consistency both use field-relative prompt strength.
 
-## Historical Validation Snapshot
-
-The current public direction was validated against an April 22, 2026 production snapshot:
-
-- active ranked leaderboard models: `38`,
-- eligible prompts: `15`,
-- baseline public consistency values from `https://minebench.ai/api/leaderboard`,
-- comparison values computed on the same vote cohort used for the metric rollout.
-
-These numbers are historical and will drift as new votes, models, and prompts are added.
-
-| Rank | Model | Previous public score | Prompt-strength tail gap | Delta | Residual alternative | Delta |
-|---:|---|---:|---:|---:|---:|---:|
-| 1 | GPT 5.4 Pro | 87 | 97.2 | +10.2 | 89.0 | +2.0 |
-| 2 | Gemini 3.1 Pro | 80 | 86.2 | +6.2 | 68.0 | -12.0 |
-| 3 | GPT 5.4 | 85 | 88.3 | +3.3 | 82.8 | -2.2 |
-| 4 | Claude 4.7 Opus | 81 | 82.9 | +1.9 | 71.1 | -9.9 |
-| 5 | GPT 5.3 Codex | 77 | 80.7 | +3.7 | 61.3 | -15.7 |
-| 6 | Z.AI GLM 5.1 | 80 | 73.7 | -6.3 | 69.9 | -10.1 |
-| 7 | GPT 5.2 Pro | 74 | 66.2 | -7.8 | 49.8 | -24.2 |
-| 8 | GPT 5.2 | 82 | 82.9 | +0.9 | 76.1 | -5.9 |
-| 9 | Kimi K2.6 | 75 | 50.0 | -25.0 | 48.3 | -26.7 |
-| 10 | Claude 4.6 Opus | 71 | 71.2 | +0.2 | 58.2 | -12.8 |
-| 11 | Gemini 3.0 Pro | 70 | 51.4 | -18.6 | 36.1 | -33.9 |
-| 12 | Claude 4.6 Sonnet | 76 | 62.3 | -13.7 | 54.7 | -21.3 |
-| 13 | Grok 4.20 | 77 | 54.2 | -22.8 | 61.1 | -15.9 |
-| 14 | Claude 4.5 Opus | 79 | 63.6 | -15.4 | 72.3 | -6.7 |
-| 15 | GPT 5.4 Mini | 74 | 51.4 | -22.6 | 51.5 | -22.5 |
-| 16 | GPT 5.4 Nano | 68 | 28.9 | -39.1 | 16.4 | -51.6 |
-| 17 | Gemini 3.0 Flash | 78 | 64.9 | -13.1 | 69.1 | -8.9 |
-| 18 | Qwen 3.5 397B A17B | 67 | 41.2 | -25.8 | 32.8 | -34.2 |
-| 19 | Z.AI GLM 5 | 85 | 74.9 | -10.1 | 85.6 | +0.6 |
-| 20 | Kimi K2.5 | 70 | 44.2 | -25.8 | 42.8 | -27.2 |
-| 21 | Claude 4.5 Sonnet | 76 | 59.7 | -16.3 | 61.3 | -14.7 |
-| 22 | MiniMax M2.7 | 76 | 48.6 | -27.4 | 48.5 | -27.5 |
-| 23 | Gemma 4 31B | 71 | 51.4 | -19.6 | 44.6 | -26.4 |
-| 24 | Z.AI GLM 4.7 | 76 | 57.0 | -19.0 | 61.4 | -14.6 |
-| 25 | GPT 5 Mini | 66 | 47.1 | -18.9 | 29.9 | -36.1 |
-| 26 | GPT 5.2 Codex | 77 | 59.7 | -17.3 | 64.6 | -12.4 |
-| 27 | Gemini 2.5 Pro | 66 | 36.7 | -29.3 | 19.0 | -47.0 |
-| 28 | GPT 4.1 | 72 | 59.7 | -12.3 | 47.7 | -24.3 |
-| 29 | Qwen3 Max Thinking | 70 | 52.8 | -17.2 | 49.6 | -20.4 |
-| 30 | MiniMax M2.5 | 69 | 51.4 | -17.6 | 46.4 | -22.6 |
-| 31 | DeepSeek V3.2 | 80 | 70.0 | -10.0 | 72.7 | -7.3 |
-| 32 | Kimi K2 | 71 | 58.3 | -12.7 | 51.0 | -20.0 |
-| 33 | Gemini 3.1 Flash-Lite | 76 | 63.6 | -12.4 | 58.4 | -17.6 |
-| 34 | Grok 4.1 | 76 | 67.5 | -8.5 | 60.1 | -15.9 |
-| 35 | GPT 4o | 84 | 80.7 | -3.3 | 80.2 | -3.8 |
-| 36 | GPT OSS 120B | 87 | 92.4 | +5.4 | 89.4 | +2.4 |
-| 37 | Llama 4 Maverick | 89 | 90.4 | +1.4 | 91.6 | +2.6 |
-| 38 | GPT 5 Nano | 93 | 95.3 | +2.3 | 96.7 | +3.7 |
-
-The snapshot comparison showed the intended split:
-
-- elite models with strong field-relative prompt results were no longer made to look weak solely because they faced difficult sampled opponents,
-- genuinely uneven models still received materially lower consistency scores,
-- the residual alternative remained useful for analyzing overperformance and underperformance, but not as the clearest public leaderboard stat.
-
 ## References
 
-- Leaderboard aggregation: `lib/arena/stats.ts`
-- Leaderboard API: `app/api/leaderboard/route.ts`
-- Rating expectation helper: `lib/arena/rating.ts`
-- Model detail UI: `components/leaderboard/ModelDetail.tsx`
-- Leaderboard UI: `components/leaderboard/Leaderboard.tsx`
-- Ranking system overview: `docs/arena-ranking-system.md`
+- Leaderboard aggregation: [`lib/arena/stats.ts`](../lib/arena/stats.ts)
+- Leaderboard API: [`app/api/leaderboard/route.ts`](../app/api/leaderboard/route.ts)
+- Rating expectation helper: [`lib/arena/rating.ts`](../lib/arena/rating.ts)
+- Model detail UI: [`components/leaderboard/ModelDetail.tsx`](../components/leaderboard/ModelDetail.tsx)
+- Leaderboard UI: [`components/leaderboard/Leaderboard.tsx`](../components/leaderboard/Leaderboard.tsx)
+- Ranking system overview: [`docs/arena-ranking-system.md`](arena-ranking-system.md)
