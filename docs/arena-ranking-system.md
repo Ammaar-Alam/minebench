@@ -18,42 +18,42 @@ Selected community Gallery prompts are Arena prompts, so their votes enter the f
 
 ## Bradley-Terry model
 
-For latent abilities \(\theta_A\) and \(\theta_B\):
+For latent abilities $`\theta_A`$ and $`\theta_B`$:
 
-\[
+```math
 P(A > B) = \frac{1}{1 + e^{-(\theta_A - \theta_B)}}
-\]
+```
 
 Votes are aggregated by model pair. Each observed edge receives a symmetric prior of `0.5` points per model and `1` total comparison, preventing infinite estimates when one model has no wins or losses on that edge.
 
-With \(\pi_i = e^{\theta_i}\), the iterative update is:
+With $`\pi_i = e^{\theta_i}`$, the iterative update is:
 
-\[
+```math
 \pi_i^{(t+1)} =
 \frac{W_i}{\sum_{j \ne i} \frac{N_{ij}}{\pi_i^{(t)} + \pi_j^{(t)}}}
-\]
+```
 
 The fitted abilities are centered and converted to a 1500-centered, 400-point Elo scale:
 
-\[
+```math
 R_i = 1500 + (\theta_i - \bar{\theta})\frac{400}{\ln 10}
-\]
+```
 
 The observed Fisher information supplies an asymptotic variance for each fitted ability. MineBench reports:
 
-\[
-SE(R_i) = \frac{400}{\ln 10}\sqrt{\operatorname{Var}(\theta_i)}
-\]
+```math
+SE(R_i) = \frac{400}{\ln 10}\sqrt{\mathrm{Var}(\theta_i)}
+```
 
-\[
+```math
 CI_{95}(R_i) = 1.95996 \times SE(R_i)
-\]
+```
 
 The public comparison graph should remain connected. Disconnected components are fit independently and therefore do not have a shared absolute offset.
 
 ## Rank, confidence, and stability
 
-Models are sorted by Bradley-Terry point estimate, with display name as the deterministic tiebreaker. Sorted index \(i\) receives rank \(i + 1\); confidence-interval overlap does not create tied ranks.
+Models are sorted by Bradley-Terry point estimate, with display name as the deterministic tiebreaker. Sorted index $`i`$ receives rank $`i + 1`$; confidence-interval overlap does not create tied ranks.
 
 The displayed confidence indicator is a bounded transformation of interval width:
 
@@ -171,12 +171,12 @@ the existing model publication workflow; no separate chart export is needed.
 
 ## Implementation references
 
-- Rating helpers: `lib/arena/rating.ts`
-- Bradley-Terry fit and leaderboard statistics: `lib/arena/stats.ts`
-- Matchmaking: `app/api/arena/matchup/route.ts`
-- Vote processing: `lib/arena/voteJobs.ts`
-- Eligible prompt universe: `lib/arena/eligibility.ts`
-- Leaderboard API: `app/api/leaderboard/route.ts`
-- Personal ranking: `lib/account/personalRanking.ts`
-- Rank snapshots: `app/api/admin/rank-snapshots/capture/route.ts`
-- Rating replay: `scripts/recompute-elo.ts`
+- Rating helpers: [`lib/arena/rating.ts`](../lib/arena/rating.ts)
+- Bradley-Terry fit and leaderboard statistics: [`lib/arena/stats.ts`](../lib/arena/stats.ts)
+- Matchmaking: [`app/api/arena/matchup/route.ts`](../app/api/arena/matchup/route.ts)
+- Vote processing: [`lib/arena/voteJobs.ts`](../lib/arena/voteJobs.ts)
+- Eligible prompt universe: [`lib/arena/eligibility.ts`](../lib/arena/eligibility.ts)
+- Leaderboard API: [`app/api/leaderboard/route.ts`](../app/api/leaderboard/route.ts)
+- Personal ranking: [`lib/account/personalRanking.ts`](../lib/account/personalRanking.ts)
+- Rank snapshots: [`app/api/admin/rank-snapshots/capture/route.ts`](../app/api/admin/rank-snapshots/capture/route.ts)
+- Rating replay: [`scripts/recompute-elo.ts`](../scripts/recompute-elo.ts)
