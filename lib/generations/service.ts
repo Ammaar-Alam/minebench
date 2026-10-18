@@ -743,7 +743,7 @@ export async function retrySavedGeneration(
       preferOpenRouter: true,
       usesHostedGeneration: true,
       owner: { select: { isMineBenchAdmin: true, deletedAt: true } },
-      jobs: { where: { type: "generate" }, orderBy: { createdAt: "asc" }, take: 1, select: { payload: true } },
+      jobs: { where: { type: "generate" }, orderBy: { createdAt: "asc" }, take: 1, select: { payload: true, priority: true } },
     },
   });
   if (!build) throw new GenerationServiceError("not_found", "Saved generation not found.");
@@ -853,6 +853,8 @@ export async function retrySavedGeneration(
         type: "generate",
         status: "queued",
         maxAttempts: GENERATE_JOB_MAX_ATTEMPTS,
+        // gallery runs stay behind user generations
+        priority: build.jobs[0]?.priority,
         payload: { freshGeneration: !recoveryOnly, ...(serverKeys ? { serverKeys: true } : {}) },
       },
     });

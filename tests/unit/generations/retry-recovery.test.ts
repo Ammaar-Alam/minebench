@@ -7,7 +7,7 @@ const initial = {
   removedAt: null as Date | null, createdAt: now, updatedAt: now, startedAt: now, completedAt: now,
   progress: null, warnings: null, artifacts: [], modelKind: "catalog", modelProvider: "openai",
   modelKey: "openai_gpt_6_astra", modelId: "gpt-6-astra", preferOpenRouter: false, usesHostedGeneration: false,
-  owner: null as { isMineBenchAdmin: boolean; deletedAt: Date | null } | null, jobs: [] as Array<{ payload: unknown }>,
+  owner: null as { isMineBenchAdmin: boolean; deletedAt: Date | null } | null, jobs: [] as Array<{ payload: unknown; priority: number }>,
 };
 let current: Record<string, unknown> = { ...initial };
 let artifactKind: string | undefined;
@@ -97,12 +97,13 @@ async function main() {
     reset("execution_failed", "raw_text_debug");
     Object.assign(current, {
       owner: { isMineBenchAdmin, deletedAt: null },
-      jobs: [{ payload: { serverKeys: true, galleryCandidateId: "gal_retry" } }],
+      jobs: [{ payload: { serverKeys: true, galleryCandidateId: "gal_retry" }, priority: -1 }],
     });
     if (isMineBenchAdmin) {
       assert.equal((await retry({ providerKey: "unused-provider-key" })).status, "queued");
       assert.equal(credentials.length, 0, "gallery retries keep the worker keys");
       assert.deepEqual(jobs[0]!.payload, { freshGeneration: true, serverKeys: true });
+      assert.equal(jobs[0]!.priority, -1, "gallery retries stay behind user generations");
     } else {
       await assert.rejects(retry(), codeIs("missing_provider_key"));
     }
