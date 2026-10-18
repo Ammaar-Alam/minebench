@@ -742,6 +742,8 @@ export async function retrySavedGeneration(
       modelProvider: true,
       preferOpenRouter: true,
       usesHostedGeneration: true,
+      owner: { select: { isMineBenchAdmin: true, deletedAt: true } },
+      jobs: { where: { type: "generate" }, orderBy: { createdAt: "asc" }, take: 1, select: { payload: true, priority: true } },
     },
   });
   if (!build) throw new GenerationServiceError("not_found", "Saved generation not found.");
@@ -757,19 +759,26 @@ export async function retrySavedGeneration(
   if (recoveryOnly && !savedSource) {
     throw new GenerationServiceError("not_retryable", "The saved generation output is no longer available.");
   }
+  const firstPayload = build.jobs[0]?.payload;
+  // gallery runs keep the worker keys they started with
+  const serverKeys = !recoveryOnly &&
+    build.owner?.isMineBenchAdmin === true && !build.owner.deletedAt &&
+    !!firstPayload && typeof firstPayload === "object" && !Array.isArray(firstPayload) &&
+    firstPayload.serverKeys === true;
+  const needsCredential = !recoveryOnly && !serverKeys;
   const provider = retryCredentialProvider(build);
-  const providerKey = recoveryOnly ? undefined : input.providerKey?.trim() || (
+  const providerKey = !needsCredential ? undefined : input.providerKey?.trim() || (
     build.usesHostedGeneration &&
     HOSTED_GEMINI_RETRY_MODEL_KEYS.has(build.modelKey ?? "") &&
     provider === "openrouter"
       ? process.env.MINEBENCH_FREE_OPENROUTER_API_KEY?.trim()
       : undefined
   );
-  if (!recoveryOnly && (!provider || !providerKey)) {
+  if (needsCredential && (!provider || !providerKey)) {
     throw new GenerationServiceError("missing_provider_key", "Reconnect this model in Generate.");
   }
   let requestConfig: SavedGenerationRequestConfig | undefined;
-  if (!recoveryOnly && provider === "custom") {
+  if (needsCredential && provider === "custom") {
     if (!input.customBaseUrl?.trim()) {
       throw new GenerationServiceError("missing_provider_key", "Reconnect this model in Generate.");
     }
@@ -783,7 +792,7 @@ export async function retrySavedGeneration(
     } catch {
       throw new GenerationServiceError("invalid_model", "Check the custom model endpoint.");
     }
-  } else if (!recoveryOnly) {
+  } else if (needsCredential) {
     try {
       requestConfig = normalizeProviderRequestOverrides({
         headers: input.customHeaders,
@@ -844,7 +853,9 @@ export async function retrySavedGeneration(
         type: "generate",
         status: "queued",
         maxAttempts: GENERATE_JOB_MAX_ATTEMPTS,
-        payload: { freshGeneration: !recoveryOnly },
+        // gallery runs stay behind user generations
+        priority: build.jobs[0]?.priority,
+        payload: { freshGeneration: !recoveryOnly, ...(serverKeys ? { serverKeys: true } : {}) },
       },
     });
     const latest = await tx.customBuildEvent.aggregate({
