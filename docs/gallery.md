@@ -53,7 +53,8 @@ Selecting a session loads its full public vote history in pages of 100.
 Flags identify low agreement, repeated rapid voting, one-sided choices, repeated
 matchups, and frequent rejections for manual review. Agreement is the chance a
 person picks the same build as each other person who voted on the same pair, with
-one opinion per person per pair and both-bad votes ignored, the same measure the
+one opinion per person per pair. Both-bad votes, restricted voters' votes, and
+votes cast before a build file was replaced are left out, matching the measure the
 learned judge uses to review voters. People are flagged below 60% across at least
 30 shared pairs; typical agreement is about 75%. Agreement is measured against
 other voters, never the leaderboard. A flag is not evidence of abuse by itself.

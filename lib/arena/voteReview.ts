@@ -84,6 +84,17 @@ async function latestRanks() {
   return { capturedAt: latest?.capturedAt ?? null, ranks: new Map(ranks.map(row => [row.modelId, row.rank])) };
 }
 
+// a build file replaced in place keeps its ID, so votes cast before the replacement judged a different build
+async function buildReplacedAt(): Promise<Array<{ id: string; at: Date }>> {
+  // databases without Supabase storage have no replaced files
+  const [storage] = await prisma.$queryRaw<[{ present: boolean }]>`SELECT to_regclass('storage.objects') IS NOT NULL AS present`;
+  if (!storage.present) return [];
+  return prisma.$queryRaw<Array<{ id: string; at: Date }>>`
+    SELECT b.id, o.updated_at AS at FROM "Build" b
+    JOIN storage.objects o ON o.bucket_id = b."voxelStorageBucket" AND o.name = b."voxelStoragePath"
+    WHERE o.updated_at IS NOT NULL`;
+}
+
 export async function getArenaVoteReview(adminId: string): Promise<VoteReviewData> {
   await requireMineBenchAdmin(adminId);
   const now = new Date();
@@ -91,56 +102,11 @@ export async function getArenaVoteReview(adminId: string): Promise<VoteReviewDat
   const retainedSince = new Date(now.getTime() - PUBLIC_SESSION_RETENTION_MS);
   const ranking = await latestRanks();
   type Summary = Metrics & { sessionId: string; person: string; userId: string | null; lastVoteAt: Date | null; lastVoteId: string | null; ties: number; medianGapSeconds: number | null };
-  const [allRows, blocks, keeps] = await Promise.all([
-    // ponytail: scans every vote, about 4s at 258k votes; precompute per person if the page slows down
-    prisma.$queryRaw<Summary[]>(Prisma.sql`
-      WITH votes AS (
-        SELECT v.id, v."sessionId", v."userId"::text AS "userId", v.choice, v."createdAt",
-          LEAST(m."buildAId", m."buildBId") AS first_build, GREATEST(m."buildAId", m."buildBId") AS second_build,
-          (v.choice = 'A') = (m."buildAId" < m."buildBId") AS picked_first,
-          EXTRACT(EPOCH FROM v."createdAt" - LAG(v."createdAt") OVER (
-            PARTITION BY v."sessionId" ORDER BY v."createdAt", v.id
-          ))::double precision AS gap
-        FROM "Vote" v JOIN "Matchup" m ON m.id = v."matchupId"
-        WHERE v."createdAt" <= (${now}::timestamptz AT TIME ZONE 'UTC') AND m."stealthVariantId" IS NULL
-      ), sessions AS (
-        SELECT "sessionId",
-          (array_agg("userId" ORDER BY "createdAt" DESC, id DESC) FILTER (WHERE "userId" IS NOT NULL))[1] AS "userId",
-          MAX("createdAt") AS "lastVoteAt",
-          (array_agg(id ORDER BY "createdAt" DESC, id DESC))[1] AS "lastVoteId",
-          COUNT(*)::int AS votes,
-          COUNT(*) FILTER (WHERE choice = 'A')::int AS "choiceA",
-          COUNT(*) FILTER (WHERE choice = 'B')::int AS "choiceB",
-          COUNT(*) FILTER (WHERE choice = 'TIE')::int AS ties,
-          COUNT(*) FILTER (WHERE choice = 'BOTH_BAD')::int AS "bothBad",
-          PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY gap) AS "medianGapSeconds",
-          COUNT(*) FILTER (WHERE gap < 2)::int AS "fastVotes",
-          (COUNT(*) - COUNT(DISTINCT (first_build, second_build)))::int AS "repeatVotes"
-        FROM votes GROUP BY "sessionId"
-      ), opinions AS (
-        -- one opinion per person per pair as in the judge's data, the chance they pick the pair's first build
-        SELECT COALESCE(s."userId", v."sessionId") AS person, first_build, second_build,
-          AVG(CASE WHEN choice = 'TIE' THEN 0.5 WHEN picked_first THEN 1 ELSE 0 END)::double precision AS y
-        FROM votes v JOIN sessions s USING ("sessionId") WHERE choice <> 'BOTH_BAD' GROUP BY 1, 2, 3
-      ), pairs AS (
-        SELECT first_build, second_build, SUM(y) AS total, COUNT(*) AS people FROM opinions GROUP BY 1, 2
-      ), agreement AS (
-        -- mean chance of picking the same build as each other person on the same pair
-        SELECT o.person, COUNT(*)::int AS "sharedPairs",
-          AVG(o.y * (p.total - o.y) / (p.people - 1) + (1 - o.y) * (1 - (p.total - o.y) / (p.people - 1))) AS agreement
-        FROM opinions o JOIN pairs p USING (first_build, second_build) WHERE p.people > 1 GROUP BY 1
-      )
-      SELECT s.*, COALESCE(s."userId", s."sessionId") AS person, COALESCE(a."sharedPairs", 0) AS "sharedPairs", a.agreement
-      FROM sessions s LEFT JOIN agreement a ON a.person = COALESCE(s."userId", s."sessionId")
-      -- older sessions can only be flagged with 20 votes or enough shared pairs
-      WHERE s."lastVoteAt" >= (${since}::timestamptz AT TIME ZONE 'UTC') OR s.votes >= 20 OR a."sharedPairs" >= ${MIN_SHARED_PAIRS}
-      ORDER BY s."lastVoteAt" DESC, s."sessionId"
-    `),
+  const [blocks, keeps, replaced] = await Promise.all([
     prisma.galleryVoteBlock.findMany({ where: { reversedAt: null }, select: { userId: true, sessionHash: true, ipHmac: true } }),
     prisma.arenaVoteReviewKeep.findMany({ select: { person: true } }),
+    buildReplacedAt(),
   ]);
-  // flags cover all history while unflagged sessions only show for the last 24 hours
-  const rows = allRows.filter(row => row.lastVoteAt! >= since || voteReviewFlags(row).length > 0);
   const kept = new Set(keeps.map(keep => keep.person));
   const ipBlocks = blocks.flatMap(block => block.ipHmac ? [block.ipHmac] : []);
   const blockedSessions = new Set(blocks.flatMap(block => block.sessionHash ? [block.sessionHash] : []));
@@ -149,10 +115,72 @@ export async function getArenaVoteReview(adminId: string): Promise<VoteReviewDat
   const blockedSessionIds = blockedSessions.size ? (await prisma.publicSessionActivity.findMany({
     where: { lastSeenAt: { gte: retainedSince } }, select: { sessionId: true },
   })).filter(session => blockedSessions.has(hashVoteSession(session.sessionId)!)).map(session => session.sessionId) : [];
+  const blockedIpSessionIds = ipBlocks.length ? (await prisma.publicSessionActivity.findMany({
+    where: { ipHmac: { in: ipBlocks } }, select: { sessionId: true },
+  })).map(session => session.sessionId) : [];
+  // ponytail: scans every vote, about 4s at 258k votes; precompute per person if the page slows down
+  const allRows = await prisma.$queryRaw<Summary[]>(Prisma.sql`
+    WITH replaced AS (
+      SELECT * FROM unnest(${replaced.map(row => row.id)}::text[], ${replaced.map(row => row.at.toISOString())}::timestamptz[]) AS r(id, at)
+    ), votes AS (
+      SELECT v.id, v."sessionId", v."userId"::text AS "userId", v.choice, v."createdAt",
+        LEAST(m."buildAId", m."buildBId") AS first_build, GREATEST(m."buildAId", m."buildBId") AS second_build,
+        (v.choice = 'A') = (m."buildAId" < m."buildBId") AS picked_first,
+        -- agreement follows the judge's data, current build versions only and no restricted votes
+        COALESCE(v."createdAt" >= (ra.at AT TIME ZONE 'UTC'), true) AND COALESCE(v."createdAt" >= (rb.at AT TIME ZONE 'UTC'), true)
+          AND v."sessionId" <> ALL(${[...blockedSessionIds, ...blockedIpSessionIds]}::text[])
+          AND COALESCE(v."userId"::text <> ALL(${[...blockedUsers]}::text[]), true) AS comparable,
+        EXTRACT(EPOCH FROM v."createdAt" - LAG(v."createdAt") OVER (
+          PARTITION BY v."sessionId" ORDER BY v."createdAt", v.id
+        ))::double precision AS gap
+      FROM "Vote" v JOIN "Matchup" m ON m.id = v."matchupId"
+      LEFT JOIN replaced ra ON ra.id = m."buildAId"
+      LEFT JOIN replaced rb ON rb.id = m."buildBId"
+      WHERE v."createdAt" <= (${now}::timestamptz AT TIME ZONE 'UTC') AND m."stealthVariantId" IS NULL
+    ), sessions AS (
+      SELECT "sessionId",
+        (array_agg("userId" ORDER BY "createdAt" DESC, id DESC) FILTER (WHERE "userId" IS NOT NULL))[1] AS "userId",
+        MAX("createdAt") AS "lastVoteAt",
+        (array_agg(id ORDER BY "createdAt" DESC, id DESC))[1] AS "lastVoteId",
+        COUNT(*)::int AS votes,
+        COUNT(*) FILTER (WHERE choice = 'A')::int AS "choiceA",
+        COUNT(*) FILTER (WHERE choice = 'B')::int AS "choiceB",
+        COUNT(*) FILTER (WHERE choice = 'TIE')::int AS ties,
+        COUNT(*) FILTER (WHERE choice = 'BOTH_BAD')::int AS "bothBad",
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY gap) AS "medianGapSeconds",
+        COUNT(*) FILTER (WHERE gap < 2)::int AS "fastVotes",
+        (COUNT(*) - COUNT(DISTINCT (first_build, second_build)))::int AS "repeatVotes"
+      FROM votes GROUP BY "sessionId"
+    ), opinions AS (
+      -- one opinion per person per pair as in the judge's data, the chance they pick the pair's first build
+      SELECT COALESCE(s."userId", v."sessionId") AS person, first_build, second_build,
+        AVG(CASE WHEN choice = 'TIE' THEN 0.5 WHEN picked_first THEN 1 ELSE 0 END)::double precision AS y
+      FROM votes v JOIN sessions s USING ("sessionId") WHERE choice <> 'BOTH_BAD' AND comparable GROUP BY 1, 2, 3
+    ), pairs AS (
+      SELECT first_build, second_build, SUM(y) AS total, COUNT(*) AS people FROM opinions GROUP BY 1, 2
+    ), agreement AS (
+      -- mean chance of picking the same build as each other person on the same pair
+      SELECT o.person, COUNT(*)::int AS "sharedPairs",
+        AVG(o.y * (p.total - o.y) / (p.people - 1) + (1 - o.y) * (1 - (p.total - o.y) / (p.people - 1))) AS agreement
+      FROM opinions o JOIN pairs p USING (first_build, second_build) WHERE p.people > 1 GROUP BY 1
+    )
+    SELECT s.*, COALESCE(s."userId", s."sessionId") AS person, COALESCE(a."sharedPairs", 0) AS "sharedPairs", a.agreement
+    FROM sessions s LEFT JOIN agreement a ON a.person = COALESCE(s."userId", s."sessionId")
+    -- older sessions can only be flagged with 20 votes or enough shared pairs
+    WHERE s."lastVoteAt" >= (${since}::timestamptz AT TIME ZONE 'UTC') OR s.votes >= 20 OR a."sharedPairs" >= ${MIN_SHARED_PAIRS}
+    ORDER BY s."lastVoteAt" DESC, s."sessionId"
+  `);
+  // unreviewed flags always show, while kept people and the last 24 hours share the session limit
+  let listed = 0;
+  const rows = allRows.filter(row => {
+    const flagged = voteReviewFlags(row).length > 0;
+    if (flagged && !kept.has(row.person)) return true;
+    return (flagged || row.lastVoteAt! >= since) && listed++ < SESSION_LIMIT;
+  });
 
   const sessions = await prisma.publicSessionActivity.findMany({
     where: { lastSeenAt: { gte: retainedSince }, OR: [
-      { sessionId: { in: [...rows.slice(0, SESSION_LIMIT).map(row => row.sessionId), ...blockedSessionIds] } },
+      { sessionId: { in: [...rows.map(row => row.sessionId), ...blockedSessionIds] } },
       ...(blockedUsers.size ? [{ userId: { in: [...blockedUsers] } }] : []),
       ...(ipBlocks.length ? [{ ipHmac: { in: ipBlocks } }] : []),
     ] },
@@ -168,7 +196,7 @@ export async function getArenaVoteReview(adminId: string): Promise<VoteReviewDat
   const networkCounts = new Map(networks.map(network => [network.ipHmac, network._count._all]));
   const labels = new Map(accounts.map(account => [account.id, account.publicNickname ?? account.email]));
   const blockedIps = new Set(ipBlocks);
-  const summaries = new Map(rows.slice(0, SESSION_LIMIT).map(row => [row.sessionId, row]));
+  const summaries = new Map(rows.map(row => [row.sessionId, row]));
   // keep restricted visitors visible after their votes are removed
   for (const session of sessions) {
     if (!summaries.has(session.sessionId) && (
@@ -183,7 +211,7 @@ export async function getArenaVoteReview(adminId: string): Promise<VoteReviewDat
   }
   return {
     since: since.toISOString(), until: now.toISOString(), rankingAt: ranking.capturedAt?.toISOString() ?? null,
-    truncated: rows.length > SESSION_LIMIT || sessions.length > SESSION_LIMIT,
+    truncated: listed > SESSION_LIMIT || sessions.length > SESSION_LIMIT,
     sessions: [...summaries.values()].map(row => {
       const session = presence.get(row.sessionId);
       const sessionHash = hashVoteSession(row.sessionId)!;

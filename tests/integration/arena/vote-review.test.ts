@@ -92,6 +92,17 @@ async function main() {
     assert.equal((await getArenaVoteReview(adminId)).sessions.find(row => row.sessionId === sessionId)?.kept, true);
     await setArenaVoteReviewKept(adminId, row.person, false);
     assert.equal((await getArenaVoteReview(adminId)).sessions.find(row => row.sessionId === sessionId)?.kept, false);
+    const sharedPairs = async () => (await getArenaVoteReview(adminId)).sessions.find(row => row.sessionId === sessionId)?.sharedPairs;
+    const peerBlock = await db.galleryVoteBlock.create({ data: { sessionHash: hashVoteSession(peerSession), createdById: adminId } });
+    assert.equal(await sharedPairs(), 0, "restricted votes do not count toward anyone's agreement");
+    await db.galleryVoteBlock.delete({ where: { id: peerBlock.id } });
+    assert.equal(await sharedPairs(), 1);
+    // a stand-in for Supabase storage, replacing the second build after this session voted
+    await db.$executeRawUnsafe("CREATE SCHEMA IF NOT EXISTS storage");
+    await db.$executeRawUnsafe("CREATE TABLE IF NOT EXISTS storage.objects (bucket_id text, name text, updated_at timestamptz)");
+    await db.build.update({ where: { id: builds[1].id }, data: { voxelStorageBucket: "review", voxelStoragePath: suffix } });
+    await db.$executeRaw`INSERT INTO storage.objects (bucket_id, name, updated_at) VALUES ('review', ${suffix}, ${new Date(now.getTime() - 1500)})`;
+    assert.equal(await sharedPairs(), 0, "votes on a replaced build version do not count toward agreement");
     assert.equal(review.sessions.find(row => row.sessionId === oldBlockedSession)?.blocked, true);
     assert.equal(review.sessions.find(row => row.sessionId === oldBlockedSession)?.votes, 0);
     const page = await getArenaVotePage(adminId, sessionId);
@@ -123,6 +134,7 @@ async function main() {
     console.log("vote review database checks passed");
   } finally {
     await db.galleryVoteBlock.deleteMany({ where: { createdById: adminId } });
+    await db.$executeRaw`DELETE FROM storage.objects WHERE bucket_id = 'review' AND name = ${suffix}`.catch(() => undefined);
     await db.arenaVoteReviewKeep.deleteMany({ where: { createdById: adminId } });
     await db.galleryModerationRecord.deleteMany({ where: { actorUserId: adminId } });
     await db.publicSessionActivity.deleteMany({ where: { sessionId: { in: [sessionId, peerSession, oldBlockedSession, hashOnlySession, accountOnlySession] } } });
