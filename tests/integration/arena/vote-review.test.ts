@@ -5,7 +5,7 @@ import { PrismaClient } from "@prisma/client";
 async function main() {
   if (!process.env.MINEBENCH_TEST_SCHEMA) return;
   const db = new PrismaClient();
-  const { getArenaVoteReview, getArenaVotePage, setArenaVoteSessionBlocked } = await import("../../../lib/arena/voteReview");
+  const { getArenaVoteReview, getArenaVotePage, setArenaVoteReviewKept, setArenaVoteSessionBlocked } = await import("../../../lib/arena/voteReview");
   const { hashVoteSession } = await import("../../../lib/voteBlock");
   const adminId = randomUUID(), memberId = randomUUID(), suffix = randomUUID();
   const sessionId = `review-${suffix}`, peerSession = `review-peer-${suffix}`;
@@ -21,6 +21,7 @@ async function main() {
     await assert.rejects(() => getArenaVoteReview(memberId), /admin access/);
     await assert.rejects(() => getArenaVotePage(memberId, sessionId), /admin access/);
     await assert.rejects(() => setArenaVoteSessionBlocked(memberId, sessionId, true), /admin access/);
+    await assert.rejects(() => setArenaVoteReviewKept(memberId, sessionId, true), /admin access/);
     const models = await Promise.all(Array.from({ length: 8 }, (_, i) => db.model.create({ data: {
       key: `review-${suffix}-${i}`, provider: "test", modelId: `review-${i}`, displayName: `Review ${i}`,
       rankSnapshots: { create: { capturedAt, rank: i + 1, rankScore: 1500 - i, confidence: 80 } },
@@ -77,14 +78,33 @@ async function main() {
     assert.equal(await db.galleryVoteBlock.count({ where: { sessionHash: hashVoteSession(hashOnlySession), reversedAt: null } }), 0);
 
     const row = review.sessions.find(row => row.sessionId === sessionId)!;
-    assert.equal(row.votes, 21);
-    assert.equal(row.upsets, 11);
-    assert.equal(row.largeUpsets, 11);
+    assert.equal(row.votes, 22, "flags cover votes older than the last 24 hours");
+    assert.equal(row.sharedPairs, 1);
+    // one A and eleven B against a peer who picked A, both-bad votes carry no opinion
+    assert.ok(Math.abs(row.agreement! - 1 / 12) < 1e-9);
     assert.equal(row.matchingSessions, 2);
     assert.equal(row.medianGapSeconds, 1);
-    assert(row.flags.includes("Rapid voting"));
-    assert(row.flags.includes("Repeated ranking upsets"));
-    assert(row.flags.includes("Large ranking upsets"));
+    assert.deepEqual(row.flags, ["Rapid voting", "Frequent rejections", "Repeated matchups"]);
+    assert.equal(row.person, sessionId);
+    assert.equal(row.kept, false);
+    await setArenaVoteReviewKept(adminId, row.person, true);
+    await setArenaVoteReviewKept(adminId, row.person, true);
+    assert.equal((await getArenaVoteReview(adminId)).sessions.find(row => row.sessionId === sessionId)?.kept, true);
+    await setArenaVoteReviewKept(adminId, row.person, false);
+    assert.equal((await getArenaVoteReview(adminId)).sessions.find(row => row.sessionId === sessionId)?.kept, false);
+    const sharedPairs = async () => (await getArenaVoteReview(adminId)).sessions.find(row => row.sessionId === sessionId)?.sharedPairs;
+    // the peer's presence record has expired, so only its votes can identify the restricted session
+    await db.publicSessionActivity.update({ where: { sessionId: peerSession }, data: { lastSeenAt: new Date(0) } });
+    const peerBlock = await db.galleryVoteBlock.create({ data: { sessionHash: hashVoteSession(peerSession), createdById: adminId } });
+    assert.equal(await sharedPairs(), 0, "restricted votes do not count toward anyone's agreement");
+    await db.galleryVoteBlock.delete({ where: { id: peerBlock.id } });
+    assert.equal(await sharedPairs(), 1);
+    // a stand-in for Supabase storage, replacing the second build after this session voted
+    await db.$executeRawUnsafe("CREATE SCHEMA IF NOT EXISTS storage");
+    await db.$executeRawUnsafe("CREATE TABLE IF NOT EXISTS storage.objects (bucket_id text, name text, updated_at timestamptz)");
+    await db.build.update({ where: { id: builds[1].id }, data: { voxelStorageBucket: "review", voxelStoragePath: suffix } });
+    await db.$executeRaw`INSERT INTO storage.objects (bucket_id, name, updated_at) VALUES ('review', ${suffix}, ${new Date(now.getTime() - 1500)})`;
+    assert.equal(await sharedPairs(), 0, "votes on a replaced build version do not count toward agreement");
     assert.equal(review.sessions.find(row => row.sessionId === oldBlockedSession)?.blocked, true);
     assert.equal(review.sessions.find(row => row.sessionId === oldBlockedSession)?.votes, 0);
     const page = await getArenaVotePage(adminId, sessionId);
@@ -102,6 +122,10 @@ async function main() {
     await setArenaVoteSessionBlocked(adminId, sessionId, false);
     assert.equal((await getArenaVoteReview(adminId)).sessions.find(row => row.sessionId === sessionId)?.blocked, false);
     await db.vote.updateMany({ where: { sessionId }, data: { userId: memberId } });
+    await setArenaVoteReviewKept(adminId, sessionId, true);
+    assert.equal((await getArenaVoteReview(adminId)).sessions.find(row => row.sessionId === sessionId)?.kept, true, "keeping a guest who has since signed in keeps the account");
+    await setArenaVoteReviewKept(adminId, sessionId, false);
+    assert.equal(await db.arenaVoteReviewKeep.count({ where: { person: memberId } }), 0);
     await db.publicSessionActivity.update({ where: { sessionId }, data: { userId: memberId } });
     await setArenaVoteSessionBlocked(adminId, sessionId, true);
     assert.equal(await db.galleryVoteBlock.count({ where: { userId: memberId, reversedAt: null } }), 1);
@@ -116,6 +140,8 @@ async function main() {
     console.log("vote review database checks passed");
   } finally {
     await db.galleryVoteBlock.deleteMany({ where: { createdById: adminId } });
+    await db.$executeRaw`DELETE FROM storage.objects WHERE bucket_id = 'review' AND name = ${suffix}`.catch(() => undefined);
+    await db.arenaVoteReviewKeep.deleteMany({ where: { createdById: adminId } });
     await db.galleryModerationRecord.deleteMany({ where: { actorUserId: adminId } });
     await db.publicSessionActivity.deleteMany({ where: { sessionId: { in: [sessionId, peerSession, oldBlockedSession, hashOnlySession, accountOnlySession] } } });
     await db.prompt.deleteMany({ where: { text: `Review ${suffix}` } });

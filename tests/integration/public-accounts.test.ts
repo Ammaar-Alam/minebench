@@ -178,8 +178,15 @@ async function main() {
       data: { matchupId: privateMatchup.id, sessionId, choice: "A" },
     });
 
+    await db.arenaVoteReviewKeep.create({ data: { person: sessionId, createdById: user.id } });
     assert.equal(await claimAnonymousPublicVotes(user.id, sessionId), 1);
     assert.equal(await claimAnonymousPublicVotes(user.id, sessionId), 0);
+    assert.deepEqual(
+      (await db.arenaVoteReviewKeep.findMany({ where: { person: user.id }, select: { createdById: true } })).map((keep) => keep.createdById),
+      [user.id],
+      "a kept guest stays kept as the account that claimed the votes",
+    );
+    await db.arenaVoteReviewKeep.deleteMany({ where: { createdById: user.id } });
     assert.equal((await db.publicSessionActivity.findUniqueOrThrow({ where: { sessionId } })).userId, user.id);
     assert.equal((await db.vote.findUniqueOrThrow({ where: { id: privateVote.id } })).userId, null);
 

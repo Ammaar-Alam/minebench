@@ -83,8 +83,10 @@ async function main() {
     const wRow = review.sessions.find(row => row.sessionId === wSession);
     assert.ok(zRow, "the multi-voter session appears in the review");
     assert.equal(zRow!.label, recentEmail, "label must name the most recent voter, not the lexicographic-max userId");
-    assert.ok(wRow, "the out-of-window session appears in the review");
-    assert.equal(wRow!.label, presenceEmail, "label must fall back to the session's presence user, not an out-of-window voter");
+    assert.equal(zRow!.person, recentId, "keep decisions and agreement use the same voter as the label");
+    assert.ok(wRow, "the session appears in the review");
+    assert.equal(wRow!.label, lexEmail, "label names the latest signed-in voter even when that vote is older than a day");
+    assert.equal(wRow!.person, lexId, "keep decisions target the person the label named");
 
     const zBlock = await setArenaVoteSessionBlocked(adminId, zSession, true);
     assert.equal(zBlock.personId, `user:${recentId}`, "the block targets the user the label named");
@@ -97,15 +99,15 @@ async function main() {
     assert.equal(await db.galleryVoteBlock.count({ where: { userId: recentId, reversedAt: null } }), 1, "re-blocking the same user is idempotent");
 
     const wBlock = await setArenaVoteSessionBlocked(adminId, wSession, true);
-    assert.equal(wBlock.personId, `user:${presenceId}`, "the block targets the in-window presence user, not the stale out-of-window voter");
-    assert.equal(wBlock.label, presenceEmail);
-    assert.equal(await db.galleryVoteBlock.count({ where: { userId: presenceId, reversedAt: null } }), 1);
-    assert.equal(await db.galleryVoteBlock.count({ where: { userId: lexId, reversedAt: null } }), 0, "the out-of-window voter is not the block target");
+    assert.equal(wBlock.personId, `user:${lexId}`, "the block targets the latest signed-in voter the label named");
+    assert.equal(wBlock.label, lexEmail);
+    assert.equal(await db.galleryVoteBlock.count({ where: { userId: lexId, reversedAt: null } }), 1);
+    assert.equal(await db.galleryVoteBlock.count({ where: { userId: presenceId, reversedAt: null } }), 0, "the presence user without signed-in votes is not the block target");
 
     await setArenaVoteSessionBlocked(adminId, zSession, false);
     assert.equal(await db.galleryVoteBlock.count({ where: { userId: recentId, reversedAt: null } }), 0);
     await setArenaVoteSessionBlocked(adminId, wSession, false);
-    assert.equal(await db.galleryVoteBlock.count({ where: { userId: presenceId, reversedAt: null } }), 0);
+    assert.equal(await db.galleryVoteBlock.count({ where: { userId: lexId, reversedAt: null } }), 0);
 
     console.log("vote review block-target alignment checks passed");
   } finally {

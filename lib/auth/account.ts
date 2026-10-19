@@ -147,6 +147,11 @@ export async function claimAnonymousPublicVotes(
       where: { sessionId },
       data: { userId },
     }),
+    // a guest kept in vote review stays kept once their votes belong to the account
+    prisma.$executeRaw`
+      INSERT INTO "ArenaVoteReviewKeep" (person, "createdById", "createdAt")
+      SELECT ${userId}, "createdById", "createdAt" FROM "ArenaVoteReviewKeep" WHERE person = ${sessionId}
+      ON CONFLICT (person) DO NOTHING`,
   ]);
   return arena.count + gallery;
 }

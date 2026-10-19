@@ -7,6 +7,9 @@ import { PUBLIC_SESSION_RETENTION_MS } from "@/lib/publicPresence";
 const SESSION_LIMIT = 1000;
 const PAGE_SIZE = 100;
 const VOTE_REVIEW_WINDOW_MS = 24 * 60 * 60 * 1000;
+// same cutoffs as the judge's voter review; two people typically agree about 75% of the time
+const MIN_SHARED_PAIRS = 30;
+const LOW_AGREEMENT = 0.6;
 
 export type VoteReviewSession = {
   sessionId: string;
@@ -22,10 +25,11 @@ export type VoteReviewSession = {
   medianGapSeconds: number | null;
   fastVotes: number;
   repeatVotes: number;
-  rankedVotes: number;
-  upsets: number;
-  largeUpsets: number;
+  sharedPairs: number;
+  agreement: number | null;
   flags: string[];
+  person: string;
+  kept: boolean;
   blocked: boolean;
   networkLabel: string | null;
   matchingSessions: number;
@@ -53,15 +57,14 @@ export type VoteReviewPage = {
   nextCursor: VoteReviewCursor | null;
 };
 
-type Metrics = Pick<VoteReviewSession, "votes" | "choiceA" | "choiceB" | "bothBad" | "fastVotes" | "repeatVotes" | "rankedVotes" | "upsets" | "largeUpsets">;
+type Metrics = Pick<VoteReviewSession, "votes" | "choiceA" | "choiceB" | "bothBad" | "fastVotes" | "repeatVotes" | "sharedPairs" | "agreement">;
 
 export function voteReviewFlags(row: Metrics): string[] {
   const flags: string[] = [];
   const decisive = row.choiceA + row.choiceB;
   if (row.votes >= 20 && row.fastVotes >= (row.votes - 1) / 2) flags.push("Rapid voting");
   if (decisive >= 20 && Math.max(row.choiceA, row.choiceB) / decisive >= 0.9) flags.push("One-sided voting");
-  if (row.rankedVotes >= 10 && row.upsets / row.rankedVotes >= 0.8) flags.push("Repeated ranking upsets");
-  if (row.rankedVotes >= 10 && row.largeUpsets >= 3) flags.push("Large ranking upsets");
+  if (row.sharedPairs >= MIN_SHARED_PAIRS && row.agreement != null && row.agreement < LOW_AGREEMENT) flags.push("Low agreement");
   if (row.votes >= 20 && row.bothBad >= 10 && row.bothBad / row.votes >= 0.4) flags.push("Frequent rejections");
   if (row.votes >= 20 && row.repeatVotes / row.votes >= 0.5) flags.push("Repeated matchups");
   return flags;
@@ -81,33 +84,65 @@ async function latestRanks() {
   return { capturedAt: latest?.capturedAt ?? null, ranks: new Map(ranks.map(row => [row.modelId, row.rank])) };
 }
 
+// a build file replaced in place keeps its ID, so votes cast before the replacement judged a different build
+async function buildReplacedAt(): Promise<Array<{ id: string; at: Date }>> {
+  // databases without Supabase storage have no replaced files
+  const [storage] = await prisma.$queryRaw<[{ present: boolean }]>`SELECT to_regclass('storage.objects') IS NOT NULL AS present`;
+  if (!storage.present) return [];
+  return prisma.$queryRaw<Array<{ id: string; at: Date }>>`
+    SELECT b.id, o.updated_at AS at FROM "Build" b
+    JOIN storage.objects o ON o.bucket_id = b."voxelStorageBucket" AND o.name = b."voxelStoragePath"
+    WHERE o.updated_at IS NOT NULL`;
+}
+
 export async function getArenaVoteReview(adminId: string): Promise<VoteReviewData> {
   await requireMineBenchAdmin(adminId);
   const now = new Date();
   const since = new Date(now.getTime() - VOTE_REVIEW_WINDOW_MS);
   const retainedSince = new Date(now.getTime() - PUBLIC_SESSION_RETENTION_MS);
   const ranking = await latestRanks();
-  type Summary = Metrics & { sessionId: string; userId: string | null; lastVoteAt: Date | null; lastVoteId: string | null; ties: number; medianGapSeconds: number | null };
-  const [rows, blocks] = await Promise.all([
-    prisma.$queryRaw<Summary[]>(Prisma.sql`
-      WITH ranks AS (
-        SELECT "modelId", rank FROM "ModelRankSnapshot" WHERE "capturedAt" = (${ranking.capturedAt}::timestamptz AT TIME ZONE 'UTC')
-      ), votes AS (
-        SELECT v.*, m."buildAId", m."buildBId", a.rank AS rank_a, b.rank AS rank_b,
-          FIRST_VALUE(v.id) OVER (PARTITION BY v."sessionId" ORDER BY v."createdAt" DESC, v.id DESC) AS latest_id,
-          EXTRACT(EPOCH FROM v."createdAt" - LAG(v."createdAt") OVER (
-            PARTITION BY v."sessionId" ORDER BY v."createdAt", v.id
-          ))::double precision AS gap
-        FROM "Vote" v JOIN "Matchup" m ON m.id = v."matchupId"
-        LEFT JOIN ranks a ON a."modelId" = m."modelAId"
-        LEFT JOIN ranks b ON b."modelId" = m."modelBId"
-        WHERE v."createdAt" >= (${since}::timestamptz AT TIME ZONE 'UTC')
-          AND v."createdAt" <= (${now}::timestamptz AT TIME ZONE 'UTC') AND m."stealthVariantId" IS NULL
-      )
+  type Summary = Metrics & { sessionId: string; person: string; userId: string | null; lastVoteAt: Date | null; lastVoteId: string | null; ties: number; medianGapSeconds: number | null };
+  const [blocks, keeps, replaced] = await Promise.all([
+    prisma.galleryVoteBlock.findMany({ where: { reversedAt: null }, select: { userId: true, sessionHash: true, ipHmac: true } }),
+    prisma.arenaVoteReviewKeep.findMany({ select: { person: true } }),
+    buildReplacedAt(),
+  ]);
+  const kept = new Set(keeps.map(keep => keep.person));
+  const ipBlocks = blocks.flatMap(block => block.ipHmac ? [block.ipHmac] : []);
+  const blockedSessions = new Set(blocks.flatMap(block => block.sessionHash ? [block.sessionHash] : []));
+  const blockedUsers = new Set(blocks.flatMap(block => block.userId ? [block.userId] : []));
+  // ponytail: hash every retained and voting session ID until volume warrants an indexed hash
+  const blockedSessionIds = blockedSessions.size ? [...new Set([
+    ...(await prisma.publicSessionActivity.findMany({ where: { lastSeenAt: { gte: retainedSince } }, select: { sessionId: true } })),
+    ...(await prisma.$queryRaw<Array<{ sessionId: string }>>`SELECT DISTINCT "sessionId" FROM "Vote"`),
+  ].map(session => session.sessionId))].filter(sessionId => blockedSessions.has(hashVoteSession(sessionId)!)) : [];
+  const blockedIpSessionIds = ipBlocks.length ? (await prisma.publicSessionActivity.findMany({
+    where: { ipHmac: { in: ipBlocks } }, select: { sessionId: true },
+  })).map(session => session.sessionId) : [];
+  // ponytail: scans every vote, about 4s at 258k votes; precompute per person if the page slows down
+  const allRows = await prisma.$queryRaw<Summary[]>(Prisma.sql`
+    WITH replaced AS (
+      SELECT * FROM unnest(${replaced.map(row => row.id)}::text[], ${replaced.map(row => row.at.toISOString())}::timestamptz[]) AS r(id, at)
+    ), votes AS (
+      SELECT v.id, v."sessionId", v."userId"::text AS "userId", v.choice, v."createdAt",
+        LEAST(m."buildAId", m."buildBId") AS first_build, GREATEST(m."buildAId", m."buildBId") AS second_build,
+        (v.choice = 'A') = (m."buildAId" < m."buildBId") AS picked_first,
+        -- agreement follows the judge's data, current build versions only and no restricted votes
+        COALESCE(v."createdAt" >= (ra.at AT TIME ZONE 'UTC'), true) AND COALESCE(v."createdAt" >= (rb.at AT TIME ZONE 'UTC'), true)
+          AND v."sessionId" <> ALL(${[...blockedSessionIds, ...blockedIpSessionIds]}::text[])
+          AND COALESCE(v."userId"::text <> ALL(${[...blockedUsers]}::text[]), true) AS comparable,
+        EXTRACT(EPOCH FROM v."createdAt" - LAG(v."createdAt") OVER (
+          PARTITION BY v."sessionId" ORDER BY v."createdAt", v.id
+        ))::double precision AS gap
+      FROM "Vote" v JOIN "Matchup" m ON m.id = v."matchupId"
+      LEFT JOIN replaced ra ON ra.id = m."buildAId"
+      LEFT JOIN replaced rb ON rb.id = m."buildBId"
+      WHERE v."createdAt" <= (${now}::timestamptz AT TIME ZONE 'UTC') AND m."stealthVariantId" IS NULL
+    ), sessions AS (
       SELECT "sessionId",
-        (array_agg(("userId"::text) ORDER BY "createdAt" DESC, "id" DESC) FILTER (WHERE "userId" IS NOT NULL))[1] AS "userId",
+        (array_agg("userId" ORDER BY "createdAt" DESC, id DESC) FILTER (WHERE "userId" IS NOT NULL))[1] AS "userId",
         MAX("createdAt") AS "lastVoteAt",
-        MAX(latest_id) AS "lastVoteId",
+        (array_agg(id ORDER BY "createdAt" DESC, id DESC))[1] AS "lastVoteId",
         COUNT(*)::int AS votes,
         COUNT(*) FILTER (WHERE choice = 'A')::int AS "choiceA",
         COUNT(*) FILTER (WHERE choice = 'B')::int AS "choiceB",
@@ -115,28 +150,38 @@ export async function getArenaVoteReview(adminId: string): Promise<VoteReviewDat
         COUNT(*) FILTER (WHERE choice = 'BOTH_BAD')::int AS "bothBad",
         PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY gap) AS "medianGapSeconds",
         COUNT(*) FILTER (WHERE gap < 2)::int AS "fastVotes",
-        (COUNT(*) - COUNT(DISTINCT (LEAST("buildAId", "buildBId"), GREATEST("buildAId", "buildBId"))))::int AS "repeatVotes",
-        COUNT(*) FILTER (WHERE choice IN ('A', 'B') AND rank_a IS NOT NULL AND rank_b IS NOT NULL)::int AS "rankedVotes",
-        COUNT(*) FILTER (WHERE (choice = 'A' AND rank_a > rank_b) OR (choice = 'B' AND rank_b > rank_a))::int AS upsets,
-        COUNT(*) FILTER (WHERE
-          (choice = 'A' AND rank_b <= ${Math.max(1, Math.floor(ranking.ranks.size * 0.15))} AND rank_a > ${ranking.ranks.size / 2}) OR
-          (choice = 'B' AND rank_a <= ${Math.max(1, Math.floor(ranking.ranks.size * 0.15))} AND rank_b > ${ranking.ranks.size / 2})
-        )::int AS "largeUpsets"
-      FROM votes GROUP BY "sessionId" ORDER BY "lastVoteAt" DESC, "sessionId" LIMIT ${SESSION_LIMIT + 1}
-    `),
-    prisma.galleryVoteBlock.findMany({ where: { reversedAt: null }, select: { userId: true, sessionHash: true, ipHmac: true } }),
-  ]);
-  const ipBlocks = blocks.flatMap(block => block.ipHmac ? [block.ipHmac] : []);
-  const blockedSessions = new Set(blocks.flatMap(block => block.sessionHash ? [block.sessionHash] : []));
-  const blockedUsers = new Set(blocks.flatMap(block => block.userId ? [block.userId] : []));
-  // ponytail: scan retained session IDs for hash matches until volume warrants an indexed hash
-  const blockedSessionIds = blockedSessions.size ? (await prisma.publicSessionActivity.findMany({
-    where: { lastSeenAt: { gte: retainedSince } }, select: { sessionId: true },
-  })).filter(session => blockedSessions.has(hashVoteSession(session.sessionId)!)).map(session => session.sessionId) : [];
+        (COUNT(*) - COUNT(DISTINCT (first_build, second_build)))::int AS "repeatVotes"
+      FROM votes GROUP BY "sessionId"
+    ), opinions AS (
+      -- one opinion per person per pair as in the judge's data, the chance they pick the pair's first build
+      SELECT COALESCE(s."userId", v."sessionId") AS person, first_build, second_build,
+        AVG(CASE WHEN choice = 'TIE' THEN 0.5 WHEN picked_first THEN 1 ELSE 0 END)::double precision AS y
+      FROM votes v JOIN sessions s USING ("sessionId") WHERE choice <> 'BOTH_BAD' AND comparable GROUP BY 1, 2, 3
+    ), pairs AS (
+      SELECT first_build, second_build, SUM(y) AS total, COUNT(*) AS people FROM opinions GROUP BY 1, 2
+    ), agreement AS (
+      -- mean chance of picking the same build as each other person on the same pair
+      SELECT o.person, COUNT(*)::int AS "sharedPairs",
+        AVG(o.y * (p.total - o.y) / (p.people - 1) + (1 - o.y) * (1 - (p.total - o.y) / (p.people - 1))) AS agreement
+      FROM opinions o JOIN pairs p USING (first_build, second_build) WHERE p.people > 1 GROUP BY 1
+    )
+    SELECT s.*, COALESCE(s."userId", s."sessionId") AS person, COALESCE(a."sharedPairs", 0) AS "sharedPairs", a.agreement
+    FROM sessions s LEFT JOIN agreement a ON a.person = COALESCE(s."userId", s."sessionId")
+    -- older sessions can only be flagged with 20 votes or enough shared pairs
+    WHERE s."lastVoteAt" >= (${since}::timestamptz AT TIME ZONE 'UTC') OR s.votes >= 20 OR a."sharedPairs" >= ${MIN_SHARED_PAIRS}
+    ORDER BY s."lastVoteAt" DESC, s."sessionId"
+  `);
+  // unreviewed flags always show, while kept people and the last 24 hours share the session limit
+  let listed = 0;
+  const rows = allRows.filter(row => {
+    const flagged = voteReviewFlags(row).length > 0;
+    if (flagged && !kept.has(row.person)) return true;
+    return (flagged || row.lastVoteAt! >= since) && listed++ < SESSION_LIMIT;
+  });
 
   const sessions = await prisma.publicSessionActivity.findMany({
     where: { lastSeenAt: { gte: retainedSince }, OR: [
-      { sessionId: { in: [...rows.slice(0, SESSION_LIMIT).map(row => row.sessionId), ...blockedSessionIds] } },
+      { sessionId: { in: [...rows.map(row => row.sessionId), ...blockedSessionIds] } },
       ...(blockedUsers.size ? [{ userId: { in: [...blockedUsers] } }] : []),
       ...(ipBlocks.length ? [{ ipHmac: { in: ipBlocks } }] : []),
     ] },
@@ -152,7 +197,7 @@ export async function getArenaVoteReview(adminId: string): Promise<VoteReviewDat
   const networkCounts = new Map(networks.map(network => [network.ipHmac, network._count._all]));
   const labels = new Map(accounts.map(account => [account.id, account.publicNickname ?? account.email]));
   const blockedIps = new Set(ipBlocks);
-  const summaries = new Map(rows.slice(0, SESSION_LIMIT).map(row => [row.sessionId, row]));
+  const summaries = new Map(rows.map(row => [row.sessionId, row]));
   // keep restricted visitors visible after their votes are removed
   for (const session of sessions) {
     if (!summaries.has(session.sessionId) && (
@@ -160,14 +205,14 @@ export async function getArenaVoteReview(adminId: string): Promise<VoteReviewDat
       Boolean(session.userId && blockedUsers.has(session.userId)) ||
       Boolean(session.ipHmac && blockedIps.has(session.ipHmac))
     )) {
-      summaries.set(session.sessionId, { sessionId: session.sessionId, userId: session.userId, lastVoteAt: null, lastVoteId: null,
-        votes: 0, choiceA: 0, choiceB: 0, ties: 0, bothBad: 0, medianGapSeconds: null,
-        fastVotes: 0, repeatVotes: 0, rankedVotes: 0, upsets: 0, largeUpsets: 0 });
+      summaries.set(session.sessionId, { sessionId: session.sessionId, person: session.userId ?? session.sessionId, userId: session.userId,
+        lastVoteAt: null, lastVoteId: null, votes: 0, choiceA: 0, choiceB: 0, ties: 0, bothBad: 0, medianGapSeconds: null,
+        fastVotes: 0, repeatVotes: 0, sharedPairs: 0, agreement: null });
     }
   }
   return {
     since: since.toISOString(), until: now.toISOString(), rankingAt: ranking.capturedAt?.toISOString() ?? null,
-    truncated: rows.length > SESSION_LIMIT || sessions.length > SESSION_LIMIT,
+    truncated: listed > SESSION_LIMIT || sessions.length > SESSION_LIMIT,
     sessions: [...summaries.values()].map(row => {
       const session = presence.get(row.sessionId);
       const sessionHash = hashVoteSession(row.sessionId)!;
@@ -180,6 +225,7 @@ export async function getArenaVoteReview(adminId: string): Promise<VoteReviewDat
         matchingSessions: ip ? networkCounts.get(ip) ?? 0 : 0,
         blocked: blockedSessions.has(sessionHash) || Boolean(ip && blockedIps.has(ip)) || Boolean(userId && blockedUsers.has(userId)),
         flags: voteReviewFlags(row),
+        kept: kept.has(row.person),
         reviewedUserId: userId ?? null,
       };
     }),
@@ -214,6 +260,19 @@ export async function getArenaVotePage(adminId: string, sessionId: string, curso
   };
 }
 
+export async function setArenaVoteReviewKept(adminId: string, person: string, keep: boolean): Promise<{ kept: boolean }> {
+  await requireMineBenchAdmin(adminId);
+  checkSession(person);
+  // a guest who signed in since the review loaded is now reviewed as their account
+  const claimed = await prisma.vote.findFirst({
+    where: { sessionId: person, userId: { not: null } }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { userId: true },
+  });
+  const target = claimed?.userId ?? person;
+  if (keep) await prisma.arenaVoteReviewKeep.upsert({ where: { person: target }, create: { person: target, createdById: adminId }, update: {} });
+  else await prisma.arenaVoteReviewKeep.deleteMany({ where: { person: { in: [person, target] } } });
+  return { kept: keep };
+}
+
 export async function setArenaVoteSessionBlocked(
   adminId: string,
   sessionId: string,
@@ -238,9 +297,7 @@ export async function setArenaVoteSessionBlocked(
   const skipLiveResolution = reviewedUserId === null;
   if (!skipLiveResolution) {
     const parsedSince = reviewedSince ? new Date(reviewedSince) : null;
-    const since = parsedSince && Number.isFinite(parsedSince.getTime())
-      ? parsedSince
-      : new Date(Date.now() - VOTE_REVIEW_WINDOW_MS);
+    const since = parsedSince && Number.isFinite(parsedSince.getTime()) ? parsedSince : new Date(0);
     const parsedUntil = reviewedUntil ? new Date(reviewedUntil) : null;
     const until = parsedUntil && Number.isFinite(parsedUntil.getTime()) ? parsedUntil : new Date();
     const vote = await prisma.vote.findFirst({
