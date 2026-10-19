@@ -92,6 +92,7 @@ model User {
   galleryVoteBlocks        GalleryVoteBlock[]        @relation("GalleryVoteBlockSubject")
   galleryVoteBlocksCreated GalleryVoteBlock[]        @relation("GalleryVoteBlockCreator")
   galleryVoteBlocksReversed GalleryVoteBlock[]       @relation("GalleryVoteBlockReverser")
+  arenaVoteReviewKeeps     ArenaVoteReviewKeep[]
   notificationPreference   NotificationPreference?
   pushDevices              PushDevice[]
   notificationDeliveries   NotificationDelivery[]
@@ -973,6 +974,17 @@ model GalleryVoteBlock {
   @@index([ipHmac, reversedAt])
   @@index([createdById, createdAt])
   @@index([reversedById])
+}
+
+// a person an admin reviewed and kept, keyed like the vote review: the account ID, else the session ID
+model ArenaVoteReviewKeep {
+  person      String   @id
+  createdById String   @db.Uuid
+  createdAt   DateTime @default(now())
+
+  createdBy User @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([createdById])
 }
 
 model PublicSessionActivity {

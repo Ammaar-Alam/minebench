@@ -6,7 +6,7 @@ import { publishAdminGeneration } from "@/lib/generations/service";
 import type { ModelKey } from "@/lib/ai/modelCatalog";
 import { planGalleryGenerations, queueGalleryGenerations, type GalleryGenerationRequest } from "@/lib/gallery/communityGeneration";
 import { getCurrentAccount } from "@/lib/auth/account";
-import { getArenaVotePage, getArenaVoteReview, setArenaVoteSessionBlocked } from "@/lib/arena/voteReview";
+import { getArenaVotePage, getArenaVoteReview, setArenaVoteReviewKept, setArenaVoteSessionBlocked } from "@/lib/arena/voteReview";
 import { removePublicArenaVotes } from "@/lib/arena/voteModeration";
 import {
   GalleryServiceError,
@@ -147,6 +147,18 @@ export async function blockArenaReviewSession(sessionId: string, blocked: boolea
     const { label } = await setArenaVoteSessionBlocked(await adminId(), parsed.data.sessionId, parsed.data.blocked, parsed.data.reviewedSince, parsed.data.reviewedUntil, parsed.data.reviewedUserId);
     refreshGalleryAdmin();
     return { ok: true as const, label };
+  } catch (error) {
+    return { ok: false as const, error: actionError(error) };
+  }
+}
+
+export async function keepArenaReviewPerson(person: string, keep: boolean) {
+  const parsed = z.object({ person: sessionSchema, keep: z.boolean() }).safeParse({ person, keep });
+  if (!parsed.success) return { ok: false as const, error: "Invalid review decision." };
+  try {
+    const result = await setArenaVoteReviewKept(await adminId(), parsed.data.person, parsed.data.keep);
+    refreshGalleryAdmin();
+    return { ok: true as const, ...result };
   } catch (error) {
     return { ok: false as const, error: actionError(error) };
   }

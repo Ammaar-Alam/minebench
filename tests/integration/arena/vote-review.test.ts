@@ -5,7 +5,7 @@ import { PrismaClient } from "@prisma/client";
 async function main() {
   if (!process.env.MINEBENCH_TEST_SCHEMA) return;
   const db = new PrismaClient();
-  const { getArenaVoteReview, getArenaVotePage, setArenaVoteSessionBlocked } = await import("../../../lib/arena/voteReview");
+  const { getArenaVoteReview, getArenaVotePage, setArenaVoteReviewKept, setArenaVoteSessionBlocked } = await import("../../../lib/arena/voteReview");
   const { hashVoteSession } = await import("../../../lib/voteBlock");
   const adminId = randomUUID(), memberId = randomUUID(), suffix = randomUUID();
   const sessionId = `review-${suffix}`, peerSession = `review-peer-${suffix}`;
@@ -21,6 +21,7 @@ async function main() {
     await assert.rejects(() => getArenaVoteReview(memberId), /admin access/);
     await assert.rejects(() => getArenaVotePage(memberId, sessionId), /admin access/);
     await assert.rejects(() => setArenaVoteSessionBlocked(memberId, sessionId, true), /admin access/);
+    await assert.rejects(() => setArenaVoteReviewKept(memberId, sessionId, true), /admin access/);
     const models = await Promise.all(Array.from({ length: 8 }, (_, i) => db.model.create({ data: {
       key: `review-${suffix}-${i}`, provider: "test", modelId: `review-${i}`, displayName: `Review ${i}`,
       rankSnapshots: { create: { capturedAt, rank: i + 1, rankScore: 1500 - i, confidence: 80 } },
@@ -77,14 +78,20 @@ async function main() {
     assert.equal(await db.galleryVoteBlock.count({ where: { sessionHash: hashVoteSession(hashOnlySession), reversedAt: null } }), 0);
 
     const row = review.sessions.find(row => row.sessionId === sessionId)!;
-    assert.equal(row.votes, 21);
-    assert.equal(row.upsets, 11);
-    assert.equal(row.largeUpsets, 11);
+    assert.equal(row.votes, 22, "flags cover votes older than the last 24 hours");
+    assert.equal(row.sharedPairs, 1);
+    // one A and eleven B against a peer who picked A, both-bad votes carry no opinion
+    assert.ok(Math.abs(row.agreement! - 1 / 12) < 1e-9);
     assert.equal(row.matchingSessions, 2);
     assert.equal(row.medianGapSeconds, 1);
-    assert(row.flags.includes("Rapid voting"));
-    assert(row.flags.includes("Repeated ranking upsets"));
-    assert(row.flags.includes("Large ranking upsets"));
+    assert.deepEqual(row.flags, ["Rapid voting", "Frequent rejections", "Repeated matchups"]);
+    assert.equal(row.person, sessionId);
+    assert.equal(row.kept, false);
+    await setArenaVoteReviewKept(adminId, row.person, true);
+    await setArenaVoteReviewKept(adminId, row.person, true);
+    assert.equal((await getArenaVoteReview(adminId)).sessions.find(row => row.sessionId === sessionId)?.kept, true);
+    await setArenaVoteReviewKept(adminId, row.person, false);
+    assert.equal((await getArenaVoteReview(adminId)).sessions.find(row => row.sessionId === sessionId)?.kept, false);
     assert.equal(review.sessions.find(row => row.sessionId === oldBlockedSession)?.blocked, true);
     assert.equal(review.sessions.find(row => row.sessionId === oldBlockedSession)?.votes, 0);
     const page = await getArenaVotePage(adminId, sessionId);
@@ -116,6 +123,7 @@ async function main() {
     console.log("vote review database checks passed");
   } finally {
     await db.galleryVoteBlock.deleteMany({ where: { createdById: adminId } });
+    await db.arenaVoteReviewKeep.deleteMany({ where: { createdById: adminId } });
     await db.galleryModerationRecord.deleteMany({ where: { actorUserId: adminId } });
     await db.publicSessionActivity.deleteMany({ where: { sessionId: { in: [sessionId, peerSession, oldBlockedSession, hashOnlySession, accountOnlySession] } } });
     await db.prompt.deleteMany({ where: { text: `Review ${suffix}` } });

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   blockArenaReviewSession,
+  keepArenaReviewPerson,
   loadArenaVotePage,
   loadArenaVoteReview,
   removeArenaReviewVotes,
@@ -42,6 +43,10 @@ function choiceLabel(choice: string): string {
   if (choice === "BOTH_BAD") return "Both bad";
   if (choice === "TIE") return "Tie";
   return choice;
+}
+
+function agreementLabel(session: VoteReviewSession): string {
+  return session.agreement == null ? "No shared pairs" : `${Math.round(session.agreement * 100)}% agreement`;
 }
 
 function rankLabel(rank: number | null): string {
@@ -86,7 +91,7 @@ function sessionMatches(session: VoteReviewSession, query: string): boolean {
 
 function sessionMatchesFilter(session: VoteReviewSession, filter: Filter): boolean {
   if (filter === "restricted") return session.blocked;
-  if (filter === "suspicious") return session.flags.length > 0;
+  if (filter === "suspicious") return session.flags.length > 0 && !session.kept;
   return true;
 }
 
@@ -119,18 +124,16 @@ function SessionRow({
         <span className={`shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium ${
           session.blocked
             ? "border border-danger/35 bg-danger/10 text-danger"
-            : session.flags.length > 0
+            : session.flags.length > 0 && !session.kept
               ? "border border-accent/30 bg-accent/10 text-accent"
               : "border border-border/70 bg-bg/60 text-muted"
         }`}>
-          {session.blocked ? "Restricted" : session.flags.length > 0 ? "Suspicious" : "Clear"}
+          {session.blocked ? "Restricted" : session.kept ? "Kept" : session.flags.length > 0 ? "Suspicious" : "Clear"}
         </span>
       </span>
       <span className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
         <span>{metric(session.votes, "votes")}</span>
-        <span>{metric(session.rankedVotes, "ranked")}</span>
-        <span>{metric(session.upsets, "upsets")}</span>
-        <span>{metric(session.largeUpsets, "large")}</span>
+        <span>{agreementLabel(session)}</span>
         <span>{formatGap(session.medianGapSeconds)}</span>
       </span>
       <span className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
@@ -217,7 +220,7 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
   const [votesLoading, setVotesLoading] = useState(false);
   const [votesError, setVotesError] = useState<string | null>(null);
   const [loadedSessionId, setLoadedSessionId] = useState<string | null>(null);
-  const [pendingAction, setPendingAction] = useState<"remove" | "block" | null>(null);
+  const [pendingAction, setPendingAction] = useState<"remove" | "block" | "keep" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const listRequest = useRef(0);
   const votesRequest = useRef(0);
@@ -300,7 +303,7 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
     const sessions = data?.sessions ?? [];
     return {
       all: sessions.length,
-      suspicious: sessions.filter((session) => session.flags.length > 0).length,
+      suspicious: sessions.filter((session) => sessionMatchesFilter(session, "suspicious")).length,
       restricted: sessions.filter((session) => session.blocked).length,
     };
   }, [data]);
@@ -410,6 +413,24 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
     }
   }
 
+  async function toggleKeep() {
+    if (!selectedSession || busy) return;
+    setPendingAction("keep");
+    setNotice(null);
+    try {
+      const result = await keepArenaReviewPerson(selectedSession.person, !selectedSession.kept);
+      if (!result.ok) {
+        setNotice(result.error);
+        return;
+      }
+      await loadList();
+    } catch {
+      setNotice("Could not save this review.");
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
   return (
     <section className="flex min-h-0 flex-col gap-4 lg:flex-1" aria-labelledby="arena-vote-review-title">
       {notice ? <p role="alert" className="text-sm text-danger">{notice}</p> : null}
@@ -427,7 +448,7 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
           ))}
         </div>
         <div className="flex items-center gap-4">
-          <span className="text-xs text-muted" title={data ? `${formatDate(data.since)} – ${formatDate(data.until)}` : undefined}>Last 24 hours</span>
+          {filter === "all" ? <span className="text-xs text-muted" title={data ? `${formatDate(data.since)} – ${formatDate(data.until)}` : undefined}>Last 24 hours</span> : null}
           <label className="w-48 sm:w-60">
             <span className="sr-only">Search vote sessions</span>
             <input className="mb-field h-10" type="search" placeholder="Search sessions" value={query} onChange={(event) => setQuery(event.target.value)} />
@@ -472,6 +493,11 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
               <button type="button" className="mb-btn mb-btn-danger h-10" disabled={busy || selectedVoteIds.size === 0} onClick={() => void removeSelectedVotes()}>
                 {pendingAction === "remove" ? "Removing..." : selectedVoteIds.size ? `Remove ${selectedVoteIds.size.toLocaleString()}` : "Remove"}
               </button>
+              {selectedSession.flags.length > 0 || selectedSession.kept ? (
+                <button type="button" className="mb-btn h-10" aria-pressed={selectedSession.kept} disabled={busy} onClick={() => void toggleKeep()}>
+                  {pendingAction === "keep" ? "Saving..." : selectedSession.kept ? "Kept" : "Keep"}
+                </button>
+              ) : null}
               {selectedSession ? (
                 <button
                   type="button"
@@ -487,8 +513,8 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
 
           {selectedSession ? (
             <p className="flex flex-wrap gap-x-4 gap-y-1 py-3 text-xs text-muted">
-              <span>{metric(selectedSession.votes, "votes in 24h")}</span>
-              <span>{metric(selectedSession.upsets, "ranking upsets")}</span>
+              <span>{metric(selectedSession.votes, "votes")}</span>
+              <span>{agreementLabel(selectedSession)}</span>
               <span>Median gap {formatGap(selectedSession.medianGapSeconds)}</span>
               <span>{votes.length.toLocaleString()} loaded · {selectedVoteIds.size.toLocaleString()} selected</span>
               {hasNewVotes && !votesError ? <button type="button" className="font-medium text-accent underline underline-offset-4" disabled={busy} onClick={() => selectedSessionId && void loadVotes(selectedSessionId)}>New votes</button> : null}
@@ -518,8 +544,9 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
           <details className="mt-4 text-sm text-muted">
             <summary className="min-h-11 cursor-pointer py-3 text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">Review signals</summary>
             <div className="space-y-3 pb-4 leading-relaxed">
-              {selectedSession ? <p>A {selectedSession.choiceA} · B {selectedSession.choiceB} · Tie {selectedSession.ties} · Both bad {selectedSession.bothBad}. {selectedSession.rankedVotes} ranked votes, {selectedSession.largeUpsets} large upsets, {selectedSession.fastVotes} fast votes, {selectedSession.repeatVotes} repeats.</p> : null}
-              <p>Ranking flags require at least 10 ranked votes: 80% lower-ranked picks, or three wins by bottom-half models against the top 15%. At 20 votes, flags also cover half of gaps below two seconds, 90% same-side decisive choices, 50% repeated matchups, or at least 10 both-bad votes making up 40% of votes.</p>
+              {selectedSession ? <p>A {selectedSession.choiceA} · B {selectedSession.choiceB} · Tie {selectedSession.ties} · Both bad {selectedSession.bothBad}. {selectedSession.sharedPairs} pairs shared with other voters, {selectedSession.fastVotes} fast votes, {selectedSession.repeatVotes} repeats.</p> : null}
+              <p>Low agreement means picking the same build as other voters on the same pair less than 60% of the time across at least 30 shared pairs; most people agree about 75% of the time. At 20 votes, flags also cover half of gaps below two seconds, 90% same-side decisive choices, 50% repeated matchups, or at least 10 both-bad votes making up 40% of votes.</p>
+              <p>Flags cover all history and stay until the person is kept. All adds everyone who voted in the last 24 hours.</p>
               <p>These patterns need review; they do not establish abuse or remove votes automatically. Ranks use the latest snapshot{data?.rankingAt ? ` from ${formatDate(data.rankingAt)}` : ""}.</p>
               <p>IP matches use retained hashes, not raw addresses. Shared IPs may include other visitors. <a className="text-fg underline underline-offset-4" href={PRIVACY_POLICY_URL} target="_blank" rel="noreferrer">Privacy policy</a></p>
             </div>

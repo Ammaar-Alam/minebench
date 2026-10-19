@@ -43,14 +43,22 @@ See [Architecture](./architecture.md) for the data and generation flow.
 
 ## Admin vote review
 
-The Votes view summarizes public Arena sessions over the last 24 hours, with
-Suspicious, All, and Restricted filters, ordered by latest vote. Background refreshes
-update the session list without resetting a review; New votes loads newer history
-on request. Selecting a session loads its full public
-vote history in pages of 100. Flags identify repeated rapid voting, one-sided
-choices, repeated matchups, frequent rejections, and ranking upsets for manual
-review. Ranking comparisons use the latest hourly snapshot, not vote-time ranks;
-a flag is not evidence of abuse by itself.
+The Votes view lists public Arena sessions with Suspicious, All, and Restricted
+filters, ordered by latest vote. Flags are computed over all vote history, so a
+flagged session stays in Suspicious until it is kept; All also includes every
+session that voted in the last 24 hours. Background refreshes update the session
+list without resetting a review; New votes loads newer history on request.
+Selecting a session loads its full public vote history in pages of 100.
+
+Flags identify low agreement, repeated rapid voting, one-sided choices, repeated
+matchups, and frequent rejections for manual review. Agreement is the chance a
+person picks the same build as each other person who voted on the same pair, with
+one opinion per person per pair and both-bad votes ignored, the same measure the
+learned judge uses to review voters. People are flagged below 60% across at least
+30 shared pairs; typical agreement is about 75%. Agreement is measured against
+other voters, never the leaderboard. A flag is not evidence of abuse by itself.
+Keep records the review per person (the account when known, otherwise the
+session) and removes that person from Suspicious.
 
 Admins can remove explicitly selected votes and block the account when known,
 plus its recorded sessions and IPs. Anonymous restrictions use the browser
