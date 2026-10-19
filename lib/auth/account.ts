@@ -149,8 +149,9 @@ export async function claimAnonymousPublicVotes(
     }),
     // a guest kept in vote review stays kept once their votes belong to the account
     prisma.$executeRaw`
-      UPDATE "ArenaVoteReviewKeep" SET person = ${userId}
-      WHERE person = ${sessionId} AND NOT EXISTS (SELECT 1 FROM "ArenaVoteReviewKeep" WHERE person = ${userId})`,
+      INSERT INTO "ArenaVoteReviewKeep" (person, "createdById", "createdAt")
+      SELECT ${userId}, "createdById", "createdAt" FROM "ArenaVoteReviewKeep" WHERE person = ${sessionId}
+      ON CONFLICT (person) DO NOTHING`,
   ]);
   return arena.count + gallery;
 }

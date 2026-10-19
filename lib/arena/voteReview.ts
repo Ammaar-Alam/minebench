@@ -263,8 +263,13 @@ export async function getArenaVotePage(adminId: string, sessionId: string, curso
 export async function setArenaVoteReviewKept(adminId: string, person: string, keep: boolean): Promise<{ kept: boolean }> {
   await requireMineBenchAdmin(adminId);
   checkSession(person);
-  if (keep) await prisma.arenaVoteReviewKeep.upsert({ where: { person }, create: { person, createdById: adminId }, update: {} });
-  else await prisma.arenaVoteReviewKeep.deleteMany({ where: { person } });
+  // a guest who signed in since the review loaded is now reviewed as their account
+  const claimed = await prisma.vote.findFirst({
+    where: { sessionId: person, userId: { not: null } }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { userId: true },
+  });
+  const target = claimed?.userId ?? person;
+  if (keep) await prisma.arenaVoteReviewKeep.upsert({ where: { person: target }, create: { person: target, createdById: adminId }, update: {} });
+  else await prisma.arenaVoteReviewKeep.deleteMany({ where: { person: { in: [person, target] } } });
   return { kept: keep };
 }
 

@@ -122,6 +122,10 @@ async function main() {
     await setArenaVoteSessionBlocked(adminId, sessionId, false);
     assert.equal((await getArenaVoteReview(adminId)).sessions.find(row => row.sessionId === sessionId)?.blocked, false);
     await db.vote.updateMany({ where: { sessionId }, data: { userId: memberId } });
+    await setArenaVoteReviewKept(adminId, sessionId, true);
+    assert.equal((await getArenaVoteReview(adminId)).sessions.find(row => row.sessionId === sessionId)?.kept, true, "keeping a guest who has since signed in keeps the account");
+    await setArenaVoteReviewKept(adminId, sessionId, false);
+    assert.equal(await db.arenaVoteReviewKeep.count({ where: { person: memberId } }), 0);
     await db.publicSessionActivity.update({ where: { sessionId }, data: { userId: memberId } });
     await setArenaVoteSessionBlocked(adminId, sessionId, true);
     assert.equal(await db.galleryVoteBlock.count({ where: { userId: memberId, reversedAt: null } }), 1);

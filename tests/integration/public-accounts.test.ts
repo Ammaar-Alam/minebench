@@ -182,7 +182,7 @@ async function main() {
     assert.equal(await claimAnonymousPublicVotes(user.id, sessionId), 1);
     assert.equal(await claimAnonymousPublicVotes(user.id, sessionId), 0);
     assert.deepEqual(
-      (await db.arenaVoteReviewKeep.findMany({ where: { createdById: user.id }, select: { person: true } })).map((keep) => keep.person),
+      (await db.arenaVoteReviewKeep.findMany({ where: { person: user.id }, select: { createdById: true } })).map((keep) => keep.createdById),
       [user.id],
       "a kept guest stays kept as the account that claimed the votes",
     );
