@@ -6,7 +6,8 @@
  * then the local-only /dev/judge-render page captures eight views around it (every 45
  * degrees from a fixed camera height, starting from the Arena's opening angle) and one
  * from above. Each view is fit to the build as seen from that angle, so a still frame
- * isn't padded for the whole spin. Starts its own next dev server and drives the
+ * isn't padded for the whole spin, and rendered at four times its saved size, then
+ * averaged down in linear light. Starts its own next dev server and drives the
  * installed Chrome headlessly.
  * Re-running skips builds whose images already exist and refuses a changed view protocol;
  * index.jsonl records the commit each build was rendered at.
@@ -28,7 +29,12 @@ import {
 import { LOCAL_BUILD_STORAGE_BUCKET } from "../lib/storage/config";
 
 const PORT = 3217;
-const SIZE = 512; // css px, the export renderer doubles it to 1024
+// Gemma 4 fits each image to 560 tokens of 48 px squares, 23 x 23 for a square view, so 1104 px reaches it unresized
+const OUTPUT_PX = 1104;
+// one sample per pixel leaves moire on blocks about a pixel wide; each saved pixel averages 4 x 4 rendered ones
+const SUPERSAMPLE = 4;
+// css px, which the export renderer doubles
+const CAPTURE_CSS_PX = (OUTPUT_PX * SUPERSAMPLE) / 2;
 // light theme --viewer-bg from app/globals.css
 const BACKGROUND = "hsl(220 20% 97%)";
 // one camera height for every build instead of the arena's height-dependent angle
@@ -108,7 +114,7 @@ async function main() {
   console.log(`${builds.length} builds, ${builds.length - todo.length} already rendered or without payload`);
 
   const commit = execSync("git rev-parse HEAD").toString().trim();
-  const protocol = { sizePx: SIZE * 2, framing: "each view fit to the build", background: BACKGROUND, views: VIEWS };
+  const protocol = { sizePx: OUTPUT_PX, supersample: SUPERSAMPLE, framing: "each view fit to the build", background: BACKGROUND, views: VIEWS };
   const manifestPath = path.join(outDir, "views.json");
   // skipped images were made under the recorded protocol, so a different one must not share the directory;
   // views appended after the recorded ones are fine, since existing images stay as they are
@@ -198,7 +204,8 @@ async function main() {
               buildId: build.id,
               palette: build.palette === "advanced" ? "advanced" : "simple",
               views: missing.map(({ rotationY, elevation }) => ({ rotationY, elevation })),
-              size: SIZE,
+              size: CAPTURE_CSS_PX,
+              downsample: SUPERSAMPLE,
               background: BACKGROUND,
             } as const,
           ),
