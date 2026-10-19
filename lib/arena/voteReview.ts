@@ -111,10 +111,11 @@ export async function getArenaVoteReview(adminId: string): Promise<VoteReviewDat
   const ipBlocks = blocks.flatMap(block => block.ipHmac ? [block.ipHmac] : []);
   const blockedSessions = new Set(blocks.flatMap(block => block.sessionHash ? [block.sessionHash] : []));
   const blockedUsers = new Set(blocks.flatMap(block => block.userId ? [block.userId] : []));
-  // ponytail: scan retained session IDs for hash matches until volume warrants an indexed hash
-  const blockedSessionIds = blockedSessions.size ? (await prisma.publicSessionActivity.findMany({
-    where: { lastSeenAt: { gte: retainedSince } }, select: { sessionId: true },
-  })).filter(session => blockedSessions.has(hashVoteSession(session.sessionId)!)).map(session => session.sessionId) : [];
+  // ponytail: hash every retained and voting session ID until volume warrants an indexed hash
+  const blockedSessionIds = blockedSessions.size ? [...new Set([
+    ...(await prisma.publicSessionActivity.findMany({ where: { lastSeenAt: { gte: retainedSince } }, select: { sessionId: true } })),
+    ...(await prisma.$queryRaw<Array<{ sessionId: string }>>`SELECT DISTINCT "sessionId" FROM "Vote"`),
+  ].map(session => session.sessionId))].filter(sessionId => blockedSessions.has(hashVoteSession(sessionId)!)) : [];
   const blockedIpSessionIds = ipBlocks.length ? (await prisma.publicSessionActivity.findMany({
     where: { ipHmac: { in: ipBlocks } }, select: { sessionId: true },
   })).map(session => session.sessionId) : [];

@@ -93,6 +93,8 @@ async function main() {
     await setArenaVoteReviewKept(adminId, row.person, false);
     assert.equal((await getArenaVoteReview(adminId)).sessions.find(row => row.sessionId === sessionId)?.kept, false);
     const sharedPairs = async () => (await getArenaVoteReview(adminId)).sessions.find(row => row.sessionId === sessionId)?.sharedPairs;
+    // the peer's presence record has expired, so only its votes can identify the restricted session
+    await db.publicSessionActivity.update({ where: { sessionId: peerSession }, data: { lastSeenAt: new Date(0) } });
     const peerBlock = await db.galleryVoteBlock.create({ data: { sessionHash: hashVoteSession(peerSession), createdById: adminId } });
     assert.equal(await sharedPairs(), 0, "restricted votes do not count toward anyone's agreement");
     await db.galleryVoteBlock.delete({ where: { id: peerBlock.id } });

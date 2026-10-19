@@ -10,3 +10,5 @@ CREATE INDEX "ArenaVoteReviewKeep_createdById_idx" ON "ArenaVoteReviewKeep"("cre
 ALTER TABLE "ArenaVoteReviewKeep"
   ADD CONSTRAINT "ArenaVoteReviewKeep_createdById_fkey"
   FOREIGN KEY ("createdById") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+ALTER TABLE "ArenaVoteReviewKeep" ENABLE ROW LEVEL SECURITY;
