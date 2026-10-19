@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { VoxelViewer, type VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { readBuildVariantPayload } from "@/lib/arena/clientBuildResponse";
+import { downsampleLinear } from "@/lib/voxel/downsample";
 import type { RenderableVoxelBuild } from "@/lib/voxel/packedBlocks";
 
 type RenderView = { rotationY: number; elevation?: number };
@@ -11,9 +12,15 @@ type RenderJob = {
   buildId: string;
   palette: "simple" | "advanced";
   views: RenderView[];
+  // css px of each capture, which the export renderer doubles
   size: number;
+  // each saved pixel averages a downsample x downsample block of the capture
+  downsample: number;
   background: string;
 };
+
+// on-screen size only; every capture sets its own
+const STAGE_PX = 512;
 
 type PendingRender = RenderJob & {
   build: RenderableVoxelBuild;
@@ -65,11 +72,12 @@ export function JudgeRenderHarness() {
     const viewer = viewerRef.current;
     if (!job || !viewer) return;
     try {
+      // one canvas for every view, since full-size captures are large
+      const out = document.createElement("canvas");
       const images = job.views.map((view) => {
         const frame = viewer.captureFrame({ ...view, tight: true, width: job.size, height: job.size });
         if (!frame) throw new Error("Viewer returned no frame");
         // captures are transparent so lay them over the viewer stage color
-        const out = document.createElement("canvas");
         out.width = frame.width;
         out.height = frame.height;
         const ctx = out.getContext("2d");
@@ -77,7 +85,15 @@ export function JudgeRenderHarness() {
         ctx.fillStyle = job.background;
         ctx.fillRect(0, 0, out.width, out.height);
         ctx.drawImage(frame, 0, 0);
-        return out.toDataURL("image/png");
+        if (job.downsample === 1) return out.toDataURL("image/png");
+        const pixels = downsampleLinear(ctx.getImageData(0, 0, out.width, out.height).data, out.width, out.height, job.downsample);
+        const small = document.createElement("canvas");
+        small.width = out.width / job.downsample;
+        small.height = out.height / job.downsample;
+        const smallCtx = small.getContext("2d");
+        if (!smallCtx) throw new Error("No 2d context");
+        smallCtx.putImageData(new ImageData(pixels, small.width, small.height), 0, 0);
+        return small.toDataURL("image/png");
       });
       finish({ images });
     } catch (error) {
@@ -86,7 +102,7 @@ export function JudgeRenderHarness() {
   }
 
   return (
-    <div style={{ position: "relative", width: pending?.size ?? 384, height: pending?.size ?? 384 }}>
+    <div style={{ position: "relative", width: STAGE_PX, height: STAGE_PX }}>
       {pending ? (
         <VoxelViewer
           key={pending.buildId}
