@@ -116,6 +116,21 @@ assert.deepEqual(grok47.totalCost, { usd: 42.40, attemptCount: 20 });
 assert.equal(grok47.totalAttempts, 20);
 assert.equal(grok47.buildCount, 15);
 
+const haiku55 = getModelBenchmarkProfile("anthropic_claude_haiku_5_5");
+assert.ok(haiku55, "Claude Haiku 5.5 should have verified benchmark details");
+assert.deepEqual(haiku55.parameters, [
+  { label: "Thinking", value: "Adaptive" },
+  { label: "Reasoning effort", value: "Max" },
+  { label: "Sampling", value: "Provider default" },
+]);
+assert.deepEqual(haiku55.outputCap, { kind: "exact", tokens: 128_000 });
+assert.equal(haiku55.taskBudget, "128,000 tokens");
+assert.deepEqual(haiku55.averageInference, { milliseconds: 301_862 });
+assert.equal(haiku55.averageJsonSizeBytes, 14_095_685);
+assert.deepEqual(haiku55.totalCost, { usd: 0.54, attemptCount: 20 });
+assert.equal(haiku55.totalAttempts, 20);
+assert.equal(haiku55.buildCount, 15);
+
 const gpt56 = getModelBenchmarkProfile("openai_gpt_5_6_sol");
 assert.ok(gpt56, "GPT 5.6 Sol Pro should have verified benchmark details");
 assert.deepEqual(gpt56.parameters, [
