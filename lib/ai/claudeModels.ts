@@ -62,6 +62,13 @@ const CLAUDE_RELEASES: Record<string, ClaudeRelease> = {
     maxOutputTokens: MESSAGES_API_OUTPUT_MAX,
     effortEnvVar: "ANTHROPIC_SONNET_5_5_EFFORT",
   },
+  "haiku-5.5": {
+    taskBudgets: true,
+    effortLadder: FULL_EFFORT_LADDER,
+    defaultSamplingOnly: true,
+    maxOutputTokens: MESSAGES_API_OUTPUT_MAX,
+    effortEnvVar: "ANTHROPIC_HAIKU_5_5_EFFORT",
+  },
   "fable-5.1": {
     taskBudgets: true,
     effortLadder: FULL_EFFORT_LADDER,
@@ -149,7 +156,7 @@ const NO_CAPABILITIES: ClaudeCapabilities = {
 // Matches direct Anthropic IDs (claude-opus-4-8, claude-opus-5) and the
 // vendor-prefixed OpenRouter forms, which reorder the family and may carry a
 // variant suffix (anthropic/claude-opus-4.8, anthropic/claude-4.8-opus:beta)
-const VERSIONED_ID = /(?:^|\/)claude-(opus|sonnet|fable|mythos)-(\d+)(?:[.-](\d+))?(?:[.:-]|$)/;
+const VERSIONED_ID = /(?:^|\/)claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:[.-](\d+))?(?:[.:-]|$)/;
 const FAMILY_SUFFIXED_ID = /(?:^|\/)claude-(\d+)(?:[.-](\d+))?-(opus|sonnet)(?:[.:-]|$)/;
 
 function releaseKey(modelId: string): string | null {

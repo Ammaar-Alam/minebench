@@ -51,7 +51,7 @@ runProviderConfigTest("batch task budget", {
   assert.equal(capture.requests.length, 2);
   assert.notEqual(configurations[0], configurations[1], "different task budgets must have different benchmark fingerprints");
 
-  for (const key of ["anthropic_claude_sonnet_5_5", "anthropic_claude_fable_5_1", "anthropic_claude_fable_5", "anthropic_claude_opus_5", "anthropic_claude_4_8_opus", "anthropic_claude_4_7_opus"] as const) {
+  for (const key of ["anthropic_claude_haiku_5_5", "anthropic_claude_sonnet_5_5", "anthropic_claude_fable_5_1", "anthropic_claude_fable_5", "anthropic_claude_opus_5", "anthropic_claude_4_8_opus", "anthropic_claude_4_7_opus"] as const) {
     assert.ok(getBatchGenerationModel(key, false).customBody);
   }
   for (const key of ["anthropic_claude_sonnet_5", "anthropic_claude_4_6_opus", "anthropic_claude_4_6_sonnet", "anthropic_claude_4_5_opus"] as const) {

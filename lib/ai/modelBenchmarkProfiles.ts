@@ -140,6 +140,11 @@ const MODEL_RUN_PARAMETERS = {
     { label: "Reasoning effort", value: "Max" },
     { label: "Sampling", value: "Provider default" },
   ],
+  anthropic_claude_haiku_5_5: [
+    { label: "Thinking", value: "Adaptive" },
+    { label: "Reasoning effort", value: "Max" },
+    { label: "Sampling", value: "Provider default" },
+  ],
   anthropic_claude_sonnet_5: [
     { label: "Thinking", value: "Adaptive" },
     { label: "Reasoning effort", value: "XHigh" },
@@ -355,6 +360,10 @@ export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
 const MODEL_BENCHMARK_METADATA: Partial<
   Record<ModelKey, Omit<ModelBenchmarkProfile, "outputCap" | "parameters">>
 > = {
+  anthropic_claude_haiku_5_5: {
+    totalCost: { usd: 0.54, attemptCount: 20 },
+    taskBudget: "128,000 tokens",
+  },
   moonshot_kimi_k3_1_pro: {
     totalCost: { usd: 6.24, attemptCount: 16 },
   },
