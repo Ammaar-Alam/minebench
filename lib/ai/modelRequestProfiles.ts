@@ -14,7 +14,7 @@ import { findCatalogEntryById } from "@/lib/ai/modelCatalog";
 // Output ceiling in tokens, keyed by lowercased model ID
 // Raises the request for models accepting more, clamps it for models accepting less
 const OUTPUT_CEILINGS: readonly { tokens: number; ids: readonly string[] }[] = [
-  { tokens: 1_048_576, ids: ["kimi-k3", "gemini-4-argon"] },
+  { tokens: 1_048_576, ids: ["kimi-k3.1-pro", "kimi-k3", "gemini-4-argon"] },
   { tokens: 1_000_000, ids: ["grok-4.3"] },
   { tokens: 943_718, ids: ["muse-wonder-1.0"] },
   { tokens: 496_000, ids: ["grok-4.6"] },
@@ -75,6 +75,7 @@ const DEFAULT_SAMPLING_IDS: readonly string[] = [
   "gpt-6-luna",
   "grok-4.7",
   "grok-4.6",
+  "kimi-k3.1-pro",
   "kimi-k3",
   "qwen3.8-max",
   "gemini-4-argon",

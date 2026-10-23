@@ -3,6 +3,7 @@ import {
   modelRecommendedTopP,
   modelUsesDefaultSampling,
 } from "@/lib/ai/modelRequestProfiles";
+import { isKimiK3Series } from "@/lib/ai/reasoningProfiles";
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { sanitizeGeminiJsonSchema } from "@/lib/ai/providers/gemini";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
@@ -241,7 +242,7 @@ export async function openrouterGenerateText(params: {
     enabled: params.enableReasoning,
     efforts: params.reasoningEffortAttempts,
     maxTokens: params.reasoningMaxTokens,
-    failClosed: params.requireReasoning || params.modelId === "moonshotai/kimi-k3",
+    failClosed: params.requireReasoning || isKimiK3Series(params.modelId),
   });
   let useDefaultVerbosity = Boolean(defaultTextVerbosity(params.modelId));
 

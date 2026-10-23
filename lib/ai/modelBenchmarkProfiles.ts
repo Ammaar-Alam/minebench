@@ -191,6 +191,10 @@ const MODEL_RUN_PARAMETERS = {
   gemini_3_1_flash_lite: GEMINI_HIGH,
   gemini_2_5_pro: [{ label: "Thinking", value: "Dynamic" }],
   gemma_4_31b: GEMINI_HIGH,
+  moonshot_kimi_k3_1_pro: [
+    { label: "Reasoning effort", value: "Max" },
+    { label: "Structured output", value: "Strict" },
+  ],
   moonshot_kimi_k3: [
     { label: "Reasoning effort", value: "Max" },
     { label: "Structured output", value: "Strict" },

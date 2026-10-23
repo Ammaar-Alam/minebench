@@ -11,6 +11,7 @@ import { tokenBudgetCandidates } from "../../../lib/ai/tokenBudgets";
 for (const [direct, routed] of [
   ["gpt-6.1-sol", "openai/gpt-6.1-sol-pro"],
   ["gpt-6-astra", "openai/gpt-6-astra-pro"],
+  ["kimi-k3.1-pro", "moonshotai/kimi-k3.1-pro"],
   ["kimi-k3", "moonshotai/kimi-k3"],
   ["grok-4.7", "x-ai/grok-4.7"],
   ["grok-4.6", "x-ai/grok-4.6"],
@@ -31,6 +32,7 @@ for (const [direct, routed] of [
   );
 }
 
+assert.equal(modelOutputCeiling("kimi-k3.1-pro"), 1_048_576);
 assert.equal(modelOutputCeiling("kimi-k3"), 1_048_576);
 assert.equal(modelOutputCeiling("gemini-4-argon"), 1_048_576);
 assert.equal(modelOutputCeiling("grok-4.3"), 1_000_000);
@@ -61,6 +63,8 @@ assert.equal(modelOutputCeiling("gpt-6-astra"), 128_000);
 assert.equal(modelOutputCeiling("gpt-5-pro"), 272_000);
 assert.equal(modelOutputCeiling("openai/gpt-5.4"), undefined);
 
+assert.equal(modelUsesDefaultSampling("kimi-k3.1-pro"), true);
+assert.equal(modelUsesDefaultSampling("moonshotai/kimi-k3.1-pro"), true);
 assert.equal(modelUsesDefaultSampling("kimi-k3"), true);
 assert.equal(modelUsesDefaultSampling("grok-4.7"), true);
 assert.equal(modelUsesDefaultSampling("x-ai/grok-4.7"), true);
