@@ -27,6 +27,7 @@ import {
   GeminiThinkingConfig,
   geminiThinkingConfigForModel,
   MoonshotThinkingConfig,
+  isKimiK3Series,
   moonshotThinkingConfigForModel,
   metaReasoningEffortAttempts,
   modelRequiresReasoning,
@@ -242,7 +243,7 @@ function providerRequestTraceLine(opts: {
     opts.deepseekThinkingConfig?.type === "enabled"
       ? "n/a"
       : opts.route === "direct" && opts.provider === "moonshot"
-      ? opts.modelId === "kimi-k3"
+      ? isKimiK3Series(opts.modelId)
         ? "default"
         : opts.modelId === "kimi-k2.6" || opts.modelId === "kimi-k2.5"
         ? opts.moonshotThinkingConfig?.type === "disabled"

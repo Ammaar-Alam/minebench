@@ -191,6 +191,10 @@ const MODEL_RUN_PARAMETERS = {
   gemini_3_1_flash_lite: GEMINI_HIGH,
   gemini_2_5_pro: [{ label: "Thinking", value: "Dynamic" }],
   gemma_4_31b: GEMINI_HIGH,
+  moonshot_kimi_k3_1_pro: [
+    { label: "Reasoning effort", value: "Max" },
+    { label: "Structured output", value: "Strict" },
+  ],
   moonshot_kimi_k3: [
     { label: "Reasoning effort", value: "Max" },
     { label: "Structured output", value: "Strict" },
@@ -351,6 +355,9 @@ export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
 const MODEL_BENCHMARK_METADATA: Partial<
   Record<ModelKey, Omit<ModelBenchmarkProfile, "outputCap" | "parameters">>
 > = {
+  moonshot_kimi_k3_1_pro: {
+    totalCost: { usd: 6.24, attemptCount: 16 },
+  },
   xai_grok_4_7: {
     totalCost: { usd: 42.40, attemptCount: 20 },
   },

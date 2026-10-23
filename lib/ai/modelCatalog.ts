@@ -443,6 +443,15 @@ const CATALOG = [
     openRouterModelId: "google/gemma-4-31b-it",
   },
   {
+    key: "moonshot_kimi_k3_1_pro",
+    slug: "kimi-k3-1-pro",
+    provider: "moonshot",
+    modelId: "kimi-k3.1-pro",
+    displayName: "Kimi K3.1 Pro",
+    enabled: true,
+    openRouterModelId: "moonshotai/kimi-k3.1-pro",
+  },
+  {
     key: "moonshot_kimi_k3",
     slug: "kimi-k3",
     provider: "moonshot",

@@ -4,7 +4,7 @@ import {
   withMaxOutputTokens,
 } from "@/lib/ai/providers/shared";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
-import type { MoonshotThinkingConfig } from "@/lib/ai/reasoningProfiles";
+import { isKimiK3Series, type MoonshotThinkingConfig } from "@/lib/ai/reasoningProfiles";
 import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
 import type { CustomRequestBody, CustomRequestHeaders } from "@/lib/ai/customProviderConfig";
 
@@ -31,7 +31,7 @@ function defaultMoonshotTemperature(
   modelId: string,
   thinkingConfig?: MoonshotThinkingConfig,
 ): number | undefined {
-  if (modelId === "kimi-k3") return undefined;
+  if (isKimiK3Series(modelId)) return undefined;
   if (modelId === "kimi-k2.6" || modelId === "kimi-k2.5") {
     return thinkingConfig?.type === "disabled" ? 0.6 : 1.0;
   }
@@ -49,7 +49,7 @@ function buildStructuredResponseFormat(modelId: string, jsonSchema?: Record<stri
     type: "json_schema",
     json_schema: {
       name: "minebench_output",
-      ...(modelId === "kimi-k3" ? { strict: true } : {}),
+      ...(isKimiK3Series(modelId) ? { strict: true } : {}),
       schema: jsonSchema,
     },
   };
