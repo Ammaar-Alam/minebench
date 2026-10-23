@@ -196,6 +196,10 @@ const MODEL_RUN_PARAMETERS = {
   gemini_3_1_flash_lite: GEMINI_HIGH,
   gemini_2_5_pro: [{ label: "Thinking", value: "Dynamic" }],
   gemma_4_31b: GEMINI_HIGH,
+  moonshot_kimi_k3_1_pro: [
+    { label: "Reasoning effort", value: "Max" },
+    { label: "Structured output", value: "Strict" },
+  ],
   moonshot_kimi_k3: [
     { label: "Reasoning effort", value: "Max" },
     { label: "Structured output", value: "Strict" },
@@ -359,6 +363,9 @@ const MODEL_BENCHMARK_METADATA: Partial<
   anthropic_claude_haiku_5_5: {
     totalCost: { usd: 0.54, attemptCount: 20 },
     taskBudget: "128,000 tokens",
+  },
+  moonshot_kimi_k3_1_pro: {
+    totalCost: { usd: 6.24, attemptCount: 16 },
   },
   xai_grok_4_7: {
     totalCost: { usd: 42.40, attemptCount: 20 },

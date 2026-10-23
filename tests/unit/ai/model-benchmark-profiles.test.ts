@@ -131,6 +131,19 @@ assert.deepEqual(haiku55.totalCost, { usd: 0.54, attemptCount: 20 });
 assert.equal(haiku55.totalAttempts, 20);
 assert.equal(haiku55.buildCount, 15);
 
+const kimiK31Pro = getModelBenchmarkProfile("moonshot_kimi_k3_1_pro");
+assert.ok(kimiK31Pro, "Kimi K3.1 Pro should have verified benchmark details");
+assert.deepEqual(kimiK31Pro.parameters, [
+  { label: "Reasoning effort", value: "Max" },
+  { label: "Structured output", value: "Strict" },
+]);
+assert.deepEqual(kimiK31Pro.outputCap, { kind: "exact", tokens: 1_000_000 });
+assert.deepEqual(kimiK31Pro.averageInference, { milliseconds: 661_654 });
+assert.equal(kimiK31Pro.averageJsonSizeBytes, 39_964_193);
+assert.deepEqual(kimiK31Pro.totalCost, { usd: 6.24, attemptCount: 16 });
+assert.equal(kimiK31Pro.totalAttempts, 16);
+assert.equal(kimiK31Pro.buildCount, 15);
+
 const gpt56 = getModelBenchmarkProfile("openai_gpt_5_6_sol");
 assert.ok(gpt56, "GPT 5.6 Sol Pro should have verified benchmark details");
 assert.deepEqual(gpt56.parameters, [

@@ -893,6 +893,28 @@
       "providerCallTrackingJobCount": 15,
       "completedAttemptTrackingJobCount": 15
     },
+    "moonshot_kimi_k3_1_pro": {
+      "inferenceSampleCount": 15,
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "promptCohortId": "prompts-v1:bd8c28367f8a97f2",
+      "averageJsonSizeBytes": 39964193,
+      "configurationSampleCount": 15,
+      "configurationIsConsistent": true,
+      "outputCapSampleCount": 15,
+      "outputCapIsConsistent": true,
+      "averageInferenceMs": 661654,
+      "finalizedAttemptCount": 16,
+      "outputCapTokens": 1000000,
+      "providerCallCount": 32,
+      "completedAttemptCount": 16,
+      "rejectedResponseCount": 1,
+      "failedAttemptCount": 1,
+      "failedRunCount": 0,
+      "interruptedRunCount": 0,
+      "providerCallTrackingJobCount": 15,
+      "completedAttemptTrackingJobCount": 15
+    },
     "anthropic_claude_haiku_5_5": {
       "inferenceSampleCount": 15,
       "expectedBuildCount": 15,

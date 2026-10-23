@@ -18,6 +18,19 @@ export type DeepSeekThinkingConfig = {
   reasoningEffort?: "low" | "high" | "max";
 };
 
+// Kimi K3-series models share one request contract: max effort only, fixed
+// sampling, strict structured output
+const KIMI_K3_SERIES_IDS: readonly string[] = [
+  "kimi-k3.1-pro",
+  "kimi-k3",
+  "moonshotai/kimi-k3.1-pro",
+  "moonshotai/kimi-k3",
+];
+
+export function isKimiK3Series(modelId: string): boolean {
+  return KIMI_K3_SERIES_IDS.includes(modelId);
+}
+
 function normalizeReasoningOverride(value?: string): string | undefined {
   const normalized = value?.trim().toLowerCase();
   return normalized ? normalized : undefined;
@@ -141,7 +154,7 @@ const EFFORT_LADDER_RULES: readonly EffortLadderRule[] = [
     ladder: ["high", "medium", "low"],
     aliases: { max: null, xhigh: null },
   },
-  { ids: ["moonshotai/kimi-k3"], ladder: ["max"] },
+  { ids: ["moonshotai/kimi-k3.1-pro", "moonshotai/kimi-k3"], ladder: ["max"] },
   {
     ids: ["glm-5.3", "z-ai/glm-5.3", "glm-5.3-flash", "z-ai/glm-5.3-flash"],
     ladder: ["max", "high", "low"],
@@ -350,7 +363,7 @@ export function moonshotThinkingConfigForModel(
   override?: string,
 ): MoonshotThinkingConfig | undefined {
   const normalized = normalizeReasoningOverride(override);
-  if (modelId === "kimi-k3") {
+  if (isKimiK3Series(modelId)) {
     if (!normalized || normalized === "default" || normalized === "max") {
       return { reasoningEffort: "max" };
     }
