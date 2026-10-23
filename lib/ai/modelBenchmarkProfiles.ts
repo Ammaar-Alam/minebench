@@ -355,6 +355,9 @@ export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
 const MODEL_BENCHMARK_METADATA: Partial<
   Record<ModelKey, Omit<ModelBenchmarkProfile, "outputCap" | "parameters">>
 > = {
+  moonshot_kimi_k3_1_pro: {
+    totalCost: { usd: 6.24, attemptCount: 16 },
+  },
   xai_grok_4_7: {
     totalCost: { usd: 42.40, attemptCount: 20 },
   },
