@@ -27,6 +27,7 @@ assert.equal(claudeCapabilities("claude-sonnet-4-6").defaultSamplingOnly, false)
 assert.equal(claudeCapabilities("claude-opus-4-7").defaultSamplingOnly, true);
 assert.equal(claudeCapabilities("claude-sonnet-5").defaultSamplingOnly, true);
 assert.equal(claudeCapabilities("claude-sonnet-5-5").defaultSamplingOnly, true);
+assert.equal(claudeCapabilities("claude-haiku-5-5").defaultSamplingOnly, true);
 
 // Only 4.5 still requests an explicit thinking budget
 assert.equal(claudeCapabilities("claude-opus-4-5").legacyManualThinking, true);
@@ -42,6 +43,8 @@ assert.equal(claudeCapabilities("claude-opus-5").maxOutputTokens, 128_000);
 assert.equal(claudeCapabilities("claude-fable-5").maxOutputTokens, 128_000);
 assert.equal(claudeCapabilities("claude-sonnet-5-5").maxOutputTokens, 128_000);
 assert.equal(claudeCapabilities("claude-sonnet-5-5").taskBudgets, true);
+assert.equal(claudeCapabilities("claude-haiku-5-5").maxOutputTokens, 128_000);
+assert.equal(claudeCapabilities("claude-haiku-5-5").taskBudgets, true);
 assert.equal(claudeCapabilities("claude-sonnet-5").taskBudgets, false);
 assert.equal(claudeCapabilities("claude-opus-4-6").maxOutputTokens, null);
 
@@ -63,7 +66,7 @@ const NOTHING_SUPPORTED = {
 // An undeclared Claude release must not inherit its predecessor's capabilities.
 // A future model may change its output cap or effort levels, so it resolves to
 // nothing until someone reads the model card and declares it.
-for (const modelId of ["claude-opus-5-1", "claude-opus-6", "claude-sonnet-5-1", "claude-sonnet-5-6"]) {
+for (const modelId of ["claude-opus-5-1", "claude-opus-6", "claude-sonnet-5-1", "claude-sonnet-5-6", "claude-haiku-5", "claude-haiku-4-5"]) {
   assert.deepEqual(
     claudeCapabilities(modelId),
     NOTHING_SUPPORTED,
@@ -88,6 +91,7 @@ for (const [direct, ...routed] of [
   ],
   ["claude-opus-5", "anthropic/claude-opus-5"],
   ["claude-sonnet-4-6", "anthropic/claude-sonnet-4.6"],
+  ["claude-haiku-5-5", "anthropic/claude-haiku-5.5", "anthropic/claude-haiku-5.5-20261007"],
 ] as const) {
   for (const routedId of routed) {
     assert.deepEqual(

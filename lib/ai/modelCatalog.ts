@@ -272,6 +272,15 @@ const CATALOG = [
     openRouterModelId: "anthropic/claude-sonnet-5.5",
   },
   {
+    key: "anthropic_claude_haiku_5_5",
+    slug: "haiku-5-5",
+    provider: "anthropic",
+    modelId: "claude-haiku-5-5",
+    displayName: "Claude Haiku 5.5",
+    enabled: true,
+    openRouterModelId: "anthropic/claude-haiku-5.5",
+  },
+  {
     key: "anthropic_claude_sonnet_5",
     slug: "sonnet-5",
     provider: "anthropic",

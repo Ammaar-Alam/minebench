@@ -29,6 +29,14 @@ const EXPECTATIONS: ExpectedCatalogEntry[] = [
     slug: "sonnet-5-5",
   },
   {
+    key: "anthropic_claude_haiku_5_5",
+    provider: "anthropic",
+    modelId: "claude-haiku-5-5",
+    displayName: "Claude Haiku 5.5",
+    openRouterModelId: "anthropic/claude-haiku-5.5",
+    slug: "haiku-5-5",
+  },
+  {
     key: "anthropic_claude_opus_5_5",
     provider: "anthropic",
     modelId: "claude-opus-5-5",
@@ -122,6 +130,7 @@ runProviderConfigTest(
     ANTHROPIC_FABLE_5_1_EFFORT: "max",
     ANTHROPIC_OPUS_5_5_EFFORT: "max",
     ANTHROPIC_SONNET_5_5_EFFORT: "max",
+    ANTHROPIC_HAIKU_5_5_EFFORT: "max",
     ANTHROPIC_OPUS_5_EFFORT: "max",
     ANTHROPIC_SONNET_5_EFFORT: "max",
   },
