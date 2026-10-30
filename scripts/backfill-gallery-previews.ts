@@ -22,7 +22,7 @@ const dryRun = process.argv.includes("--dry-run");
 const limitArg = process.argv.find((arg) => arg.startsWith("--limit="));
 const limit = limitArg ? Number.parseInt(limitArg.slice("--limit=".length), 10) : undefined;
 const descriptor = getCustomBuildArtifactDescriptor("preview_image");
-// old svg objects whose delete failed after their row moved to png, retried at the start of each run
+// objects to remove once nothing references them, kept until their delete succeeds
 // keyed by storage project because alpha shares bucket names and paths with production
 const PENDING_CLEANUP_PATH = `gallery-preview-cleanup-${new URL(getSupabaseStorageConfig().url).hostname}.json`;
 
@@ -37,11 +37,12 @@ function writePendingCleanup(objects: StoredObject[]) {
   else fs.rmSync(PENDING_CLEANUP_PATH, { force: true });
 }
 
-async function deleteOrKeep(objects: StoredObject[]): Promise<StoredObject[]> {
+// returns the objects that still need another attempt
+async function cleanUp(prisma: PrismaClient, objects: StoredObject[]): Promise<StoredObject[]> {
   const remaining: StoredObject[] = [];
   for (const object of objects) {
     try {
-      await deleteCustomBuildArtifact(object);
+      if (await prisma.customBuildArtifact.count({ where: object }) === 0) await deleteCustomBuildArtifact(object);
     } catch (error) {
       console.error(`delete of ${object.path} failed:`, error instanceof Error ? error.message : error);
       remaining.push(object);
@@ -75,9 +76,15 @@ async function main() {
     let pendingCleanup = readPendingCleanup();
     if (!dryRun && pendingCleanup.length > 0) {
       console.log(`retrying ${pendingCleanup.length} pending deletes`);
-      pendingCleanup = await deleteOrKeep(pendingCleanup);
+      pendingCleanup = await cleanUp(prisma, pendingCleanup);
       writePendingCleanup(pendingCleanup);
     }
+    const settle = async (object: StoredObject) => {
+      pendingCleanup.push(object);
+      writePendingCleanup(pendingCleanup);
+      pendingCleanup = [...pendingCleanup.slice(0, -1), ...(await cleanUp(prisma, [object]))];
+      writePendingCleanup(pendingCleanup);
+    };
     const rows = await prisma.customBuildArtifact.findMany({
       where: {
         kind: "preview_image",
@@ -113,40 +120,41 @@ async function main() {
         }
 
         await uploadCustomBuildArtifact({ bucket: row.bucket, path, bytes, contentType: descriptor.contentType });
-        const recorded = await prisma.$transaction(async (tx) => {
-          const owner = await tx.customBuild.updateMany({
-            where: { id: row.customBuildId, removedAt: null },
-            data: { storedByteSize: { increment: BigInt(bytes.byteLength) - row.storedByteSize } },
+        let recorded: boolean;
+        try {
+          recorded = await prisma.$transaction(async (tx) => {
+            // claims only the version this run read so overlapping runs adjust the total once
+            const claimed = await tx.customBuildArtifact.updateMany({
+              where: { id: row.id, path: row.path, customBuild: { removedAt: null } },
+              data: {
+                format: descriptor.format,
+                contentType: descriptor.contentType,
+                fileName: `${row.customBuild.publicId}-preview.png`,
+                path,
+                sha256,
+                encoding: "identity",
+                byteSize: bytes.byteLength,
+                compressedByteSize: null,
+                storedByteSize: bytes.byteLength,
+              },
+            });
+            if (claimed.count !== 1) return false;
+            await tx.customBuild.update({
+              where: { id: row.customBuildId },
+              data: { storedByteSize: { increment: BigInt(bytes.byteLength) - row.storedByteSize } },
+            });
+            return true;
           });
-          if (owner.count !== 1) return false;
-          await tx.customBuildArtifact.update({
-            where: { id: row.id },
-            data: {
-              format: descriptor.format,
-              contentType: descriptor.contentType,
-              fileName: `${row.customBuild.publicId}-preview.png`,
-              path,
-              sha256,
-              encoding: "identity",
-              byteSize: bytes.byteLength,
-              compressedByteSize: null,
-              storedByteSize: bytes.byteLength,
-            },
-          });
-          return true;
-        });
+        } catch (error) {
+          await settle({ bucket: row.bucket, path });
+          throw error;
+        }
         if (!recorded) {
-          await deleteCustomBuildArtifact({ bucket: row.bucket, path });
-          console.log(`${label} skipped, build was removed`);
+          await settle({ bucket: row.bucket, path });
+          console.log(`${label} skipped, already redrawn or removed`);
           continue;
         }
-        if (row.path !== path) {
-          const kept = await deleteOrKeep([{ bucket: row.bucket, path: row.path }]);
-          if (kept.length > 0) {
-            pendingCleanup.push(...kept);
-            writePendingCleanup(pendingCleanup);
-          }
-        }
+        await settle({ bucket: row.bucket, path: row.path });
         console.log(`${label} ${bytes.byteLength} bytes in ${seconds}s`);
         redrawn += 1;
       } catch (error) {
