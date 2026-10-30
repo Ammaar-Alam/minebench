@@ -88,12 +88,6 @@ async function main() {
       pendingCleanup = await cleanUp(prisma, pendingCleanup);
       writePendingCleanup(pendingCleanup);
     }
-    const settle = async (object: StoredObject) => {
-      pendingCleanup.push(object);
-      writePendingCleanup(pendingCleanup);
-      pendingCleanup = [...pendingCleanup.slice(0, -1), ...(await cleanUp(prisma, [object]))];
-      writePendingCleanup(pendingCleanup);
-    };
     const rows = await prisma.customBuildArtifact.findMany({
       where: {
         kind: "preview_image",
@@ -128,9 +122,13 @@ async function main() {
           continue;
         }
 
-        await uploadCustomBuildArtifact({ bucket: row.bucket, path, bytes, contentType: descriptor.contentType });
-        let recorded: boolean;
+        // both objects are journaled first and whichever one the row ends up without is deleted
+        const candidates = [{ bucket: row.bucket, path }, { bucket: row.bucket, path: row.path }];
+        pendingCleanup.push(...candidates);
+        writePendingCleanup(pendingCleanup);
+        let recorded = false;
         try {
+          await uploadCustomBuildArtifact({ bucket: row.bucket, path, bytes, contentType: descriptor.contentType });
           recorded = await prisma.$transaction(async (tx) => {
             // claims only the version this run read so overlapping runs adjust the total once
             const claimed = await tx.customBuildArtifact.updateMany({
@@ -154,16 +152,14 @@ async function main() {
             });
             return true;
           });
-        } catch (error) {
-          await settle({ bucket: row.bucket, path });
-          throw error;
+        } finally {
+          pendingCleanup = [...pendingCleanup.slice(0, -candidates.length), ...(await cleanUp(prisma, candidates))];
+          writePendingCleanup(pendingCleanup);
         }
         if (!recorded) {
-          await settle({ bucket: row.bucket, path });
           console.log(`${label} skipped, already redrawn or removed`);
           continue;
         }
-        await settle({ bucket: row.bucket, path: row.path });
         console.log(`${label} ${bytes.byteLength} bytes in ${seconds}s`);
         redrawn += 1;
       } catch (error) {
