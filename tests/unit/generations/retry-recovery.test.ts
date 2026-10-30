@@ -66,7 +66,7 @@ async function main() {
       assert.deepEqual(jobs[0]!.payload, { freshGeneration: false });
       assert.equal(current.deletionPendingAt, null);
     }
-    for (const kind of [undefined, "preview_svg"]) {
+    for (const kind of [undefined, "preview_image"]) {
       reset(errorCode, kind);
       await assert.rejects(retry({ providerKey: "unused-provider-key" }), codeIs("not_retryable"));
       assert.equal(deletedCredentials, 0);
@@ -108,7 +108,7 @@ async function main() {
       await assert.rejects(retry(), codeIs("missing_provider_key"));
     }
   }
-  for (const kind of [undefined, "preview_svg"]) {
+  for (const kind of [undefined, "preview_image"]) {
     reset("generation_failed", kind);
     await assert.rejects(retry(), codeIs("missing_provider_key"));
     assert.equal(jobs.length, 0, "provider failures without source still need credentials");
@@ -132,7 +132,7 @@ async function main() {
   process.env.MINEBENCH_FREE_OPENROUTER_API_KEY = "unit-hosted-retry-key";
   try {
     for (const [errorCode, kind] of [
-      ["generation_failed", undefined], ["generation_failed", "preview_svg"], ["generation_failed", "raw_text_debug"],
+      ["generation_failed", undefined], ["generation_failed", "preview_image"], ["generation_failed", "raw_text_debug"],
       ["execution_failed", "raw_text_debug"],
     ] as const) {
       reset(errorCode, kind);

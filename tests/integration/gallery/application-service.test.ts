@@ -276,7 +276,7 @@ async function main() {
     await db.customBuildArtifact.create({
       data: {
         customBuildId: rows[1]!.id,
-        kind: "preview_svg",
+        kind: "preview_image",
         format: "svg",
         bucket: "builds",
         path: `gallery/${suffix}/cancel-race.svg`,
@@ -316,7 +316,7 @@ async function main() {
     await db.customBuildArtifact.create({
       data: {
         customBuildId: removableRow.id,
-        kind: "preview_svg",
+        kind: "preview_image",
         format: "svg",
         bucket: "builds",
         path: `gallery/${suffix}/remove-retry.svg`,

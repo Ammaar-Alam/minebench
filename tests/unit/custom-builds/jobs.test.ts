@@ -178,13 +178,13 @@ async function main() {
     "$transaction.commit",
   ]);
 
-  for (const kind of ["preview_svg", "raw_text_debug", "build_json"]) {
+  for (const kind of ["preview_image", "raw_text_debug", "build_json"]) {
     artifactKind = kind;
     queryCount = 0;
     customBuildUpdates.length = 0;
     operations.length = 0;
     await recoverStaleCustomBuildJobLeases(rootClient as never);
-    const recoverable = kind !== "preview_svg";
+    const recoverable = kind !== "preview_image";
     assert.deepEqual(customBuildUpdates.map((update) => update.data.errorCode), ["provider_key_expired", "lease_expired"]);
     for (const { data } of customBuildUpdates) {
       assert.equal(data.status, "failed");

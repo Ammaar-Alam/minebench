@@ -229,8 +229,8 @@ async function main() {
       data: { kind: "viewer_world", format: "json", contentType: "application/json" },
     });
     const importedBuild = await db.customBuild.findUniqueOrThrow({ where: { publicId: importedPublicId } });
-    await db.customBuildArtifact.createMany({ data: ["preview_svg", "preview_mbv4"].map((kind) => ({
-      customBuildId: importedBuild.id, kind: kind as "preview_svg" | "preview_mbv4", format: kind,
+    await db.customBuildArtifact.createMany({ data: ["preview_image", "preview_mbv4"].map((kind) => ({
+      customBuildId: importedBuild.id, kind: kind as "preview_image" | "preview_mbv4", format: kind,
       bucket: "builds", path: `admin-publish/${suffix}/${kind}`, contentType: "application/octet-stream",
       fileName: kind, sha256: "f".repeat(64), byteSize: 60, storedByteSize: 60,
     })) });

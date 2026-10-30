@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 3"><rect width="4" height="3" fill="#123456"/></svg>');
+const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13]);
 let ownerId: string | null = "owner";
 let artifactReads = 0;
 let downloads = 0;
-let signedUrl = "file:///thumbnail.svg";
+let signedUrl = "file:///thumbnail.png";
 let requestedKinds: string[] = [];
 
 class GenerationServiceError extends Error {
@@ -25,12 +25,12 @@ stub("../../../lib/generations/service", {
     artifactReads += 1;
     requestedKinds = kinds;
     assert.equal(id, "saved-build");
-    return owner === "owner" ? { contentType: "image/svg+xml", encoding: null } : null;
+    return owner === "owner" ? { contentType: "image/png", encoding: null } : null;
   },
 });
 stub("../../../lib/custom-builds/storage", {
   createCustomBuildArtifactSignedUrl: async () => signedUrl,
-  downloadCustomBuildArtifactBytes: async () => { downloads += 1; return svg; },
+  downloadCustomBuildArtifactBytes: async () => { downloads += 1; return png; },
 });
 
 async function main() {
@@ -50,22 +50,22 @@ async function main() {
   assert.equal(downloads, 0);
 
   ownerId = "owner";
-  const png = await get();
-  assert.equal(png.status, 200);
-  assert.equal(png.headers.get("content-type"), "image/png");
-  assert.equal(png.headers.get("cache-control"), "private, no-store");
-  assert.deepEqual(requestedKinds, ["preview_svg"]);
-  assert.deepEqual([...new Uint8Array(await png.arrayBuffer()).subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+  const native = await get();
+  assert.equal(native.status, 200);
+  assert.equal(native.headers.get("content-type"), "image/png");
+  assert.equal(native.headers.get("cache-control"), "private, no-store");
+  assert.deepEqual(requestedKinds, ["preview_image"]);
+  assert.deepEqual(new Uint8Array(await native.arrayBuffer()), new Uint8Array(png));
 
   const original = await get("thumbnail", "");
-  assert.equal(original.headers.get("content-type"), "image/svg+xml");
+  assert.equal(original.headers.get("content-type"), "image/png");
   assert.equal(original.headers.get("cache-control"), "private, no-store");
-  assert.equal(await original.text(), svg.toString());
+  assert.deepEqual(new Uint8Array(await original.arrayBuffer()), new Uint8Array(png));
 
   signedUrl = "https://storage.example.test/owned-artifact";
   const beforeRedirects = downloads;
   for (const [kind, kinds] of [
-    ["thumbnail", ["preview_svg"]],
+    ["thumbnail", ["preview_image"]],
     ["preview", ["preview_mbv4"]],
     ["viewer", ["viewer_world", "viewer_mbf1", "viewer_mbv4"]],
   ] as const) {

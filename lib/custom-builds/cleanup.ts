@@ -48,7 +48,7 @@ export async function purgePendingCustomBuildArtifacts(options: {
       await deleteRetiredGalleryArenaArtifacts(build.id, options.deleteArtifact);
       const retainPreview = current.galleryExamples.length > 0;
       const artifacts = await prisma.customBuildArtifact.findMany({
-        where: { customBuildId: build.id, ...(retainPreview ? { kind: { not: "preview_svg" as const } } : {}) },
+        where: { customBuildId: build.id, ...(retainPreview ? { kind: { not: "preview_image" as const } } : {}) },
         select: { id: true, bucket: true, path: true },
       });
       if (options.deleteArtifact) {
@@ -68,7 +68,7 @@ export async function purgePendingCustomBuildArtifacts(options: {
         });
         const cleanupPending = retainPreview
           ? (await tx.customBuildArtifact.count({
-              where: { customBuildId: build.id, kind: { not: "preview_svg" } },
+              where: { customBuildId: build.id, kind: { not: "preview_image" } },
             })) > 0
           : remaining._count > 0;
         await tx.customBuild.update({

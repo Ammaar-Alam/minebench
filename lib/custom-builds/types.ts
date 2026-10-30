@@ -11,7 +11,7 @@ export type CustomBuildArtifactKind =
   | "viewer_mbf1"
   | "viewer_world"
   | "world_part"
-  | "preview_svg"
+  | "preview_image"
   | CustomBuildExportFormat;
 
 export type CustomBuildStorageEncoding = "identity" | "gzip";
@@ -24,7 +24,7 @@ export type CustomBuildArtifactFormat =
   | "mbf1.gz"
   | "world.json.gz"
   | "world-part.gz"
-  | "svg"
+  | "png"
   | CustomBuildExportFormat;
 
 export type CustomBuildArtifactDescriptor = {

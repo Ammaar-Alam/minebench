@@ -39,7 +39,7 @@ async function main() {
     storedByteSize: 10,
     artifacts: {
       create: {
-        kind: "preview_svg" as const,
+        kind: "preview_image" as const,
         format: "svg",
         bucket: "builds",
         path,
@@ -250,7 +250,7 @@ async function main() {
       where: { id: retainedBuild.id },
       include: { artifacts: true },
     });
-    assert.deepEqual(retained.artifacts.map((artifact) => artifact.kind), ["preview_svg"]);
+    assert.deepEqual(retained.artifacts.map((artifact) => artifact.kind), ["preview_image"]);
     assert.equal(retained.deletionPendingAt, null);
     const canceled = await db.customBuild.findUniqueOrThrow({
       where: { id: `${suffix}canceled` },

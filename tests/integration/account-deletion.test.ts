@@ -243,7 +243,7 @@ async function main() {
         ...customBuildData(runningBuildId, "running"),
         artifacts: {
           create: {
-            kind: "preview_svg",
+            kind: "preview_image",
             format: "svg",
             bucket: "builds",
             path: `account-delete/${suffix}/running.svg`,

@@ -12,7 +12,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   const { id } = await context.params;
   const kind = new URL(request.url).searchParams.get("artifact");
   const kinds = kind === "preview" ? (["preview_mbv4"] as const)
-    : kind === "thumbnail" ? (["preview_svg"] as const)
+    : kind === "thumbnail" ? (["preview_image"] as const)
       : kind === "viewer" ? (["viewer_world", "viewer_mbf1", "viewer_mbv4"] as const)
         : kind === "download" ? (["build_json"] as const)
           : null;

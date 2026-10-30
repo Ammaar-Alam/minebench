@@ -2,7 +2,6 @@ import { getAuthenticatedUserId } from "@/lib/auth/request";
 import { customBuildWorldViewerResponse } from "@/lib/custom-builds/worldDelivery";
 import { createCustomBuildArtifactSignedUrl, downloadCustomBuildArtifactBytes } from "@/lib/custom-builds/storage";
 import { apiJson, apiServiceError } from "@/lib/gallery/api";
-import { rasterizeGalleryPreview } from "@/lib/gallery/preview";
 import {
   GenerationServiceError,
   getOwnedGenerationArtifact,
@@ -18,7 +17,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   const kinds = kind === "preview"
     ? (["preview_mbv4"] as const)
     : kind === "thumbnail"
-      ? (["preview_svg"] as const)
+      ? (["preview_image"] as const)
     : kind === "viewer"
       ? (["viewer_world", "viewer_mbf1", "viewer_mbv4"] as const)
       : null;
@@ -45,7 +44,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       throw new GenerationServiceError("not_found", "Artifact not found.");
     }
     if (kind === "thumbnail" && new URL(request.url).searchParams.get("format") === "png") {
-      const bytes = await rasterizeGalleryPreview(await downloadCustomBuildArtifactBytes(artifact));
+      const bytes = await downloadCustomBuildArtifactBytes(artifact);
       return new Response(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, {
         headers: {
           "Cache-Control": "private, no-store",

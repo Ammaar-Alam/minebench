@@ -267,7 +267,7 @@ async function main() {
   assert.equal(packedSmall.build.packed?.count, 1);
 
   assert.ok(
-    generateJobSource.includes("buildGalleryPreviewSvg(useWorldArtifacts ? preview : canonicalBuild)") &&
+    generateJobSource.includes("buildGalleryPreviewPng(useWorldArtifacts ? preview : canonicalBuild)") &&
       generateJobSource.includes("blockCount: canonicalBlockCount"),
     "static thumbnails should derive from the canonical build, except compact worlds which use the world preview",
   );
@@ -390,7 +390,7 @@ async function main() {
   const buildJsonArtifact = artifactCreates.find((artifact) => artifact.kind === "build_json");
   const previewArtifact = artifactCreates.find((artifact) => artifact.kind === "preview_mbv4");
   const viewerArtifact = artifactCreates.find((artifact) => artifact.kind === "viewer_mbv4");
-  const thumbnailArtifact = artifactCreates.find((artifact) => artifact.kind === "preview_svg");
+  const thumbnailArtifact = artifactCreates.find((artifact) => artifact.kind === "preview_image");
   assert.ok(buildJsonArtifact, "generate job should record the full JSON artifact");
   assert.ok(previewArtifact, "generate job should record the binary preview artifact");
   assert.ok(viewerArtifact, "generate job should record the full viewer artifact");
@@ -441,7 +441,7 @@ async function main() {
   });
   assert.deepEqual(
     artifactCreates.map((artifact) => artifact.kind).sort(),
-    ["build_json", "preview_mbv4", "preview_svg", "viewer_mbv4"],
+    ["build_json", "preview_image", "preview_mbv4", "viewer_mbv4"],
   );
 
   updates.length = 0;
@@ -479,7 +479,7 @@ async function main() {
   );
   assert.deepEqual(
     artifactCreates.map((artifact) => artifact.kind).sort(),
-    ["build_json", "preview_mbv4", "preview_svg", "viewer_world"],
+    ["build_json", "preview_image", "preview_mbv4", "viewer_world"],
   );
   const cubeManifestArtifact = artifactCreates.find((artifact) => artifact.kind === "viewer_world");
   assert.equal(cubeManifestArtifact?.blockCount, 8192 ** 3);
@@ -836,7 +836,7 @@ async function main() {
   }
   assert.equal(
     artifactCreates.filter((artifact) =>
-      ["build_json", "preview_mbv4", "viewer_mbv4", "preview_svg"].includes(String(artifact.kind)),
+      ["build_json", "preview_mbv4", "viewer_mbv4", "preview_image"].includes(String(artifact.kind)),
     ).length,
     4,
     "bookkeeping failure regression should happen after all Gallery artifacts are recorded",

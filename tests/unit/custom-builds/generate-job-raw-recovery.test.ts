@@ -251,7 +251,7 @@ async function main() {
     assert.equal(current.generationTimeMs, mode === "missing-key" ? null : 1234);
     assert.deepEqual(current.warnings, ["stored warning", ...fresh.warnings]);
     assert.equal((current.metrics as Record<string, unknown>).sourceArtifactSha256, raw.sourceBuildSha256);
-    for (const kind of ["raw_text_debug", "build_json", "viewer_world", "world_part", "preview_mbv4", "preview_svg"]) {
+    for (const kind of ["raw_text_debug", "build_json", "viewer_world", "world_part", "preview_mbv4", "preview_image"]) {
       assert.ok(artifacts.some((artifact) => artifact.kind === kind), `${mode} should preserve ${kind}`);
     }
     assert.ok(updates.some((update) => update.currentStage === "finalizing"));

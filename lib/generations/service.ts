@@ -189,7 +189,7 @@ function serializeGeneration(row: GenerationRow) {
     previewUrl: artifactsAvailable && artifactKinds.has("preview_mbv4")
       ? `/api/generations/${row.publicId}/artifacts/preview`
       : null,
-    thumbnailUrl: artifactsAvailable && artifactKinds.has("preview_svg")
+    thumbnailUrl: artifactsAvailable && artifactKinds.has("preview_image")
       ? `/api/generations/${row.publicId}/artifacts/thumbnail`
       : null,
     // older clients only consume binary viewer URLs, so worlds use a separate opt-in route

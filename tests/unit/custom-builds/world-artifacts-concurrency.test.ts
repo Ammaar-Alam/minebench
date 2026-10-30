@@ -199,7 +199,7 @@ function persistWorld(
 
 async function distributePreviewAcrossRegions() {
   const farBox = { x1: 1536, y1: 0, z1: 0, x2: 2047, y2: 63, z2: 63, type: "gold_block" };
-  const goldSvg = buildGalleryPreviewSvg({ version: "1.0", blocks: [{ x: 0, y: 0, z: 0, type: "gold_block" }] });
+  const goldSvg = buildGalleryPreviewSvg({ version: "1.0", blocks: [{ x: 0, y: 0, z: 0, type: "gold_block" }] }).toString();
   const goldFills = [...goldSvg.matchAll(/fill="(#[a-f0-9]+)"/g)].map((match) => match[1]!);
   const persist: PersistVoxelWorldArtifact = async (args) => artifactFor(args);
   for (const source of [
@@ -218,7 +218,7 @@ async function distributePreviewAcrossRegions() {
       "a full first region must not consume the later region's preview budget");
     const binary = decodeBinaryArtifact(encodeBinaryArtifact({ version: "1.0", variant: "preview" }, previewBuild.blocks, SOURCE_SHA));
     assert.ok(binary.blocks.typeNames.includes("gold_block"));
-    const svg = buildGalleryPreviewSvg(previewBuild);
+    const svg = buildGalleryPreviewSvg(previewBuild).toString();
     assert.ok(goldFills.some((fill) => svg.includes(`fill="${fill}"`)));
     assert.deepEqual((await persistWorld(source, persist)).previewBuild, previewBuild);
     assert.equal((await persistWorld(source, persist, undefined, 0)).previewBuild.blocks.length, 0);

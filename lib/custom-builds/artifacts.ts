@@ -216,8 +216,8 @@ export async function uploadAndRecordCustomBuildArtifact(args: {
                 ? `${args.publicId}.world.json`
                 : args.kind === "world_part"
                   ? `${args.publicId}-world-part.gz`
-              : args.kind === "preview_svg"
-                ? `${args.publicId}-preview.svg`
+              : args.kind === "preview_image"
+                ? `${args.publicId}-preview.png`
         : `${args.publicId}.${descriptor.fileExtension}`;
 
   const shouldUpload = existingArtifact?.bucket !== bucket || existingArtifact.path !== path;
@@ -295,7 +295,7 @@ export async function uploadAndRecordCustomBuildArtifact(args: {
     "viewer_mbf1",
     "viewer_world",
     "world_part",
-    "preview_svg",
+    "preview_image",
   ].includes(args.kind);
   // an atomic delta keeps each write constant-time while concurrent parts stay exact
   const updated = await client.customBuild.updateMany({

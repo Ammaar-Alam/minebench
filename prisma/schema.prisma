@@ -394,7 +394,7 @@ enum CustomBuildArtifactKind {
   viewer_mbf1
   viewer_world
   world_part
-  preview_svg
+  preview_image @map("preview_svg")
 }
 
 enum CustomBuildStorageEncoding {
