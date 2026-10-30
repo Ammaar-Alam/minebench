@@ -136,7 +136,7 @@ const exampleSelect = {
       buildSha256: true,
       ...galleryModelSelect,
       artifacts: {
-        where: { kind: { in: ["preview_svg", "preview_mbv4", "viewer_mbv4", "viewer_mbf1", "viewer_world"] } },
+        where: { kind: { in: ["preview_image", "preview_mbv4", "viewer_mbv4", "viewer_mbf1", "viewer_world"] } },
         select: { kind: true },
       },
     },
@@ -197,7 +197,7 @@ function publicExample(example: ExampleRow, viewerUserId?: string | null) {
     jsonBytes: customBuildJsonNumber(example.customBuild.buildByteSize, "CustomBuild.buildByteSize"),
     generationTimeMs: example.customBuild.generationTimeMs,
     checksum: example.customBuild.buildSha256,
-    previewUrl: kinds.has("preview_svg")
+    previewUrl: kinds.has("preview_image")
       ? `/api/gallery/examples/${example.id}/preview`
       : null,
     thumbnailUrl: !kinds.has("viewer_world") && kinds.has("preview_mbv4")
@@ -1306,7 +1306,7 @@ export async function submitGalleryReport(input: {
 
 export async function getPublicGalleryExampleArtifact(
   exampleId: string,
-  kinds: Array<"preview_svg" | "preview_mbv4" | "viewer_mbv4" | "viewer_mbf1" | "viewer_world">,
+  kinds: Array<"preview_image" | "preview_mbv4" | "viewer_mbv4" | "viewer_mbf1" | "viewer_world">,
 ) {
   return prisma.customBuildArtifact.findFirst({
     where: {
@@ -1476,7 +1476,7 @@ export async function hideGalleryExample(
       customBuild: {
         select: {
           artifacts: {
-            where: { kind: { not: "preview_svg" } },
+            where: { kind: { not: "preview_image" } },
             select: { id: true, bucket: true, path: true, storedByteSize: true },
           },
         },

@@ -4,7 +4,8 @@ import { voxelBuildBlockAt, voxelBuildBlockCount, type RenderableVoxelBuild } fr
 
 const WIDTH = 640;
 const HEIGHT = 400;
-const MAX_PREVIEW_BLOCKS = 1_200;
+const RASTER_SCALE = 2;
+const MAX_PREVIEW_BLOCKS = 120_000;
 
 type PreviewBlock = VoxelBuild["blocks"][number];
 
@@ -32,52 +33,56 @@ function framedRange(values: number[]): [number, number] {
   return [Math.max(fullMin, coreMin - padding), Math.min(fullMax, coreMax + padding)];
 }
 
-function compactBlocks(build: RenderableVoxelBuild): PreviewBlock[] {
+const depth = (block: PreviewBlock) => block.x + block.y + block.z;
+
+// keeps the block nearest the camera on each isometric ray so hidden blocks never use the budget
+function visibleBlocks(build: RenderableVoxelBuild): PreviewBlock[] {
   const count = voxelBuildBlockCount(build);
-  if (count <= MAX_PREVIEW_BLOCKS) {
-    return build.packed
-      ? Array.from({ length: count }, (_, index) => voxelBuildBlockAt(build, index)!)
-      : build.blocks;
+  const front = new Map<number, number>();
+  for (let index = 0; index < count; index += 1) {
+    const block = voxelBuildBlockAt(build, index)!;
+    // offsets cover the full int16 coordinate range
+    const key = (block.x - block.z + 65_536) * 262_144 + (block.x + block.z - 2 * block.y + 131_072);
+    const current = front.get(key);
+    if (current === undefined || depth(block) >= depth(voxelBuildBlockAt(build, current)!)) front.set(key, index);
   }
+  return Array.from(front.values(), (index) => voxelBuildBlockAt(build, index)!);
+}
+
+function compactBlocks(build: RenderableVoxelBuild): PreviewBlock[] {
+  const surface = visibleBlocks(build);
+  if (surface.length <= MAX_PREVIEW_BLOCKS) return surface;
   let minX = Infinity;
   let minY = Infinity;
   let minZ = Infinity;
-  let maxX = -Infinity;
   let maxY = -Infinity;
   let maxZ = -Infinity;
-  for (let index = 0; index < count; index += 1) {
-    const block = voxelBuildBlockAt(build, index)!;
+  for (const block of surface) {
     minX = Math.min(minX, block.x);
     minY = Math.min(minY, block.y);
     minZ = Math.min(minZ, block.z);
-    maxX = Math.max(maxX, block.x);
     maxY = Math.max(maxY, block.y);
     maxZ = Math.max(maxZ, block.z);
   }
+  // nearest last so the visible block wins each cell
+  surface.sort((a, b) => depth(a) - depth(b));
 
-  for (let cellSize = 1; ; cellSize += 1) {
+  for (let cellSize = 2; ; cellSize += 1) {
     const yBins = Math.floor((maxY - minY) / cellSize) + 1;
     const zBins = Math.floor((maxZ - minZ) / cellSize) + 1;
-    const bins = new Map<number, PreviewBlock & { score: number }>();
-    for (let index = 0; index < count; index += 1) {
-      const block = voxelBuildBlockAt(build, index)!;
+    const bins = new Map<number, PreviewBlock>();
+    for (const block of surface) {
       const x = Math.floor((block.x - minX) / cellSize);
       const y = Math.floor((block.y - minY) / cellSize);
       const z = Math.floor((block.z - minZ) / cellSize);
-      const key = (x * yBins + y) * zBins + z;
-      const current = bins.get(key);
-      if (!current || current.score === 0) bins.set(key, { x, y, z, type: block.type, score: 1 });
-      else if (current.type === block.type) current.score += 1;
-      else current.score -= 1;
+      bins.set((x * yBins + y) * zBins + z, { x, y, z, type: block.type });
       if (bins.size > MAX_PREVIEW_BLOCKS) break;
     }
-    if (bins.size <= MAX_PREVIEW_BLOCKS) {
-      return Array.from(bins.values(), ({ x, y, z, type }) => ({ x, y, z, type }));
-    }
+    if (bins.size <= MAX_PREVIEW_BLOCKS) return Array.from(bins.values());
   }
 }
 
-export function buildGalleryPreviewSvg(build: RenderableVoxelBuild): string {
+export function buildGalleryPreviewSvg(build: RenderableVoxelBuild): Buffer {
   const ordered = compactBlocks(build).sort(
     (a, b) => a.x + a.z - (b.x + b.z) || a.y - b.y || a.x - b.x || a.z - b.z,
   );
@@ -96,19 +101,30 @@ export function buildGalleryPreviewSvg(build: RenderableVoxelBuild): string {
   const sideDepth = cubeScale;
   const offsetX = WIDTH / 2 - ((minX + maxX) / 2) * scale;
   const offsetY = HEIGHT / 2 - ((minY + maxY) / 2) * scale - sideDepth / 2;
-  const paths = points.map((point) => {
+  // the markup runs to tens of megabytes so it goes straight into buffers instead of the worker heap
+  const chunks = [Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${HEIGHT}" width="${WIDTH * RASTER_SCALE}" height="${HEIGHT * RASTER_SCALE}" aria-hidden="true"><g opacity="0.98">`)];
+  let pending = "";
+  for (const point of points) {
     const x = point.x * scale + offsetX;
     const y = point.y * scale + offsetY;
     const top = `M${x.toFixed(1)} ${(y - topDepth).toFixed(1)}L${(x + size).toFixed(1)} ${y.toFixed(1)}L${x.toFixed(1)} ${(y + topDepth).toFixed(1)}L${(x - size).toFixed(1)} ${y.toFixed(1)}Z`;
     const left = `M${(x - size).toFixed(1)} ${y.toFixed(1)}L${x.toFixed(1)} ${(y + topDepth).toFixed(1)}L${x.toFixed(1)} ${(y + topDepth + sideDepth).toFixed(1)}L${(x - size).toFixed(1)} ${(y + sideDepth).toFixed(1)}Z`;
     const right = `M${(x + size).toFixed(1)} ${y.toFixed(1)}L${x.toFixed(1)} ${(y + topDepth).toFixed(1)}L${x.toFixed(1)} ${(y + topDepth + sideDepth).toFixed(1)}L${(x + size).toFixed(1)} ${(y + sideDepth).toFixed(1)}Z`;
-    return `<path d="${left}" fill="${colorForBlock(point.type, -0.28)}"/><path d="${right}" fill="${colorForBlock(point.type, -0.12)}"/><path d="${top}" fill="${colorForBlock(point.type, 0.1)}"/>`;
-  });
-
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${HEIGHT}" aria-hidden="true"><g opacity="0.98">${paths.join("")}</g></svg>`;
+    pending += `<path d="${left}" fill="${colorForBlock(point.type, -0.28)}"/><path d="${right}" fill="${colorForBlock(point.type, -0.12)}"/><path d="${top}" fill="${colorForBlock(point.type, 0.1)}"/>`;
+    if (pending.length >= 1 << 20) {
+      chunks.push(Buffer.from(pending));
+      pending = "";
+    }
+  }
+  chunks.push(Buffer.from(`${pending}</g></svg>`));
+  return Buffer.concat(chunks);
 }
 
 export async function rasterizeGalleryPreview(svg: Uint8Array): Promise<Uint8Array> {
   const { default: sharp } = await import("sharp");
   return sharp(svg).png({ compressionLevel: 9 }).toBuffer();
+}
+
+export function buildGalleryPreviewPng(build: RenderableVoxelBuild): Promise<Uint8Array> {
+  return rasterizeGalleryPreview(buildGalleryPreviewSvg(build));
 }

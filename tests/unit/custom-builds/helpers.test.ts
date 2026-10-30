@@ -188,7 +188,7 @@ async function main() {
   const compensationSha = sha256Hex(compensationBytes);
   const compensationPath = getCustomBuildArtifactPath({
     publicId: id,
-    kind: "preview_svg",
+    kind: "preview_image",
     sha256: compensationSha,
   });
   try {
@@ -196,7 +196,7 @@ async function main() {
       uploadAndRecordCustomBuildArtifact({
         customBuildId: "build-without-ownership",
         publicId: id,
-        kind: "preview_svg",
+        kind: "preview_image",
         bytes: compensationBytes,
         client: {
           customBuildArtifact: {

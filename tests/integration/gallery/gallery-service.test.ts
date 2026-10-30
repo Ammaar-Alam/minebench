@@ -97,7 +97,7 @@ async function main() {
               storedByteSize: 60,
             },
             {
-              kind: "preview_svg",
+              kind: "preview_image",
               format: "svg",
               bucket: "builds",
               path: `test/${suffix}/preview.svg`,
@@ -368,7 +368,7 @@ async function main() {
       `test/${suffix}/preview.mbv4`,
     ]);
     assert.equal(await db.customBuildArtifact.count({
-      where: { customBuildId: buildId, kind: "preview_svg" },
+      where: { customBuildId: buildId, kind: "preview_image" },
     }), 1);
     assert.equal((await db.customBuild.findUniqueOrThrow({ where: { id: buildId } })).removedAt instanceof Date, true);
     assert.notEqual((await getGalleryCandidate(created.candidate.id))?.cover?.id, firstExamples?.cover?.id);

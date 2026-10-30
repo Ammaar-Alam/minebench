@@ -40,7 +40,7 @@ import {
 } from "@/lib/custom-builds/storage";
 import { persistVoxelWorldArtifacts } from "@/lib/custom-builds/worldArtifacts";
 import { prisma } from "@/lib/prisma";
-import { buildGalleryPreviewSvg } from "@/lib/gallery/preview";
+import { buildGalleryPreviewPng } from "@/lib/gallery/preview";
 import { packVoxelBlocks, sortPackedVoxelBlocks, voxelBuildBlockCount } from "@/lib/voxel/packedBlocks";
 import { createVoxelMeshFacts, encodeVoxelMeshFacts } from "@/lib/voxel/meshFacts";
 import { validateOwnedVoxelBuild, validateVoxelBuild } from "@/lib/voxel/validate";
@@ -825,17 +825,17 @@ export async function runCustomBuildGenerateJob(
     }
 
     throwIfCustomBuildLeaseLost(opts.signal);
-    const previewSvg = new TextEncoder().encode(buildGalleryPreviewSvg(useWorldArtifacts ? preview : canonicalBuild));
+    const previewImage = await buildGalleryPreviewPng(useWorldArtifacts ? preview : canonicalBuild);
     await persistCustomBuildArtifact({
       customBuildId: customBuild.id,
       publicId: customBuild.publicId,
-      kind: "preview_svg",
-      bytes: previewSvg,
-      sha256: sha256Hex(previewSvg),
+      kind: "preview_image",
+      bytes: previewImage,
+      sha256: sha256Hex(previewImage),
       sourceBuildSha256: fullSha,
       blockCount: canonicalBlockCount,
     });
-    emitCustomBuildEvent(customBuild.id, "artifact_ready", { kind: "preview_svg" });
+    emitCustomBuildEvent(customBuild.id, "artifact_ready", { kind: "preview_image" });
     artifactsPersisted = true;
 
     throwIfCustomBuildLeaseLost(opts.signal);

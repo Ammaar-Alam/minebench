@@ -161,12 +161,12 @@ export function getCustomBuildArtifactDescriptor(kind: CustomBuildArtifactKind):
       storageFolder: "viewer",
     };
   }
-  if (kind === "preview_svg") {
+  if (kind === "preview_image") {
     return {
       kind,
-      format: "svg",
-      contentType: "image/svg+xml; charset=utf-8",
-      fileExtension: "svg",
+      format: "png",
+      contentType: "image/png",
+      fileExtension: "png",
       storageFolder: "preview",
     };
   }
@@ -230,7 +230,7 @@ export function getCustomBuildArtifactPath(args: {
     args.kind === "viewer_mbf1" ||
     args.kind === "viewer_world" ||
     args.kind === "world_part" ||
-    args.kind === "preview_svg"
+    args.kind === "preview_image"
   ) {
     const sha = assertSha256(args.sha256, args.kind);
     return `${prefix}/${publicId}/${descriptor.storageFolder}/${args.kind}-${sha}.${descriptor.fileExtension}`;
