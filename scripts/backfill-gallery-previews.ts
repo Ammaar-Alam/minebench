@@ -22,9 +22,12 @@ const dryRun = process.argv.includes("--dry-run");
 const limitArg = process.argv.find((arg) => arg.startsWith("--limit="));
 const limit = limitArg ? Number.parseInt(limitArg.slice("--limit=".length), 10) : undefined;
 const descriptor = getCustomBuildArtifactDescriptor("preview_image");
-// objects to remove once nothing references them, kept until their delete succeeds
 // keyed by storage project because alpha shares bucket names and paths with production
-const PENDING_CLEANUP_PATH = `gallery-preview-cleanup-${new URL(getSupabaseStorageConfig().url).hostname}.json`;
+const STORAGE_PROJECT = new URL(getSupabaseStorageConfig().url).hostname;
+// objects to remove once nothing references them, kept until their delete succeeds
+const PENDING_CLEANUP_PATH = `gallery-preview-cleanup-${STORAGE_PROJECT}.json`;
+// one run at a time per project, since overlapping runs race on uploads and the journal
+const LOCK_PATH = `gallery-preview-backfill-${STORAGE_PROJECT}.lock`;
 
 type StoredObject = { bucket: string; path: string };
 
@@ -71,6 +74,12 @@ async function loadPreviewSource(prisma: PrismaClient, customBuildId: string): P
 }
 
 async function main() {
+  let lock: number;
+  try {
+    lock = fs.openSync(LOCK_PATH, "wx");
+  } catch {
+    throw new Error(`${LOCK_PATH} exists, another backfill is running or the last one crashed and left it behind`);
+  }
   const prisma = new PrismaClient();
   try {
     let pendingCleanup = readPendingCleanup();
@@ -167,6 +176,8 @@ async function main() {
     if (failed > 0 || pendingCleanup.length > 0) process.exitCode = 1;
   } finally {
     await prisma.$disconnect();
+    fs.closeSync(lock);
+    fs.rmSync(LOCK_PATH, { force: true });
   }
 }
 

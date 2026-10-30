@@ -44,6 +44,7 @@ package-lock.json
 .turbo
 voxel-build.json
 gallery-preview-cleanup-*.json
+gallery-preview-backfill-*.lock
 .custom-build-storage/
 /custom-builds/
 /judge-data/
