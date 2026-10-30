@@ -1,6 +1,7 @@
 #!/usr/bin/env -S tsx
 
 import "dotenv/config";
+import fs from "node:fs";
 import { gunzipSync } from "node:zlib";
 import { PrismaClient } from "@prisma/client";
 import { decodeBinaryArtifact } from "../lib/arena/binaryArtifact";
@@ -20,6 +21,32 @@ const dryRun = process.argv.includes("--dry-run");
 const limitArg = process.argv.find((arg) => arg.startsWith("--limit="));
 const limit = limitArg ? Number.parseInt(limitArg.slice("--limit=".length), 10) : undefined;
 const descriptor = getCustomBuildArtifactDescriptor("preview_image");
+// old svg objects whose delete failed after their row moved to png, retried at the start of each run
+const PENDING_CLEANUP_PATH = "gallery-preview-cleanup.json";
+
+type StoredObject = { bucket: string; path: string };
+
+function readPendingCleanup(): StoredObject[] {
+  return fs.existsSync(PENDING_CLEANUP_PATH) ? JSON.parse(fs.readFileSync(PENDING_CLEANUP_PATH, "utf8")) : [];
+}
+
+function writePendingCleanup(objects: StoredObject[]) {
+  if (objects.length > 0) fs.writeFileSync(PENDING_CLEANUP_PATH, `${JSON.stringify(objects, null, 2)}\n`);
+  else fs.rmSync(PENDING_CLEANUP_PATH, { force: true });
+}
+
+async function deleteOrKeep(objects: StoredObject[]): Promise<StoredObject[]> {
+  const remaining: StoredObject[] = [];
+  for (const object of objects) {
+    try {
+      await deleteCustomBuildArtifact(object);
+    } catch (error) {
+      console.error(`delete of ${object.path} failed:`, error instanceof Error ? error.message : error);
+      remaining.push(object);
+    }
+  }
+  return remaining;
+}
 
 async function loadPreviewSource(prisma: PrismaClient, customBuildId: string): Promise<RenderableVoxelBuild> {
   const artifacts = await prisma.customBuildArtifact.findMany({
@@ -43,6 +70,12 @@ async function loadPreviewSource(prisma: PrismaClient, customBuildId: string): P
 async function main() {
   const prisma = new PrismaClient();
   try {
+    let pendingCleanup = readPendingCleanup();
+    if (!dryRun && pendingCleanup.length > 0) {
+      console.log(`retrying ${pendingCleanup.length} pending deletes`);
+      pendingCleanup = await deleteOrKeep(pendingCleanup);
+      writePendingCleanup(pendingCleanup);
+    }
     const rows = await prisma.customBuildArtifact.findMany({
       where: {
         kind: "preview_image",
@@ -78,8 +111,6 @@ async function main() {
         }
 
         await uploadCustomBuildArtifact({ bucket: row.bucket, path, bytes, contentType: descriptor.contentType });
-        // the row keeps pointing at the svg until it is gone so a failed delete is retried on the next run
-        if (row.path !== path) await deleteCustomBuildArtifact({ bucket: row.bucket, path: row.path });
         const recorded = await prisma.$transaction(async (tx) => {
           const owner = await tx.customBuild.updateMany({
             where: { id: row.customBuildId, removedAt: null },
@@ -107,6 +138,13 @@ async function main() {
           console.log(`${label} skipped, build was removed`);
           continue;
         }
+        if (row.path !== path) {
+          const kept = await deleteOrKeep([{ bucket: row.bucket, path: row.path }]);
+          if (kept.length > 0) {
+            pendingCleanup.push(...kept);
+            writePendingCleanup(pendingCleanup);
+          }
+        }
         console.log(`${label} ${bytes.byteLength} bytes in ${seconds}s`);
         redrawn += 1;
       } catch (error) {
@@ -115,7 +153,8 @@ async function main() {
       }
     }
     console.log(`redrawn ${redrawn}, failed ${failed}`);
-    if (failed > 0) process.exitCode = 1;
+    if (pendingCleanup.length > 0) console.log(`${pendingCleanup.length} deletes pending in ${PENDING_CLEANUP_PATH}, run again to retry`);
+    if (failed > 0 || pendingCleanup.length > 0) process.exitCode = 1;
   } finally {
     await prisma.$disconnect();
   }
