@@ -43,7 +43,6 @@
     "gallery:generate": "tsx scripts/gallery-generate.ts",
     "gallery:import": "tsx scripts/import-gallery-retest.ts",
     "gallery:seed-official": "tsx scripts/seed-gallery-official-prompts.ts",
-    "gallery:previews:backfill": "tsx scripts/backfill-gallery-previews.ts",
     "tool:convert": "tsx scripts/convert-voxel-tool-call.ts",
     "uploads:sync": "tsx scripts/sync-uploads-from-db.ts",
     "judge:export": "tsx scripts/export-judge-dataset.ts",
