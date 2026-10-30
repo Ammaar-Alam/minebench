@@ -43,7 +43,7 @@ package-lock.json
 /test-results
 .turbo
 voxel-build.json
-gallery-preview-cleanup.json
+gallery-preview-cleanup-*.json
 .custom-build-storage/
 /custom-builds/
 /judge-data/

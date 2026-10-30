@@ -14,6 +14,7 @@ import {
   uploadCustomBuildArtifact,
 } from "../lib/custom-builds/storage";
 import { buildGalleryPreviewPng } from "../lib/gallery/preview";
+import { getSupabaseStorageConfig } from "../lib/storage/config";
 import type { RenderableVoxelBuild } from "../lib/voxel/packedBlocks";
 
 // redraws gallery previews stored before the png format and is safe to re-run
@@ -22,7 +23,8 @@ const limitArg = process.argv.find((arg) => arg.startsWith("--limit="));
 const limit = limitArg ? Number.parseInt(limitArg.slice("--limit=".length), 10) : undefined;
 const descriptor = getCustomBuildArtifactDescriptor("preview_image");
 // old svg objects whose delete failed after their row moved to png, retried at the start of each run
-const PENDING_CLEANUP_PATH = "gallery-preview-cleanup.json";
+// keyed by storage project because alpha shares bucket names and paths with production
+const PENDING_CLEANUP_PATH = `gallery-preview-cleanup-${new URL(getSupabaseStorageConfig().url).hostname}.json`;
 
 type StoredObject = { bucket: string; path: string };
 
