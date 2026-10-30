@@ -3,6 +3,8 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13]);
+const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 3"><rect width="4" height="3" fill="#123456"/></svg>');
+let stored = { contentType: "image/png", bytes: png };
 let ownerId: string | null = "owner";
 let artifactReads = 0;
 let downloads = 0;
@@ -25,12 +27,12 @@ stub("../../../lib/generations/service", {
     artifactReads += 1;
     requestedKinds = kinds;
     assert.equal(id, "saved-build");
-    return owner === "owner" ? { contentType: "image/png", encoding: null } : null;
+    return owner === "owner" ? { contentType: stored.contentType, encoding: null } : null;
   },
 });
 stub("../../../lib/custom-builds/storage", {
   createCustomBuildArtifactSignedUrl: async () => signedUrl,
-  downloadCustomBuildArtifactBytes: async () => { downloads += 1; return png; },
+  downloadCustomBuildArtifactBytes: async () => { downloads += 1; return stored.bytes; },
 });
 
 async function main() {
@@ -56,6 +58,12 @@ async function main() {
   assert.equal(native.headers.get("cache-control"), "private, no-store");
   assert.deepEqual(requestedKinds, ["preview_image"]);
   assert.deepEqual(new Uint8Array(await native.arrayBuffer()), new Uint8Array(png));
+
+  stored = { contentType: "image/svg+xml; charset=utf-8", bytes: svg };
+  const legacy = await get();
+  assert.equal(legacy.headers.get("content-type"), "image/png");
+  assert.deepEqual([...new Uint8Array(await legacy.arrayBuffer()).subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+  stored = { contentType: "image/png", bytes: png };
 
   const original = await get("thumbnail", "");
   assert.equal(original.headers.get("content-type"), "image/png");

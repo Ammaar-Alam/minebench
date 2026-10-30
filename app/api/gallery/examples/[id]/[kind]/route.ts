@@ -1,6 +1,7 @@
 import { customBuildWorldViewerResponse } from "@/lib/custom-builds/worldDelivery";
 import { createCustomBuildArtifactSignedUrl, downloadCustomBuildArtifactBytes } from "@/lib/custom-builds/storage";
 import { apiServiceError } from "@/lib/gallery/api";
+import { rasterizeGalleryPreview } from "@/lib/gallery/preview";
 import {
   GalleryServiceError,
   getPublicGalleryExampleArtifact,
@@ -41,7 +42,9 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       throw new GalleryServiceError("not_found", "Artifact not found.");
     }
     if (kind === "preview" && new URL(request.url).searchParams.get("format") === "png") {
-      const bytes = await downloadCustomBuildArtifactBytes(artifact);
+      const stored = await downloadCustomBuildArtifactBytes(artifact);
+      // previews saved before the png format are still svg
+      const bytes = artifact.contentType === "image/png" ? stored : await rasterizeGalleryPreview(stored);
       return new Response(
         bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
         {

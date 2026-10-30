@@ -120,7 +120,11 @@ export function buildGalleryPreviewSvg(build: RenderableVoxelBuild): Buffer {
   return Buffer.concat(chunks);
 }
 
-export async function buildGalleryPreviewPng(build: RenderableVoxelBuild): Promise<Uint8Array> {
+export async function rasterizeGalleryPreview(svg: Uint8Array): Promise<Uint8Array> {
   const { default: sharp } = await import("sharp");
-  return sharp(buildGalleryPreviewSvg(build)).png({ compressionLevel: 9 }).toBuffer();
+  return sharp(svg).png({ compressionLevel: 9 }).toBuffer();
+}
+
+export function buildGalleryPreviewPng(build: RenderableVoxelBuild): Promise<Uint8Array> {
+  return rasterizeGalleryPreview(buildGalleryPreviewSvg(build));
 }

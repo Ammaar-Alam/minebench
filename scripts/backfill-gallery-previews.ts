@@ -78,6 +78,8 @@ async function main() {
         }
 
         await uploadCustomBuildArtifact({ bucket: row.bucket, path, bytes, contentType: descriptor.contentType });
+        // the row keeps pointing at the svg until it is gone so a failed delete is retried on the next run
+        if (row.path !== path) await deleteCustomBuildArtifact({ bucket: row.bucket, path: row.path });
         const recorded = await prisma.$transaction(async (tx) => {
           const owner = await tx.customBuild.updateMany({
             where: { id: row.customBuildId, removedAt: null },
@@ -105,7 +107,6 @@ async function main() {
           console.log(`${label} skipped, build was removed`);
           continue;
         }
-        if (row.path !== path) await deleteCustomBuildArtifact({ bucket: row.bucket, path: row.path });
         console.log(`${label} ${bytes.byteLength} bytes in ${seconds}s`);
         redrawn += 1;
       } catch (error) {
