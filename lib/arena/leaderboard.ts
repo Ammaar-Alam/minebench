@@ -29,7 +29,8 @@ const MOVEMENT_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 const MOVEMENT_CONFIDENCE_FLOOR = 50;
 const BRADLEY_TERRY_SNAPSHOT_EPOCH = new Date("2026-08-25T00:00:00.000Z");
 const LEADERBOARD_RUNTIME_CACHE_KEY = "response-v2";
-const LEADERBOARD_RUNTIME_CACHE_TTL_SECONDS = 30;
+// outlives the one minute client refresh so open tabs share a computation
+const LEADERBOARD_RUNTIME_CACHE_TTL_SECONDS = 300;
 
 type PairCoverage = {
   decisiveVotes: number;
