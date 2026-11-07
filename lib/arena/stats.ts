@@ -65,11 +65,11 @@ export type PairwiseRow = {
   total: number;
 };
 
-type PromptDispersionRow = {
+type PromptScoreTotal = {
   modelId: string;
   promptId: string;
-  promptAverage: NumberLike;
-  promptVotes: NumberLike;
+  points: number;
+  votes: number;
 };
 
 type PromptBreakdownRow = {
@@ -140,6 +140,7 @@ export type PromptSignalSnapshot = {
   eligiblePromptIds: string[];
   activeModelIds: string[];
   byPromptModel: Map<string, PromptStrengthStats>;
+  promptScoreTotals: PromptScoreTotal[];
   globalModels: GlobalModelBradleyTerryStats[];
   byModelId: Map<string, GlobalModelBradleyTerryStats>;
   byModelKey: Map<string, GlobalModelBradleyTerryStats>;
@@ -747,6 +748,7 @@ async function queryPromptSignalSnapshot(): Promise<PromptSignalSnapshot> {
       eligiblePromptIds,
       activeModelIds: [],
       byPromptModel: new Map(),
+      promptScoreTotals: [],
       globalModels: [],
       byModelId: new Map(),
       byModelKey: new Map(),
@@ -770,6 +772,7 @@ async function queryPromptSignalSnapshot(): Promise<PromptSignalSnapshot> {
       eligiblePromptIds,
       activeModelIds,
       byPromptModel: new Map(),
+      promptScoreTotals: [],
       globalModels: [],
       byModelId: new Map(),
       byModelKey: new Map(),
@@ -781,27 +784,14 @@ async function queryPromptSignalSnapshot(): Promise<PromptSignalSnapshot> {
   const promptFilter = promptFilterSql(eligiblePromptIds);
   const modelAFilter = modelFilterSql(Prisma.sql`matchup."modelAId"`, activeModelIds);
   const modelBFilter = modelFilterSql(Prisma.sql`matchup."modelBId"`, activeModelIds);
+  // integer counts keep group state small since numeric SUM spilled every run to disk
   const pairVotes = await prisma.$queryRaw<PromptSignalPairAggregateRow[]>`
     SELECT
       matchup."promptId" AS "promptId",
       matchup."modelAId" AS "modelAId",
       matchup."modelBId" AS "modelBId",
-      SUM(
-        CASE vote.choice
-          WHEN 'A' THEN 1.0
-          WHEN 'B' THEN 0.0
-          WHEN 'TIE' THEN 0.5
-          ELSE 0.0
-        END
-      )::double precision AS "pointsA",
-      SUM(
-        CASE vote.choice
-          WHEN 'A' THEN 0.0
-          WHEN 'B' THEN 1.0
-          WHEN 'TIE' THEN 0.5
-          ELSE 0.0
-        END
-      )::double precision AS "pointsB",
+      (COUNT(*) FILTER (WHERE vote.choice = 'A') + COUNT(*) FILTER (WHERE vote.choice = 'TIE') * 0.5)::double precision AS "pointsA",
+      (COUNT(*) FILTER (WHERE vote.choice = 'B') + COUNT(*) FILTER (WHERE vote.choice = 'TIE') * 0.5)::double precision AS "pointsB",
       COUNT(*)::int AS total
     FROM "Vote" vote
     INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
@@ -815,6 +805,14 @@ async function queryPromptSignalSnapshot(): Promise<PromptSignalSnapshot> {
   const globalPairRows = new Map<string, PairwiseRow>();
   const pairRowsByPrompt = new Map<string, Map<string, PairwiseRow>>();
   const modelIdsByPrompt = new Map<string, Set<string>>();
+  const promptScoreTotals = new Map<string, PromptScoreTotal>();
+  const addPromptScore = (promptId: string, modelId: string, points: number, votes: number) => {
+    const key = promptModelKey(promptId, modelId);
+    const entry = promptScoreTotals.get(key) ?? { modelId, promptId, points: 0, votes: 0 };
+    entry.points += points;
+    entry.votes += votes;
+    promptScoreTotals.set(key, entry);
+  };
 
   for (const row of pairVotes) {
     const promptId = row.promptId;
@@ -825,6 +823,8 @@ async function queryPromptSignalSnapshot(): Promise<PromptSignalSnapshot> {
     const total = toNumber(row.total);
 
     aggregatePairRow(globalPairRows, modelAId, modelBId, pointsA, pointsB, total);
+    addPromptScore(promptId, modelAId, pointsA, total);
+    addPromptScore(promptId, modelBId, pointsB, total);
 
     const promptPairs = pairRowsByPrompt.get(promptId) ?? new Map<string, PairwiseRow>();
     aggregatePairRow(promptPairs, modelAId, modelBId, pointsA, pointsB, total);
@@ -904,6 +904,7 @@ async function queryPromptSignalSnapshot(): Promise<PromptSignalSnapshot> {
     eligiblePromptIds,
     activeModelIds,
     byPromptModel,
+    promptScoreTotals: [...promptScoreTotals.values()],
     globalModels: rankedGlobalModels,
     byModelId,
     byModelKey,
@@ -967,72 +968,17 @@ async function queryLeaderboardDispersionByModelId(): Promise<Map<string, ScoreD
   if (promptSignal.activeModelIds.length === 0) {
     return new Map();
   }
-  const filter = promptFilterSql(promptSignal.eligiblePromptIds);
-  const activeModelBothFilter = Prisma.sql`
-    ${modelFilterSql(Prisma.sql`matchup."modelAId"`, promptSignal.activeModelIds)}
-    AND ${modelFilterSql(Prisma.sql`matchup."modelBId"`, promptSignal.activeModelIds)}
-  `;
-  const rows = await prisma.$queryRaw<PromptDispersionRow[]>`
-      WITH eligible_votes AS (
-        SELECT
-          matchup."promptId" AS prompt_id,
-          matchup."modelAId" AS "modelAId",
-          matchup."modelBId" AS "modelBId",
-          vote.choice AS choice
-        FROM "Vote" vote
-        INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
-        WHERE vote.choice IN ('A', 'B', 'TIE')
-          AND ${filter}
-          AND ${activeModelBothFilter}
-      ),
-      model_prompt_scores AS (
-        SELECT
-          eligible_votes."modelAId" AS model_id,
-          eligible_votes.prompt_id AS prompt_id,
-          CASE eligible_votes.choice
-            WHEN 'A' THEN 1.0
-            WHEN 'B' THEN 0.0
-            WHEN 'TIE' THEN 0.5
-            ELSE NULL
-          END AS score
-        FROM eligible_votes
-
-        UNION ALL
-
-        SELECT
-          eligible_votes."modelBId" AS model_id,
-          eligible_votes.prompt_id AS prompt_id,
-          CASE eligible_votes.choice
-            WHEN 'A' THEN 0.0
-            WHEN 'B' THEN 1.0
-            WHEN 'TIE' THEN 0.5
-            ELSE NULL
-          END AS score
-        FROM eligible_votes
-      ),
-      per_prompt AS (
-        SELECT
-          model_prompt_scores.model_id AS "modelId",
-          model_prompt_scores.prompt_id AS "promptId",
-          AVG(model_prompt_scores.score)::double precision AS "promptAverage",
-          COUNT(*)::int AS "promptVotes"
-        FROM model_prompt_scores
-        GROUP BY model_prompt_scores.model_id, model_prompt_scores.prompt_id
-      )
-      SELECT per_prompt."modelId", per_prompt."promptId", per_prompt."promptAverage", per_prompt."promptVotes"
-      FROM per_prompt
-    `;
 
   const corePromptIds = await queryCorePromptIds(promptSignal.eligiblePromptIds);
   const samplesByModelId = new Map<string, PromptScoreSample[]>();
-  for (const row of rows) {
+  for (const row of promptSignal.promptScoreTotals) {
     if (!corePromptIds.has(row.promptId)) continue;
     const samples = samplesByModelId.get(row.modelId) ?? [];
     const promptStrength = promptSignal.byPromptModel.get(promptModelKey(row.promptId, row.modelId));
     samples.push({
       promptId: row.promptId,
-      averageScore: toNumber(row.promptAverage),
-      votes: toNumber(row.promptVotes),
+      averageScore: row.points / row.votes,
+      votes: row.votes,
       promptStrengthPercentile: promptStrength?.percentile ?? null,
     });
     samplesByModelId.set(row.modelId, samples);
