@@ -104,13 +104,14 @@ Copy `.env.example` to `.env` and set what you need.
 `pnpm batch:generate --generate --model opus-5-5 --reasoning xhigh --task_budget 100000`
 sets an advisory task budget independently of reasoning effort and the output cap.
 Batch generation, Sandbox, and MineBench Gallery runs default to 128000 on supported
-native Anthropic models (Opus 4.7, 4.8, 5, 5.5, Sonnet 5.5, Haiku 5.5 and Fable 5, 5.1); Sandbox
+native Anthropic models (Opus 4.7, 4.8, 5, 5.5, Sonnet 5.5, Haiku 5.5 and Fable 5, 5.1, 5.2); Sandbox
 users can change it in request settings. Other models and OpenRouter routes retain their
 existing settings; an explicit budget on an unsupported Anthropic route fails before generation.
 The budget must be an integer of at least 20000. It is recorded in the accepted
 request configuration; no thinking/answer token split is guaranteed. See [task budgets](https://platform.claude.com/docs/en/build-with-claude/task-budgets).
 
 - `MINEBENCH_ALLOW_SERVER_KEYS=1` (production opt-in for server env keys in `/api/generate`)
+- `ANTHROPIC_FABLE_5_2_EFFORT=low|medium|high|xhigh|max`
 - `ANTHROPIC_FABLE_5_1_EFFORT=low|medium|high|xhigh|max`
 - `ANTHROPIC_FABLE_5_EFFORT=low|medium|high|xhigh|max`
 - `ANTHROPIC_OPUS_5_EFFORT=low|medium|high|xhigh|max`
@@ -138,6 +139,7 @@ request configuration; no thinking/answer token split is guaranteed. See [task b
 - GPT 5.6 Luna uses the native OpenAI model ID `gpt-5.6-luna` through the Responses API with `reasoning.mode=pro`, defaults to `reasoning.effort=max`, and uses its 1050000-token context window and 128000-token combined reasoning and output cap. Its OpenRouter fallback uses `openai/gpt-5.6-luna-pro` with max effort and strict structured output.
 - Kimi K3.1 Pro uses the native Moonshot model ID `kimi-k3.1-pro` with the same request contract as Kimi K3: `reasoning_effort=max` (the API also accepts `high` and `low`; thinking is always on), the 1048576-token completion ceiling, omitted fixed sampling parameters, and strict structured output. `kimi-k3.1-pro-highspeed` is the same model at a higher price and is not catalogued. Its OpenRouter fallback uses `moonshotai/kimi-k3.1-pro` with max effort and fails closed if that effort is rejected. See the [quickstart](https://platform.kimi.ai/docs/guide/kimi-k3-1-pro-quickstart) and [reasoning effort](https://platform.kimi.ai/docs/guide/use-reasoning-effort).
 - Kimi K3 uses the native Moonshot model ID `kimi-k3`, always reasons with `reasoning_effort=max`, uses its 1048576-token completion ceiling, and omits its fixed sampling parameters. Its OpenRouter fallback uses `moonshotai/kimi-k3` with max effort and fails closed if that effort is rejected.
+- Claude Fable 5.2 uses the native Anthropic model ID `claude-fable-5-2`, supports always-on adaptive thinking with effort `low|medium|high|xhigh|max`, and MineBench defaults it to `max` with its 1M-token context window and 128000-token output cap. It omits sampling controls and uses native structured output without forced tool choice. Its OpenRouter fallback is `anthropic/claude-fable-5.2` with the same cap and effort ladder.
 - Claude Fable 5.1 uses the native Anthropic model ID `claude-fable-5-1`, supports always-on adaptive thinking with effort `low|medium|high|xhigh|max`, and MineBench defaults it to `max` with its 1M-token context window and 128000-token output cap. It omits sampling controls and uses native structured output without forced tool choice. Its OpenRouter fallback is `anthropic/claude-fable-5.1` with the same cap and effort ladder.
 - Claude Fable 5 uses the native Anthropic model ID `claude-fable-5`, supports always-on adaptive thinking with effort `low|medium|high|xhigh|max`, and MineBench defaults it to `max` with a 128000-token output cap.
 - Claude Opus 5 uses the native Anthropic model ID `claude-opus-5`, reaches its 1M-token context window without a beta header, supports adaptive thinking with effort `low|medium|high|xhigh|max`, and MineBench defaults it to `max` with a 128000-token output cap. Its OpenRouter fallback uses `anthropic/claude-opus-5` with the same cap and effort ladder.

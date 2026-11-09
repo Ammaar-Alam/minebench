@@ -125,6 +125,11 @@ const MODEL_RUN_PARAMETERS = {
     { label: "Reasoning effort", value: "Max" },
     { label: "Sampling", value: "Provider default" },
   ],
+  anthropic_claude_fable_5_2: [
+    { label: "Thinking", value: "Adaptive" },
+    { label: "Reasoning effort", value: "Max" },
+    { label: "Sampling", value: "Provider default" },
+  ],
   anthropic_claude_opus_5: [
     { label: "Thinking", value: "Adaptive" },
     { label: "Reasoning effort", value: "Max" },

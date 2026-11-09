@@ -45,6 +45,8 @@ assert.equal(claudeCapabilities("claude-sonnet-5-5").maxOutputTokens, 128_000);
 assert.equal(claudeCapabilities("claude-sonnet-5-5").taskBudgets, true);
 assert.equal(claudeCapabilities("claude-haiku-5-5").maxOutputTokens, 128_000);
 assert.equal(claudeCapabilities("claude-haiku-5-5").taskBudgets, true);
+assert.equal(claudeCapabilities("claude-fable-5-2").maxOutputTokens, 128_000);
+assert.equal(claudeCapabilities("claude-fable-5-2").taskBudgets, true);
 assert.equal(claudeCapabilities("claude-sonnet-5").taskBudgets, false);
 assert.equal(claudeCapabilities("claude-opus-4-6").maxOutputTokens, null);
 
@@ -66,7 +68,7 @@ const NOTHING_SUPPORTED = {
 // An undeclared Claude release must not inherit its predecessor's capabilities.
 // A future model may change its output cap or effort levels, so it resolves to
 // nothing until someone reads the model card and declares it.
-for (const modelId of ["claude-opus-5-1", "claude-opus-6", "claude-sonnet-5-1", "claude-sonnet-5-6", "claude-haiku-5", "claude-haiku-4-5"]) {
+for (const modelId of ["claude-opus-5-1", "claude-opus-6", "claude-sonnet-5-1", "claude-sonnet-5-6", "claude-fable-5-3", "claude-haiku-5", "claude-haiku-4-5"]) {
   assert.deepEqual(
     claudeCapabilities(modelId),
     NOTHING_SUPPORTED,

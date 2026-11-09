@@ -227,6 +227,15 @@ const CATALOG = [
     openRouterModelId: "openai/gpt-oss-120b",
   },
   {
+    key: "anthropic_claude_fable_5_2",
+    slug: "claude-fable-5-2",
+    provider: "anthropic",
+    modelId: "claude-fable-5-2",
+    displayName: "Claude Fable 5.2",
+    enabled: true,
+    openRouterModelId: "anthropic/claude-fable-5.2",
+  },
+  {
     key: "anthropic_claude_fable_5_1",
     slug: "claude-fable-5-1",
     provider: "anthropic",
