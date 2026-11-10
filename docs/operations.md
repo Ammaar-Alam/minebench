@@ -170,6 +170,9 @@ Reference prompt template:
 - `POST /api/arena/vote`
   - body: `{ matchupId, choice }`
   - `choice`: `A | B | TIE | BOTH_BAD`
+- `POST /api/arena/vote/reasons`
+  - body: `{ matchupId, reasons }`, sent once when the reveal of an `A` or `B` vote ends
+  - `reasons`: any of `followed_prompt | more_accurate | clearer | better_style | more_creative`, or empty
 - `GET /api/arena/prompts`
 - `GET /api/sandbox/benchmark?promptId=&modelA=&modelB=&modelC=&modelD=`
 - `GET /api/leaderboard`

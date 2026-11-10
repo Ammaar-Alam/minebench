@@ -1,0 +1,3 @@
+ALTER TABLE "Vote"
+  ADD COLUMN "reasons" TEXT[] DEFAULT ARRAY[]::TEXT[],
+  ADD COLUMN "reasonsAt" TIMESTAMP(3);

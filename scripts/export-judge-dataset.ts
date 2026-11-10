@@ -224,7 +224,7 @@ async function main() {
       take: VOTE_PAGE_SIZE,
       ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
       select: {
-        id: true, createdAt: true, choice: true, sessionId: true, userId: true,
+        id: true, createdAt: true, choice: true, sessionId: true, userId: true, reasons: true, reasonsAt: true,
         matchup: {
           select: {
             id: true, createdAt: true, promptId: true, buildAId: true, buildBId: true,
@@ -238,6 +238,8 @@ async function main() {
         id: v.id,
         createdAt: v.createdAt,
         choice: v.choice,
+        reasons: v.reasons,
+        reasonsAt: v.reasonsAt,
         sessionId: v.sessionId,
         userId: v.userId,
         restricted: isRestricted(v.sessionId, v.userId),
