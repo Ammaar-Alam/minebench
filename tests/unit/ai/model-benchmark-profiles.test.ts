@@ -159,6 +159,19 @@ assert.deepEqual(kimiK31Pro.totalCost, { usd: 6.24, attemptCount: 16 });
 assert.equal(kimiK31Pro.totalAttempts, 16);
 assert.equal(kimiK31Pro.buildCount, 15);
 
+const carbon = getModelBenchmarkProfile("gemini_4_carbon");
+assert.ok(carbon, "Gemini 4 Carbon should have verified benchmark details");
+assert.deepEqual(carbon.parameters, [
+  { label: "Thinking level", value: "High" },
+  { label: "Sampling", value: "Provider default" },
+]);
+assert.deepEqual(carbon.outputCap, { kind: "exact", tokens: 1_048_576 });
+assert.deepEqual(carbon.averageInference, { milliseconds: 960_925 });
+assert.equal(carbon.averageJsonSizeBytes, 43_303_551);
+assert.deepEqual(carbon.totalCost, { usd: 11.65, attemptCount: 25 });
+assert.equal(carbon.totalAttempts, 25);
+assert.equal(carbon.buildCount, 15);
+
 const gpt56 = getModelBenchmarkProfile("openai_gpt_5_6_sol");
 assert.ok(gpt56, "GPT 5.6 Sol Pro should have verified benchmark details");
 assert.deepEqual(gpt56.parameters, [
