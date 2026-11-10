@@ -45,6 +45,14 @@ const EXPECTATIONS: ExpectedCatalogEntry[] = [
     slug: "opus-5-5",
   },
   {
+    key: "anthropic_claude_fable_5_2",
+    provider: "anthropic",
+    modelId: "claude-fable-5-2",
+    displayName: "Claude Fable 5.2",
+    openRouterModelId: "anthropic/claude-fable-5.2",
+    slug: "claude-fable-5-2",
+  },
+  {
     key: "anthropic_claude_fable_5_1",
     provider: "anthropic",
     modelId: "claude-fable-5-1",
@@ -127,6 +135,7 @@ runProviderConfigTest(
   "anthropic family",
   {
     ANTHROPIC_STREAM_RESPONSES: "0",
+    ANTHROPIC_FABLE_5_2_EFFORT: "max",
     ANTHROPIC_FABLE_5_1_EFFORT: "max",
     ANTHROPIC_OPUS_5_5_EFFORT: "max",
     ANTHROPIC_SONNET_5_5_EFFORT: "max",
