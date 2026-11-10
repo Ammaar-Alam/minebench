@@ -35,6 +35,7 @@ import {
   type VoxelMeshPayload,
 } from "@/lib/voxel/mesh";
 import { claimArenaPremesh, type ArenaPremeshEntry } from "@/lib/arena/premesh";
+import { ARENA_VOTE_REASONS, type ArenaVoteReason } from "@/lib/arena/voteReasons";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import type { VoxelViewerBuildMetrics } from "@/components/voxel/VoxelViewer";
 import { formatVoxelLoadingMessage } from "@/components/voxel/VoxelLoadingHud";
@@ -1037,6 +1038,26 @@ function formatBuildLoadingMessage(
   return formatVoxelLoadingMessage(fullLoading ? "Retrieving full build" : "Retrieving build", progress);
 }
 
+// best effort: the vote is already saved, so a lost request only loses the reasons
+function sendVoteReasons(matchupId: string, reasons: ArenaVoteReason[]) {
+  void fetch("/api/arena/vote/reasons", {
+    method: "POST",
+    credentials: "include",
+    keepalive: true,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ matchupId, reasons }),
+  }).catch(() => {});
+}
+
+function shuffledVoteReasons() {
+  const reasons = [...ARENA_VOTE_REASONS];
+  for (let i = reasons.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [reasons[i], reasons[j]] = [reasons[j], reasons[i]];
+  }
+  return reasons;
+}
+
 type RevealAction = ArenaAction;
 
 type RevealState =
@@ -1272,6 +1293,11 @@ export function Arena() {
   const autoAdvanceTimeoutRef = useRef<number | null>(null);
   const stuckAutoSkipTimeoutRef = useRef<number | null>(null);
   const advanceNowRequestedAtRef = useRef<number | null>(null);
+  const [voteReasons, setVoteReasons] = useState<ArenaVoteReason[]>([]);
+  const voteReasonsRef = useRef<ArenaVoteReason[]>([]);
+  // a new order per vote, so no reason gains from always being first
+  const [voteReasonOrder, setVoteReasonOrder] = useState(() => [...ARENA_VOTE_REASONS]);
+  const voteReasonsHeldRef = useRef(false);
   const nextMatchupLoadingRef = useRef(false);
   const anonymousVoteCountRef = useRef(0);
   const arenaConversionSeenRef = useRef(false);
@@ -1461,6 +1487,20 @@ export function Arena() {
   useEffect(() => {
     revealRef.current = reveal;
   }, [reveal]);
+
+  useEffect(() => {
+    // leaving mid reveal would otherwise drop the picked reasons
+    const flush = () => {
+      const current = revealRef.current;
+      if (current.kind !== "reveal" || transitionRef.current) return;
+      if (current.action === "A" || current.action === "B") sendVoteReasons(current.matchupId, voteReasonsRef.current);
+    };
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      flush();
+    };
+  }, []);
 
   useEffect(() => {
     if (!arenaConversionQueued || reveal.kind !== "none" || transitioning) return;
@@ -2416,6 +2456,7 @@ export function Arena() {
     setTransitioning(true);
     clearAutoAdvance();
     advanceNowRequestedAtRef.current = null;
+    if (current.action === "A" || current.action === "B") sendVoteReasons(matchupId, voteReasonsRef.current);
 
     await sleepMs(TRANSITION_OUT_MS);
 
@@ -2460,6 +2501,8 @@ export function Arena() {
 
   function scheduleAutoAdvance(matchupId: string, advanceAt: number, next: ArenaMatchup) {
     clearAutoAdvance();
+    // picking a reason keeps the reveal open until the voter moves on
+    if (voteReasonsHeldRef.current && advanceNowRequestedAtRef.current == null) return;
     const remaining = advanceAt - Date.now();
     const delay = Math.max(0, remaining);
     autoAdvanceTimeoutRef.current = window.setTimeout(() => {
@@ -2489,7 +2532,21 @@ export function Arena() {
     }, 6000);
   }
 
+  function toggleVoteReason(reason: ArenaVoteReason) {
+    voteReasonsHeldRef.current = true;
+    clearAutoAdvance();
+    const next = voteReasonsRef.current.includes(reason)
+      ? voteReasonsRef.current.filter((r) => r !== reason)
+      : [...voteReasonsRef.current, reason];
+    voteReasonsRef.current = next;
+    setVoteReasons(next);
+  }
+
   function beginReveal(matchupId: string, action: RevealAction) {
+    voteReasonsHeldRef.current = false;
+    voteReasonsRef.current = [];
+    setVoteReasons([]);
+    setVoteReasonOrder(shuffledVoteReasons());
     setReveal({
       kind: "reveal",
       matchupId,
@@ -3223,7 +3280,7 @@ export function Arena() {
               aria-hidden={!revealMeta.visible}
               className={`[grid-area:1/1] transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none ${revealMeta.visible ? "opacity-100 translate-y-0" : "pointer-events-none opacity-0 -translate-y-1"}`}
             >
-              <div className="flex h-full flex-col justify-center gap-3 border-t border-border/70 px-1 py-2 sm:py-3">
+              <div className="flex h-full flex-col justify-center gap-4 border-t border-border/70 px-1 py-2 sm:py-3">
                 <div key={matchup?.id} className="grid grid-cols-2 gap-2 sm:gap-3">
                   <RevealLane
                     side="A"
@@ -3240,8 +3297,28 @@ export function Arena() {
                   />
                 </div>
 
-                <div className="flex items-center gap-3">
-                  <div className="relative h-px min-w-0 flex-1 bg-border/50">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+                  {revealAction === "A" || revealAction === "B" ? (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="mb-eyebrow mr-1.5">Why</span>
+                      {voteReasonOrder.map((reason) => (
+                        <button
+                          key={reason.key}
+                          type="button"
+                          className="mb-chip h-8 px-3 py-0 text-xs"
+                          data-side={revealAction}
+                          aria-pressed={voteReasons.includes(reason.key)}
+                          // keep focus off the chip so Space still moves to the next matchup
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => toggleVoteReason(reason.key)}
+                        >
+                          {reason.label}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <div className="relative h-px min-w-24 flex-1 bg-border/50">
                     <div
                       className="absolute inset-y-0 left-0 bg-accent/70 transition-[width] duration-100 ease-linear motion-reduce:transition-none"
                       style={{ width: `${(revealMeta.progress * 100).toFixed(1)}%` }}

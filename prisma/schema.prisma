@@ -574,6 +574,10 @@ model Vote {
   sessionId String
   choice    String
 
+  // what the voter said decided an A or B vote; reasonsAt is set once they were offered, picked or not
+  reasons   String[]  @default([])
+  reasonsAt DateTime?
+
   @@unique([matchupId, sessionId])
   @@index([userId, createdAt])
   @@index([sessionId])

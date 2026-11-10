@@ -1146,7 +1146,11 @@
   }
 
   .mb-chip[aria-pressed="true"] {
-    @apply bg-accent/16 ring-accent/45;
+    @apply bg-accent/15 ring-accent/45;
+  }
+
+  .mb-chip[data-side="B"][aria-pressed="true"] {
+    @apply bg-accent2/15 ring-accent2/45;
   }
 
   .mb-chip[disabled] {
