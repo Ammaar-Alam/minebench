@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { getVoxelExportMaterial } from "@/lib/voxel/export/materials";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { voxelBuildBlockAt, voxelBuildBlockCount, type RenderableVoxelBuild } from "@/lib/voxel/packedBlocks";
@@ -125,6 +126,24 @@ export async function rasterizeGalleryPreview(svg: Uint8Array): Promise<Uint8Arr
   return sharp(svg).png({ compressionLevel: 9 }).toBuffer();
 }
 
+const RASTERIZE_SCRIPT = `const chunks=[];process.stdin.on("data",(chunk)=>chunks.push(chunk)).on("end",()=>require("sharp")(Buffer.concat(chunks)).png({compressionLevel:9}).toBuffer().then((png)=>process.stdout.write(png)))`;
+const RASTERIZE_TIMEOUT_MS = 300_000;
+
+// a large preview takes hundreds of MiB of native memory that the allocator keeps, so the worker rasterizes in a process that exits
+function rasterizeGalleryPreviewIsolated(svg: Uint8Array): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      process.execPath,
+      ["-e", RASTERIZE_SCRIPT],
+      { encoding: "buffer", maxBuffer: 64 << 20, timeout: RASTERIZE_TIMEOUT_MS },
+      (error, png) => (error ? reject(error) : resolve(png)),
+    );
+    // a child that exits early reports through the callback
+    child.stdin!.on("error", () => {});
+    child.stdin!.end(svg);
+  });
+}
+
 export function buildGalleryPreviewPng(build: RenderableVoxelBuild): Promise<Uint8Array> {
-  return rasterizeGalleryPreview(buildGalleryPreviewSvg(build));
+  return rasterizeGalleryPreviewIsolated(buildGalleryPreviewSvg(build));
 }
