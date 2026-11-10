@@ -25,6 +25,7 @@ import { getArenaBuildMeta, invalidateArenaBuildMeta } from "@/lib/arena/buildMe
 import { parseArenaBuildAccessToken } from "@/lib/arena/matchupToken";
 import { isLoopbackDatabaseUrl } from "@/lib/db/identity";
 import { prisma } from "@/lib/prisma";
+import { voxelBuildBlockCount } from "@/lib/voxel/packedBlocks";
 import { ServerTiming } from "@/lib/serverTiming";
 import { trackServerEventInBackground } from "@/lib/analytics.server";
 
@@ -550,7 +551,7 @@ export async function GET(
             });
           }
           const plan = planArenaBuildStream({
-            totalBlocks: voxelBuild.blocks.length,
+            totalBlocks: voxelBuildBlockCount(voxelBuild),
             hints: prepared.hints,
             variant,
           });
