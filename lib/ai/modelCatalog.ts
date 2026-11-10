@@ -353,6 +353,15 @@ const CATALOG = [
     openRouterModelId: "anthropic/claude-opus-4.8",
   },
   {
+    key: "gemini_4_carbon",
+    slug: "gemini-4-carbon",
+    provider: "gemini",
+    modelId: "gemini-4-carbon",
+    displayName: "Gemini 4 Carbon",
+    enabled: true,
+    openRouterModelId: "google/gemini-4-carbon",
+  },
+  {
     key: "gemini_4_argon",
     slug: "gemini-4-argon",
     provider: "gemini",

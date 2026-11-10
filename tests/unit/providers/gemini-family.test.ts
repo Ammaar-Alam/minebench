@@ -256,6 +256,60 @@ runProviderConfigTest("gemini family", {}, async (capture) => {
     "Direct Gemini 4 Argon trace should report the highest thinking level",
   );
 
+  // Carbon shares the Argon request contract
+  const carbon = assertCatalogEntry({
+    key: "gemini_4_carbon",
+    provider: "gemini",
+    modelId: "gemini-4-carbon",
+    displayName: "Gemini 4 Carbon",
+    openRouterModelId: "google/gemini-4-carbon",
+    slug: "gemini-4-carbon",
+  });
+  assert.deepEqual(geminiThinkingConfigForModel(carbon.modelId), { thinkingLevel: "high" });
+  assert.throws(
+    () => geminiThinkingConfigForModel(carbon.modelId, "minimal"),
+    /Supported values: high, medium, low/,
+  );
+  assert.deepEqual(openRouterReasoningEffortAttempts(carbon.openRouterModelId!), [
+    "high",
+    "medium",
+    "low",
+  ]);
+  assert.equal(modelRequiresReasoning(carbon.openRouterModelId!), true);
+  capture.respondWith((request) => {
+    if (!request.url.includes("/models/gemini-4-carbon:")) return null;
+    const events = [
+      { candidates: [{ content: { parts: [{ text: "planning", thought: true }] } }] },
+      { candidates: [{ content: { parts: [{ text: build }] }, finishReason: "STOP" }] },
+    ];
+    return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  });
+  const carbonRun = await runGeneration(capture, {
+    modelKey: carbon.key,
+    maxAttempts: 1,
+    providerKeys: { gemini: "test-google-key" },
+  });
+  capture.respondWith(null);
+  assert.equal(carbonRun.result.rawText, build);
+  const carbonRequests = carbonRun.requests.filter((request) =>
+    request.url.includes("/models/gemini-4-carbon:streamGenerateContent"),
+  );
+  assert.equal(carbonRequests.length, 1);
+  const carbonConfig = carbonRequests[0].body.generationConfig as Record<string, unknown>;
+  assert.deepEqual(carbonConfig.thinkingConfig, { thinkingLevel: "high", includeThoughts: true });
+  assert.equal(Object.hasOwn(carbonConfig, "temperature"), false);
+  assertTraceLine(
+    carbonRun.traces,
+    [
+      "Routing via direct gemini provider (gemini-4-carbon)",
+      "thinking_mode=thinking_level=high",
+      "temperature=default",
+    ],
+    "Direct Gemini 4 Carbon trace should report the highest thinking level",
+  );
+
   // A dropped stream resumes from its last checkpoint and drops the uncommitted text
   const sse = (event: unknown) => new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`);
   const droppedChunks = [

@@ -133,9 +133,9 @@ export async function geminiGenerateText(params: {
   if (!apiKey) throw new Error("Missing GOOGLE_AI_API_KEY");
   if (!params.jsonSchema) throw new Error("Missing jsonSchema for Gemini JSON mode");
 
-  // Argon can think past undici's 5-minute header and body timeouts, so it
+  // Gemini 4 can think past undici's 5-minute header and body timeouts, so it
   // streams thought summaries to keep the connection active
-  const streamThoughts = params.modelId === "gemini-4-argon";
+  const streamThoughts = params.modelId.startsWith("gemini-4-");
   const stream = Boolean(params.onDelta) || streamThoughts;
   const method = stream ? "streamGenerateContent" : "generateContent";
   const url = new URL(
