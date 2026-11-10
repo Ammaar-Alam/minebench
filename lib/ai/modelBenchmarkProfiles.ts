@@ -365,6 +365,10 @@ export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
 const MODEL_BENCHMARK_METADATA: Partial<
   Record<ModelKey, Omit<ModelBenchmarkProfile, "outputCap" | "parameters">>
 > = {
+  anthropic_claude_fable_5_2: {
+    totalCost: { usd: 38.08, attemptCount: 15 },
+    taskBudget: "128,000 tokens",
+  },
   anthropic_claude_haiku_5_5: {
     totalCost: { usd: 0.54, attemptCount: 20 },
     taskBudget: "128,000 tokens",

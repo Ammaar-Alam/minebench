@@ -116,6 +116,21 @@ assert.deepEqual(grok47.totalCost, { usd: 42.40, attemptCount: 20 });
 assert.equal(grok47.totalAttempts, 20);
 assert.equal(grok47.buildCount, 15);
 
+const fable52 = getModelBenchmarkProfile("anthropic_claude_fable_5_2");
+assert.ok(fable52, "Claude Fable 5.2 should have verified benchmark details");
+assert.deepEqual(fable52.parameters, [
+  { label: "Thinking", value: "Adaptive" },
+  { label: "Reasoning effort", value: "Max" },
+  { label: "Sampling", value: "Provider default" },
+]);
+assert.deepEqual(fable52.outputCap, { kind: "exact", tokens: 128_000 });
+assert.equal(fable52.taskBudget, "128,000 tokens");
+assert.deepEqual(fable52.averageInference, { milliseconds: 774_919 });
+assert.equal(fable52.averageJsonSizeBytes, 43_778_882);
+assert.deepEqual(fable52.totalCost, { usd: 38.08, attemptCount: 15 });
+assert.equal(fable52.totalAttempts, 15);
+assert.equal(fable52.buildCount, 15);
+
 const haiku55 = getModelBenchmarkProfile("anthropic_claude_haiku_5_5");
 assert.ok(haiku55, "Claude Haiku 5.5 should have verified benchmark details");
 assert.deepEqual(haiku55.parameters, [
