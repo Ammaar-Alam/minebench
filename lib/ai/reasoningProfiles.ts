@@ -1,7 +1,7 @@
 import { claudeCapabilities, type ClaudeEffort } from "@/lib/ai/claudeModels";
 
 export type AnthropicAdaptiveEffort = ClaudeEffort;
-export type GeminiThinkingLevel = "minimal" | "low" | "medium" | "high";
+export type GeminiThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh";
 
 export type GeminiThinkingConfig = {
   thinkingLevel?: GeminiThinkingLevel;
@@ -131,6 +131,10 @@ const EFFORT_LADDER_RULES: readonly EffortLadderRule[] = [
   {
     ids: ["muse-wonder-1.0", "meta/muse-wonder"],
     ladder: ["max", "xhigh", "high", "medium", "low", "minimal"],
+  },
+  {
+    ids: ["gemini-4-hydrogen", "google/gemini-4-hydrogen"],
+    ladder: ["xhigh", "high", "medium", "low"],
   },
   {
     ids: [
@@ -272,6 +276,7 @@ export function modelRequiresReasoning(modelId: string): boolean {
     normalized === "z-ai/glm-5.3" ||
     normalized === "glm-5.3-flash" ||
     normalized === "z-ai/glm-5.3-flash" ||
+    normalized === "google/gemini-4-hydrogen" ||
     normalized === "google/gemini-4-carbon" ||
     normalized === "google/gemini-4-argon" ||
     normalized === "google/gemini-3.8-flash" ||
