@@ -172,6 +172,10 @@ const MODEL_RUN_PARAMETERS = {
     { label: "Thinking", value: "Adaptive" },
     { label: "Reasoning effort", value: "Max" },
   ],
+  gemini_4_hydrogen: [
+    { label: "Thinking level", value: "XHigh" },
+    { label: "Sampling", value: "Provider default" },
+  ],
   gemini_4_carbon: [
     { label: "Thinking level", value: "High" },
     { label: "Sampling", value: "Provider default" },
@@ -382,6 +386,9 @@ const MODEL_BENCHMARK_METADATA: Partial<
   },
   xai_grok_4_7: {
     totalCost: { usd: 42.40, attemptCount: 20 },
+  },
+  gemini_4_hydrogen: {
+    totalCost: { usd: 6.96, attemptCount: 21 },
   },
   gemini_4_carbon: {
     totalCost: { usd: 11.65, attemptCount: 25 },

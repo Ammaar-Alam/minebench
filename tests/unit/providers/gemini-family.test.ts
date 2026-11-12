@@ -256,6 +256,62 @@ runProviderConfigTest("gemini family", {}, async (capture) => {
     "Direct Gemini 4 Argon trace should report the highest thinking level",
   );
 
+  // Hydrogen streams like Argon and adds an xhigh thinking level on top
+  const hydrogen = assertCatalogEntry({
+    key: "gemini_4_hydrogen",
+    provider: "gemini",
+    modelId: "gemini-4-hydrogen",
+    displayName: "Gemini 4 Hydrogen",
+    openRouterModelId: "google/gemini-4-hydrogen",
+    slug: "gemini-4-hydrogen",
+  });
+  assert.deepEqual(geminiThinkingConfigForModel(hydrogen.modelId), { thinkingLevel: "xhigh" });
+  assert.deepEqual(geminiThinkingConfigForModel(hydrogen.modelId, "high"), { thinkingLevel: "high" });
+  assert.throws(
+    () => geminiThinkingConfigForModel(hydrogen.modelId, "minimal"),
+    /Supported values: xhigh, high, medium, low/,
+  );
+  assert.deepEqual(openRouterReasoningEffortAttempts(hydrogen.openRouterModelId!), [
+    "xhigh",
+    "high",
+    "medium",
+    "low",
+  ]);
+  assert.equal(modelRequiresReasoning(hydrogen.openRouterModelId!), true);
+  capture.respondWith((request) => {
+    if (!request.url.includes("/models/gemini-4-hydrogen:")) return null;
+    const events = [
+      { candidates: [{ content: { parts: [{ text: "planning", thought: true }] } }] },
+      { candidates: [{ content: { parts: [{ text: build }] }, finishReason: "STOP" }] },
+    ];
+    return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  });
+  const hydrogenRun = await runGeneration(capture, {
+    modelKey: hydrogen.key,
+    maxAttempts: 1,
+    providerKeys: { gemini: "test-google-key" },
+  });
+  capture.respondWith(null);
+  assert.equal(hydrogenRun.result.rawText, build);
+  const hydrogenRequests = hydrogenRun.requests.filter((request) =>
+    request.url.includes("/models/gemini-4-hydrogen:streamGenerateContent"),
+  );
+  assert.equal(hydrogenRequests.length, 1);
+  const hydrogenConfig = hydrogenRequests[0].body.generationConfig as Record<string, unknown>;
+  assert.deepEqual(hydrogenConfig.thinkingConfig, { thinkingLevel: "xhigh", includeThoughts: true });
+  assert.equal(Object.hasOwn(hydrogenConfig, "temperature"), false);
+  assertTraceLine(
+    hydrogenRun.traces,
+    [
+      "Routing via direct gemini provider (gemini-4-hydrogen)",
+      "thinking_mode=thinking_level=xhigh",
+      "temperature=default",
+    ],
+    "Direct Gemini 4 Hydrogen trace should report the xhigh thinking level",
+  );
+
   // Carbon shares the Argon request contract
   const carbon = assertCatalogEntry({
     key: "gemini_4_carbon",

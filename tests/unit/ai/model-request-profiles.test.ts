@@ -18,6 +18,7 @@ for (const [direct, routed] of [
   ["grok-4.5", "x-ai/grok-4.5"],
   ["deepseek-v4-pro", "deepseek/deepseek-v4-pro"],
   ["qwen3.8-max", "qwen/qwen3.8-max"],
+  ["gemini-4-hydrogen", "google/gemini-4-hydrogen"],
   ["gemini-4-carbon", "google/gemini-4-carbon"],
   ["gemini-4-argon", "google/gemini-4-argon"],
   ["gemini-3.7-flash", "google/gemini-3.7-flash"],
@@ -35,6 +36,7 @@ for (const [direct, routed] of [
 
 assert.equal(modelOutputCeiling("kimi-k3.1-pro"), 1_048_576);
 assert.equal(modelOutputCeiling("kimi-k3"), 1_048_576);
+assert.equal(modelOutputCeiling("gemini-4-hydrogen"), 1_048_576);
 assert.equal(modelOutputCeiling("gemini-4-carbon"), 1_048_576);
 assert.equal(modelOutputCeiling("gemini-4-argon"), 1_048_576);
 assert.equal(modelOutputCeiling("grok-4.3"), 1_000_000);
