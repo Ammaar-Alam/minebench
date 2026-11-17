@@ -19,9 +19,25 @@ import {
 // OpenAI pro models use max effort and pro reasoning mode for benchmark runs
 const PRO_LADDER = ["max", "xhigh", "high", "medium", "low", "none"];
 const REASONING_REQUIRED_LADDER = ["max", "xhigh", "high", "medium", "low"];
-const REASONING_REQUIRED_IDS = new Set(["gpt-6.1-sol", "gpt-6-astra"]);
+const REASONING_REQUIRED_IDS = new Set(["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-astra"]);
 
 const PRO_EXPECTATIONS: ExpectedCatalogEntry[] = [
+  {
+    key: "openai_gpt_6_2_astra",
+    provider: "openai",
+    modelId: "gpt-6.2-astra",
+    displayName: "GPT 6.2 Astra Pro",
+    openRouterModelId: "openai/gpt-6.2-astra-pro",
+    slug: "gpt-6-2-astra",
+  },
+  {
+    key: "openai_gpt_6_2_sol",
+    provider: "openai",
+    modelId: "gpt-6.2-sol",
+    displayName: "GPT 6.2 Sol Pro",
+    openRouterModelId: "openai/gpt-6.2-sol-pro",
+    slug: "gpt-6-2-sol",
+  },
   {
     key: "openai_gpt_6_1_sol",
     provider: "openai",
@@ -178,6 +194,8 @@ runProviderConfigTest(
     }
 
     for (const [direct, routed] of [
+      ["gpt-6.2-astra", "openai/gpt-6.2-astra-pro"],
+      ["gpt-6.2-sol", "openai/gpt-6.2-sol-pro"],
       ["gpt-6.1-sol", "openai/gpt-6.1-sol-pro"],
       ["gpt-6-astra", "openai/gpt-6-astra-pro"],
     ]) {
