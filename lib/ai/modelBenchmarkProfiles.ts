@@ -85,6 +85,8 @@ const OPENAI_PRO_MAX: ModelRunParameters = [
 ];
 
 const MODEL_RUN_PARAMETERS = {
+  openai_gpt_6_2_astra: OPENAI_PRO_MAX,
+  openai_gpt_6_2_sol: OPENAI_PRO_MAX,
   openai_gpt_6_1_sol: OPENAI_PRO_MAX,
   openai_gpt_6_sol: OPENAI_PRO_MAX,
   openai_gpt_6_luna: OPENAI_PRO_MAX,
