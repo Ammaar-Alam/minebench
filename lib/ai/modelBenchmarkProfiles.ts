@@ -174,6 +174,10 @@ const MODEL_RUN_PARAMETERS = {
     { label: "Thinking", value: "Adaptive" },
     { label: "Reasoning effort", value: "Max" },
   ],
+  gemini_4_neon: [
+    { label: "Thinking level", value: "XHigh" },
+    { label: "Sampling", value: "Provider default" },
+  ],
   gemini_4_hydrogen: [
     { label: "Thinking level", value: "XHigh" },
     { label: "Sampling", value: "Provider default" },
