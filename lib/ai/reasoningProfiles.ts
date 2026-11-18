@@ -142,7 +142,7 @@ const EFFORT_LADDER_RULES: readonly EffortLadderRule[] = [
     ladder: ["max", "xhigh", "high", "medium", "low", "minimal"],
   },
   {
-    ids: ["gemini-4-hydrogen", "google/gemini-4-hydrogen"],
+    ids: ["gemini-4-neon", "google/gemini-4-neon", "gemini-4-hydrogen", "google/gemini-4-hydrogen"],
     ladder: ["xhigh", "high", "medium", "low"],
   },
   {
@@ -289,6 +289,7 @@ export function modelRequiresReasoning(modelId: string): boolean {
     normalized === "z-ai/glm-5.3" ||
     normalized === "glm-5.3-flash" ||
     normalized === "z-ai/glm-5.3-flash" ||
+    normalized === "google/gemini-4-neon" ||
     normalized === "google/gemini-4-hydrogen" ||
     normalized === "google/gemini-4-carbon" ||
     normalized === "google/gemini-4-argon" ||

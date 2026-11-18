@@ -371,6 +371,15 @@ const CATALOG = [
     openRouterModelId: "anthropic/claude-opus-4.8",
   },
   {
+    key: "gemini_4_neon",
+    slug: "gemini-4-neon",
+    provider: "gemini",
+    modelId: "gemini-4-neon",
+    displayName: "Gemini 4 Neon",
+    enabled: true,
+    openRouterModelId: "google/gemini-4-neon",
+  },
+  {
     key: "gemini_4_hydrogen",
     slug: "gemini-4-hydrogen",
     provider: "gemini",

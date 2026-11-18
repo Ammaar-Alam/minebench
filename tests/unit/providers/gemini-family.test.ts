@@ -312,6 +312,62 @@ runProviderConfigTest("gemini family", {}, async (capture) => {
     "Direct Gemini 4 Hydrogen trace should report the xhigh thinking level",
   );
 
+  // Neon shares the Neon request contract
+  const neon = assertCatalogEntry({
+    key: "gemini_4_neon",
+    provider: "gemini",
+    modelId: "gemini-4-neon",
+    displayName: "Gemini 4 Neon",
+    openRouterModelId: "google/gemini-4-neon",
+    slug: "gemini-4-neon",
+  });
+  assert.deepEqual(geminiThinkingConfigForModel(neon.modelId), { thinkingLevel: "xhigh" });
+  assert.deepEqual(geminiThinkingConfigForModel(neon.modelId, "high"), { thinkingLevel: "high" });
+  assert.throws(
+    () => geminiThinkingConfigForModel(neon.modelId, "minimal"),
+    /Supported values: xhigh, high, medium, low/,
+  );
+  assert.deepEqual(openRouterReasoningEffortAttempts(neon.openRouterModelId!), [
+    "xhigh",
+    "high",
+    "medium",
+    "low",
+  ]);
+  assert.equal(modelRequiresReasoning(neon.openRouterModelId!), true);
+  capture.respondWith((request) => {
+    if (!request.url.includes("/models/gemini-4-neon:")) return null;
+    const events = [
+      { candidates: [{ content: { parts: [{ text: "planning", thought: true }] } }] },
+      { candidates: [{ content: { parts: [{ text: build }] }, finishReason: "STOP" }] },
+    ];
+    return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  });
+  const neonRun = await runGeneration(capture, {
+    modelKey: neon.key,
+    maxAttempts: 1,
+    providerKeys: { gemini: "test-google-key" },
+  });
+  capture.respondWith(null);
+  assert.equal(neonRun.result.rawText, build);
+  const neonRequests = neonRun.requests.filter((request) =>
+    request.url.includes("/models/gemini-4-neon:streamGenerateContent"),
+  );
+  assert.equal(neonRequests.length, 1);
+  const neonConfig = neonRequests[0].body.generationConfig as Record<string, unknown>;
+  assert.deepEqual(neonConfig.thinkingConfig, { thinkingLevel: "xhigh", includeThoughts: true });
+  assert.equal(Object.hasOwn(neonConfig, "temperature"), false);
+  assertTraceLine(
+    neonRun.traces,
+    [
+      "Routing via direct gemini provider (gemini-4-neon)",
+      "thinking_mode=thinking_level=xhigh",
+      "temperature=default",
+    ],
+    "Direct Gemini 4 Neon trace should report the xhigh thinking level",
+  );
+
   // Carbon shares the Argon request contract
   const carbon = assertCatalogEntry({
     key: "gemini_4_carbon",
