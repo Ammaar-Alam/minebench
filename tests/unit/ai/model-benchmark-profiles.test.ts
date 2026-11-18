@@ -42,6 +42,26 @@ assert.equal(gpt6Sol.averageJsonSizeBytes, 90_806_286);
 assert.equal(gpt6Sol.totalAttempts, 15);
 assert.equal(gpt6Sol.buildCount, 15);
 
+const gpt62Astra = getModelBenchmarkProfile("openai_gpt_6_2_astra");
+assert.ok(gpt62Astra);
+assert.deepEqual(gpt62Astra.parameters, astra.parameters);
+assert.deepEqual(gpt62Astra.totalCost, { usd: 35.27, attemptCount: 16 });
+assert.deepEqual(gpt62Astra.outputCap, { kind: "exact", tokens: 128_000 });
+assert.deepEqual(gpt62Astra.averageInference, { milliseconds: 1_239_157 });
+assert.equal(gpt62Astra.averageJsonSizeBytes, 61_515_302);
+assert.equal(gpt62Astra.totalAttempts, 16);
+assert.equal(gpt62Astra.buildCount, 15);
+
+const gpt62Sol = getModelBenchmarkProfile("openai_gpt_6_2_sol");
+assert.ok(gpt62Sol);
+assert.deepEqual(gpt62Sol.parameters, astra.parameters);
+assert.deepEqual(gpt62Sol.totalCost, { usd: 16.15, attemptCount: 16 });
+assert.deepEqual(gpt62Sol.outputCap, { kind: "exact", tokens: 128_000 });
+assert.deepEqual(gpt62Sol.averageInference, { milliseconds: 676_048 });
+assert.equal(gpt62Sol.averageJsonSizeBytes, 85_089_843);
+assert.equal(gpt62Sol.totalAttempts, 16);
+assert.equal(gpt62Sol.buildCount, 15);
+
 const gpt61Sol = getModelBenchmarkProfile("openai_gpt_6_1_sol");
 assert.ok(gpt61Sol);
 assert.deepEqual(gpt61Sol.parameters, astra.parameters);
