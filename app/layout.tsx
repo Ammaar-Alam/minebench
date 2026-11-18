@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { IBM_Plex_Mono, Spline_Sans, Unbounded } from "next/font/google";
+import localFont from "next/font/local";
 import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
@@ -19,22 +19,28 @@ import {
   websiteJsonLd,
 } from "@/lib/seo";
 
-const fontSans = Spline_Sans({
-  subsets: ["latin"],
+// latin subsets from Google Fonts, bundled so builds never fetch them
+const fontSans = localFont({
+  src: "./fonts/SplineSans-latin.woff2",
   variable: "--font-sans",
-  weight: ["400", "500", "600", "700"],
+  weight: "400 700",
+  display: "swap",
 });
 
-const fontDisplay = Unbounded({
-  subsets: ["latin"],
+const fontDisplay = localFont({
+  src: "./fonts/Unbounded-latin.woff2",
   variable: "--font-display",
-  weight: ["400", "500", "600", "700"],
+  weight: "400 700",
+  display: "swap",
 });
 
-const fontMono = IBM_Plex_Mono({
-  subsets: ["latin"],
+const fontMono = localFont({
+  src: [
+    { path: "./fonts/IBMPlexMono-400-latin.woff2", weight: "400" },
+    { path: "./fonts/IBMPlexMono-500-latin.woff2", weight: "500" },
+  ],
   variable: "--font-mono",
-  weight: ["400", "500"],
+  display: "swap",
 });
 
 const googleSiteVerification = process.env.GOOGLE_SITE_VERIFICATION;
