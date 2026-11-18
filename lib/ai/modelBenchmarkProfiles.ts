@@ -411,6 +411,12 @@ const MODEL_BENCHMARK_METADATA: Partial<
     totalCost: { usd: 10.06, attemptCount: 16 },
     taskBudget: "136,000 tokens",
   },
+  openai_gpt_6_2_astra: {
+    totalCost: { usd: 35.27, attemptCount: 16 },
+  },
+  openai_gpt_6_2_sol: {
+    totalCost: { usd: 16.15, attemptCount: 16 },
+  },
   openai_gpt_6_1_sol: {
     totalCost: { usd: 9.77, attemptCount: 18 },
   },
