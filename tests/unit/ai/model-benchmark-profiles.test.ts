@@ -179,6 +179,19 @@ assert.deepEqual(kimiK31Pro.totalCost, { usd: 6.24, attemptCount: 16 });
 assert.equal(kimiK31Pro.totalAttempts, 16);
 assert.equal(kimiK31Pro.buildCount, 15);
 
+const neon = getModelBenchmarkProfile("gemini_4_neon");
+assert.ok(neon, "Gemini 4 Neon should have verified benchmark details");
+assert.deepEqual(neon.parameters, [
+  { label: "Thinking level", value: "XHigh" },
+  { label: "Sampling", value: "Provider default" },
+]);
+assert.deepEqual(neon.outputCap, { kind: "exact", tokens: 1_048_576 });
+assert.deepEqual(neon.averageInference, { milliseconds: 479_585 });
+assert.equal(neon.averageJsonSizeBytes, 19_483_540);
+assert.deepEqual(neon.totalCost, { usd: 3.9, attemptCount: 18 });
+assert.equal(neon.totalAttempts, 18);
+assert.equal(neon.buildCount, 15);
+
 const hydrogen = getModelBenchmarkProfile("gemini_4_hydrogen");
 assert.ok(hydrogen, "Gemini 4 Hydrogen should have verified benchmark details");
 assert.deepEqual(hydrogen.parameters, [

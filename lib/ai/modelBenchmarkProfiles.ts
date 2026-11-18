@@ -393,6 +393,9 @@ const MODEL_BENCHMARK_METADATA: Partial<
   xai_grok_4_7: {
     totalCost: { usd: 42.40, attemptCount: 20 },
   },
+  gemini_4_neon: {
+    totalCost: { usd: 3.9, attemptCount: 18 },
+  },
   gemini_4_hydrogen: {
     totalCost: { usd: 6.96, attemptCount: 21 },
   },
